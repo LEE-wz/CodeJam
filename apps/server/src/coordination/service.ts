@@ -26,6 +26,31 @@ import {
 
 const terminalStatuses = new Set(["completed", "failed", "stopped"]);
 
+/**
+ * Internal bounds on the validator/runtime feedback replayed into a retry prompt
+ * (overview Section 11.3). These are prompt-construction limits, not part of the
+ * frozen artifact contract: the context builder still enforces the run's context
+ * cap on top of them.
+ */
+const RETRY_FEEDBACK_MAX_ITEMS = 10;
+const RETRY_FEEDBACK_MAX_CHARS = 500;
+
+/**
+ * Keeps retry feedback concise and reflective of the most recent failure only.
+ * Feedback never carries raw Agent output: validator messages are backend-authored
+ * and runtime messages are already mapped to safe text by the runtime gateway.
+ */
+const boundedRetryFeedback = (messages: string[]): string[] =>
+  messages
+    .map((message) => message.trim())
+    .filter((message) => message.length > 0)
+    .slice(0, RETRY_FEEDBACK_MAX_ITEMS)
+    .map((message) =>
+      message.length > RETRY_FEEDBACK_MAX_CHARS
+        ? message.slice(0, RETRY_FEEDBACK_MAX_CHARS)
+        : message,
+    );
+
 const isTerminal = (status: CoordinationRun["status"]): boolean =>
   terminalStatuses.has(status);
 
@@ -233,14 +258,17 @@ export class CoordinationService implements CoordinationServiceContract {
   }
 
   private startLoop(runId: CoordinationRunId): void {
-    const loop = this.runLoop(runId).catch(async () => {
+    const loop = this.runLoop(runId).catch(async (error: unknown) => {
       this.dependencies.logger?.error({ runId }, "Coordination run loop failed");
+      const failure =
+        error instanceof CoordinationError
+          ? { code: error.code, message: error.message }
+          : {
+              code: "INTERNAL_ERROR" as const,
+              message: "Coordination run stopped because of an internal error",
+            };
       try {
-        await this.dependencies.repository.failRun({
-          runId,
-          code: "INTERNAL_ERROR",
-          message: "Coordination run stopped because of an internal error",
-        });
+        await this.dependencies.repository.failRun({ runId, ...failure });
       } catch {
         // The original failure is already logged safely. Never leave a rejected
         // background promise for an HTTP request to observe.
@@ -392,6 +420,7 @@ export class CoordinationService implements CoordinationServiceContract {
       if (runtimeStart.kind === "failed") {
         lastErrorCode = "AGENT_EXECUTION_FAILED";
         lastErrorMessage = runtimeStart.message;
+        validationErrors = boundedRetryFeedback([lastErrorMessage]);
         if (!(await this.finishAttempt(attempt, "failed", lastErrorCode, lastErrorMessage))) {
           return false;
         }
@@ -432,7 +461,9 @@ export class CoordinationService implements CoordinationServiceContract {
           });
           return committed.kind === "committed";
         }
-        validationErrors = validation.errors.map((error) => error.message);
+        validationErrors = boundedRetryFeedback(
+          validation.errors.map((error) => error.message),
+        );
         lastErrorCode = validation.code;
         lastErrorMessage = "Agent output did not satisfy the handoff contract";
         if (
@@ -468,6 +499,7 @@ export class CoordinationService implements CoordinationServiceContract {
       lastErrorCode =
         outcome.kind === "timed_out" ? "ATTEMPT_TIMED_OUT" : "AGENT_EXECUTION_FAILED";
       lastErrorMessage = outcome.message;
+      validationErrors = boundedRetryFeedback([lastErrorMessage]);
       const status = outcome.kind === "timed_out" ? "timed_out" : "failed";
       if (!(await this.finishAttempt(attempt, status, lastErrorCode, lastErrorMessage))) {
         return false;

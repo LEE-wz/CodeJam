@@ -3,13 +3,23 @@ import { VerifiedHandoffArtifactProtocol } from "./artifact-protocol.js";
 import { RoleScopedContextBuilder } from "./context-builder.js";
 import { CoordinationService } from "./service.js";
 import { VerifiedHandoffWorkflowV1 } from "./workflow.js";
-import type { CoordinationRunDetails, CoordinationRunId } from "./types.js";
+import type { ContextBuilder, VerifiedHandoffWorkflow } from "./contracts.js";
+import { CoordinationError } from "./errors.js";
+import type {
+  CoordinationRun,
+  CoordinationRunDetails,
+  CoordinationRunId,
+} from "./types.js";
+import { DEFAULT_COORDINATION_POLICY } from "./types.js";
 import { AdvancingClock, DeterministicIdGenerator } from "./testing/controls.js";
 import { InMemoryCoordinationRepository } from "./testing/memory-repository.js";
 import {
   FakeAgentDirectory,
   ScriptedCoordinationRuntime,
+  deferred,
+  failsExecution,
   succeeds,
+  timesOut,
   type ScriptedRuntimeStep,
 } from "./testing/fakes.js";
 import {
@@ -21,6 +31,7 @@ import {
   REJECTING_REVIEW_OUTPUT,
   VALID_FINAL_OUTPUT,
   VALID_FINAL_PAYLOAD,
+  INVALID_ARTIFACT_OUTPUT,
   VALID_PROPOSAL_OUTPUT,
   VALID_PROPOSAL_PAYLOAD,
 } from "./testing/fixtures.js";
@@ -30,7 +41,13 @@ import {
  * context builder, driven by the shared in-memory repository and scripted
  * runtime. No disk, HTTP, timers, or model calls take part.
  */
-export const harness = (steps: ScriptedRuntimeStep[]) => {
+export const harness = (
+  steps: ScriptedRuntimeStep[],
+  overrides: {
+    contextBuilder?: ContextBuilder;
+    workflow?: VerifiedHandoffWorkflow;
+  } = {},
+) => {
   const clock = new AdvancingClock();
   const ids = new DeterministicIdGenerator();
   const repository = new InMemoryCoordinationRepository(clock);
@@ -38,8 +55,8 @@ export const harness = (steps: ScriptedRuntimeStep[]) => {
   const service = new CoordinationService({
     agentDirectory: new FakeAgentDirectory(),
     repository,
-    workflow: new VerifiedHandoffWorkflowV1(),
-    contextBuilder: new RoleScopedContextBuilder(),
+    workflow: overrides.workflow ?? new VerifiedHandoffWorkflowV1(),
+    contextBuilder: overrides.contextBuilder ?? new RoleScopedContextBuilder(),
     artifactProtocol: new VerifiedHandoffArtifactProtocol({ clock, ids }),
     runtime,
     clock,
@@ -76,8 +93,44 @@ export const HAPPY_PATH: ScriptedRuntimeStep[] = [
   succeeds(VALID_FINAL_OUTPUT),
 ];
 
-export const startRun = async (steps: ScriptedRuntimeStep[]) => {
-  const context = harness(steps);
+export const seedRun = async (
+  context: ReturnType<typeof harness>,
+  policy: Partial<CoordinationRun["policy"]> = {},
+): Promise<CoordinationRunId> => {
+  const now = context.clock.nowIso();
+  const run: CoordinationRun = {
+    id: context.ids.runId(),
+    name: CREATE_RUN_REQUEST.name,
+    objective: CREATE_RUN_REQUEST.objective,
+    requiredSections: CREATE_RUN_REQUEST.requiredSections.map((section) => ({ ...section })),
+    participants: [
+      { role: "planner", agentId: PLANNER_AGENT.id, agentNameSnapshot: PLANNER_AGENT.name },
+      { role: "critic", agentId: CRITIC_AGENT.id, agentNameSnapshot: CRITIC_AGENT.name },
+      {
+        role: "finalizer",
+        agentId: FINALIZER_AGENT.id,
+        agentNameSnapshot: FINALIZER_AGENT.name,
+      },
+    ],
+    policy: { ...DEFAULT_COORDINATION_POLICY, ...policy },
+    status: "created",
+    phase: "drafting",
+    revision: 0,
+    nextTurnSequence: 1,
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await context.repository.createRun({ run });
+  await context.service.startRun(run.id);
+  return run.id;
+};
+
+export const startRun = async (
+  steps: ScriptedRuntimeStep[],
+  overrides: Parameters<typeof harness>[1] = {},
+) => {
+  const context = harness(steps, overrides);
   const run = await context.service.createRun(CREATE_RUN_REQUEST);
   await context.service.startRun(run.id);
   return { ...context, runId: run.id };
@@ -312,5 +365,246 @@ describe("walking skeleton: lease is required to commit", () => {
 
     const details = await repository.getRunDetails(run.id);
     expect(details?.artifacts).toEqual([]);
+  });
+});
+
+/** Yields to the microtask queue so the background loop can advance. */
+export const flush = async (ticks = 200): Promise<void> => {
+  for (let tick = 0; tick < ticks; tick += 1) {
+    await Promise.resolve();
+  }
+};
+
+const taskSection = (prompt: string): string =>
+  prompt.slice(prompt.indexOf("[YOUR TASK]"), prompt.indexOf("[OUTPUT CONTRACT]"));
+
+const badKeyProposal = (count: number): string =>
+  JSON.stringify({
+    schemaVersion: 1,
+    type: "proposal",
+    summary: "Summary",
+    sections: Array.from({ length: count }, (_, index) => ({
+      key: `Bad Key ${index}`,
+      title: `Title ${index}`,
+      content: "Body.",
+    })),
+  });
+
+describe("walking skeleton: bounded retry feedback", () => {
+  it("replays validator feedback into the retry prompt and then commits", async () => {
+    const { service, runtime, runId } = await startRun([
+      succeeds(INVALID_ARTIFACT_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("completed");
+    expect(taskSection(runtime.starts[0]!.prompt)).not.toContain("Your previous attempt");
+    expect(taskSection(runtime.starts[1]!.prompt)).toContain("Your previous attempt");
+    expect(runtime.starts[1]!.prompt).toContain("Too small: expected array to have >=1 items");
+
+    const plannerTurn = details.turns.find((turn) => turn.sequence === 1);
+    expect(plannerTurn?.status).toBe("committed");
+    expect(plannerTurn?.attemptCount).toBe(2);
+    expect(details.attempts.slice(0, 2).map((attempt) => attempt.status)).toEqual([
+      "invalid_output",
+      "succeeded",
+    ]);
+  });
+
+  it("replaces stale validator feedback with the latest runtime failure", async () => {
+    const context = harness([
+      succeeds(INVALID_ARTIFACT_OUTPUT),
+      timesOut("Attempt exceeded its time limit"),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const runId = await seedRun(context, { maxAttemptsPerTurn: 3 });
+    const details = await settle(context.service, runId);
+
+    const second = taskSection(context.runtime.starts[1]!.prompt);
+    const third = taskSection(context.runtime.starts[2]!.prompt);
+
+    expect(second).toContain("Too small");
+    expect(third).toContain("Attempt exceeded its time limit");
+    expect(third).not.toContain("Too small");
+    expect(details.run.status).toBe("completed");
+    expect(details.attempts.slice(0, 3).map((attempt) => attempt.status)).toEqual([
+      "invalid_output",
+      "timed_out",
+      "succeeded",
+    ]);
+  });
+
+  it("carries the most specific safe error into a failed run", async () => {
+    const { service, runId } = await startRun([
+      succeeds(INVALID_ARTIFACT_OUTPUT),
+      timesOut("Attempt exceeded its time limit"),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_ATTEMPTS_EXCEEDED");
+    expect(details.run.errorMessage).toContain("Attempt exceeded its time limit");
+    expect(details.attempts.map((attempt) => attempt.status)).toEqual([
+      "invalid_output",
+      "timed_out",
+    ]);
+  });
+
+  it("bounds how much feedback a retry prompt replays", async () => {
+    const { service, runtime, runId } = await startRun([
+      succeeds(badKeyProposal(14)),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    await settle(service, runId);
+
+    const feedbackLines = taskSection(runtime.starts[1]!.prompt)
+      .split("\n")
+      .filter((line) => line.startsWith("  - "));
+
+    expect(feedbackLines.length).toBeGreaterThan(0);
+    expect(feedbackLines.length).toBeLessThanOrEqual(10);
+  });
+
+  it("fails the run after the attempt limit without committing anything", async () => {
+    const { service, runtime, runId } = await startRun([
+      succeeds(INVALID_ARTIFACT_OUTPUT),
+      succeeds(INVALID_ARTIFACT_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_ATTEMPTS_EXCEEDED");
+    expect(details.artifacts).toEqual([]);
+    expect(runtime.starts).toHaveLength(2);
+    expect(details.turns[0]?.status).toBe("failed");
+  });
+});
+
+describe("walking skeleton: safe recovery and cleanup", () => {
+  it("fails the run with the structured code when a component rejects the context", async () => {
+    // The first call is createRun's context-cap probe; only the loop's real
+    // turn prompts fail here.
+    let calls = 0;
+    const throwingBuilder: ContextBuilder = {
+      build(input) {
+        calls += 1;
+        if (calls === 1) {
+          return new RoleScopedContextBuilder().build(input);
+        }
+        throw new CoordinationError(400, "VALIDATION_FAILED", "Context could not be built");
+      },
+    };
+    const { service, runId } = await startRun(HAPPY_PATH, {
+      contextBuilder: throwingBuilder,
+    });
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("VALIDATION_FAILED");
+    expect(details.run.errorMessage).toBe("Context could not be built");
+  });
+
+  it("fails safely and generically when a component throws an unexpected error", async () => {
+    const throwingWorkflow: VerifiedHandoffWorkflow = {
+      decideNext() {
+        throw new Error("boom: /secret/path token=abc");
+      },
+    };
+    const { service, runId } = await startRun(HAPPY_PATH, { workflow: throwingWorkflow });
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("INTERNAL_ERROR");
+    expect(details.run.errorMessage).not.toContain("secret");
+    expect(details.run.errorMessage).not.toContain("token=abc");
+  });
+
+  it("releases the local loop once a run reaches a terminal state", async () => {
+    const { service, runId } = await startRun(HAPPY_PATH);
+    await settle(service, runId);
+
+    await expect(service.startRun(runId)).rejects.toMatchObject({
+      code: "INVALID_STATE",
+      message: "Coordination run is already active",
+    });
+  });
+
+  it("refuses a second local loop while a run is still active", async () => {
+    const { service, runId } = await startRun([deferred()]);
+
+    await expect(service.startRun(runId)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "INVALID_STATE",
+      message: "Coordination run is already running",
+    });
+  });
+
+  it("stops a deferred attempt and ignores its late success", async () => {
+    const { service, runtime, runId } = await startRun([deferred()]);
+    await runtime.waitForStarts(1);
+
+    const stopped = await service.stopRun(runId);
+    expect(stopped.status).toBe("stopped");
+    expect(runtime.cancelledAttemptIds).toHaveLength(1);
+
+    const [pending] = runtime.pendingAttemptIds();
+    expect(pending).toBeDefined();
+    runtime.resolveAttempt(pending!, {
+      kind: "succeeded",
+      rawOutput: VALID_PROPOSAL_OUTPUT,
+    });
+    await flush();
+
+    const details = await service.getRun(runId);
+    expect(details?.run.status).toBe("stopped");
+    expect(details?.run.errorCode).toBe("STOPPED_BY_USER");
+    expect(details?.artifacts).toEqual([]);
+    expect(details?.attempts[0]?.status).toBe("cancelled");
+  });
+
+  it("treats stopping a terminal run as idempotent", async () => {
+    const { service, runId } = await startRun(HAPPY_PATH);
+    await settle(service, runId);
+
+    const first = await service.stopRun(runId);
+    const second = await service.stopRun(runId);
+
+    expect(first.status).toBe("completed");
+    expect(second.status).toBe("completed");
+  });
+
+  it("reports a missing run rather than starting a loop for it", async () => {
+    const { service } = harness([]);
+
+    await expect(service.startRun("run-missing")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "NOT_FOUND",
+    });
+    await expect(service.stopRun("run-missing")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("records a runtime start failure and retries once", async () => {
+    const { service, runtime, runId } = await startRun([
+      failsExecution("Agent execution failed"),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("completed");
+    expect(runtime.starts.length).toBe(4);
+    expect(details.attempts[0]?.status).toBe("failed");
+    expect(details.attempts[0]?.errorCode).toBe("AGENT_EXECUTION_FAILED");
   });
 });
