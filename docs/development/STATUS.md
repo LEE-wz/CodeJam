@@ -1,17 +1,17 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 10:27:46 UTC
-**Audited commit:** `bd691de` (contracts frozen at `ea469b2`, amended by the approved P1-01 mini-RFC)
-**Implementation branch:** `phase1-p1-01-latest-artifact-selectors` (base `2ca91fe`)
+**Last audit:** 2026-08-29 10:32:20 UTC
+**Audited commit:** `eb6756a` (contracts frozen at `ea469b2`, amended by the approved P1-01 mini-RFC)
+**Implementation branch:** `phase1-p1-02-routing` (base `d0686e4`)
 **Current phase:** Phase 1 — In-Memory Walking Skeleton (in progress)
 **Current gate:** Checkpoint 0 verified
-**Overall state:** Phase 0 `complete`; P1-01 `complete`; Checkpoint 1 remains open
+**Overall state:** Phase 0 `complete`; P1-01–P1-02 `complete`; Checkpoint 1 remains open
 
 ## Resume here
 
-1. Begin **P1-02** on a new task branch after the P1-01 change is committed: implement the pure routing transitions using the verified selectors.
-2. Continue with **P1-03**, enforcing revision/turn limits and safe invalid-state failures.
-3. Complete **P1-04** with exhaustive table tests and a passing Docker Compose full check.
+1. Begin **P1-03** on a new task branch: enforce revision/turn limits and safe invalid-state failures.
+2. Complete **P1-04** with exhaustive table tests across every routing and boundary branch.
+3. Run focused workflow tests and the mandatory Docker Compose full check before proceeding to P1-05.
 
 Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
@@ -43,7 +43,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | Stop handling | `coordination/service.ts` | `implemented_unverified` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal HTTP semantics are frozen, while race evidence remains Phase 1/2 work. |
 | HTTP routes | `coordination/routes.ts`, `app.ts` | `complete` | Frozen list/create/detail/start/stop surface; accidental events route removed and tested as absent. |
 | Phase 0 testing kit | `coordination/testing/**`, `construction.test.ts` | `complete` | Deterministic controls, full fixture pack, fakes, scripted runtime, and construction proof pass. |
-| Latest committed artifact selectors | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `complete` | P1-01 selects proposal/review/final artifacts by committed turn sequence; shuffled arrays, misleading timestamps, unfinished/mismatched turns, types, and run isolation are covered. |
+| Pure workflow selectors/routing | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `in_progress` | P1-01–P1-02 are complete: deterministic selectors and all normal routing transitions pass; limit/invariant work and the exhaustive P1-04 table remain. |
 | Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | Existing orchestration is ahead of the gate; Phase 1 still needs exhaustive workflow/protocol evidence. |
 
 ## Outstanding by phase
@@ -54,7 +54,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 
 ### Phase 1
 
-- Pure workflow routing, boundary enforcement, and exhaustive table tests (P1-02–P1-04); P1-01 selectors are complete.
+- Pure workflow boundary enforcement and exhaustive table tests (P1-03–P1-04); selectors and normal routing are complete.
 - Strict artifact schemas/parser/protocol and adversarial tests.
 - Role-scoped context builder, digest, bounds, and leakage tests.
 - Reusable scripted runtime with deferred/failure/timeout/cancel outcomes.
@@ -96,6 +96,8 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | 2026-08-29 10:04:04 UTC | `d806e8f` | P0-05 manual three-Agent baseline | **Passed:** three genuinely fresh Agents began ready with empty histories; Planner, Critic, and Finaliser each completed one ordinary turn; all returned ready; final isolation and readiness passed. |
 | 2026-08-29 10:27:04 UTC | `bd691de` | P1-01 focused Docker Compose test | **Passed:** `workflow.test.ts`, 4 tests covering deterministic sequence selection and invalid candidate exclusion. |
 | 2026-08-29 10:27:04 UTC | `bd691de` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 27 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings for later security review. |
+| 2026-08-29 10:32:20 UTC | `eb6756a` | P1-02 focused Docker Compose test | **Passed:** `workflow.test.ts`, 10 tests covering selectors and all normal routing transitions, including revised-proposal precedence. |
+| 2026-08-29 10:32:20 UTC | `eb6756a` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 33 tests, web build, and server build. |
 
 ## Manual Phase 0 verification report
 
