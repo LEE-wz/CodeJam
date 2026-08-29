@@ -16,8 +16,10 @@ import { InMemoryCoordinationRepository } from "./testing/memory-repository.js";
 import {
   FakeAgentDirectory,
   ScriptedCoordinationRuntime,
+  cancelled,
   deferred,
   failsExecution,
+  failsToStart,
   succeeds,
   timesOut,
   type ScriptedRuntimeStep,
@@ -593,7 +595,7 @@ describe("walking skeleton: safe recovery and cleanup", () => {
     });
   });
 
-  it("records a runtime start failure and retries once", async () => {
+  it("records a runtime execution failure and retries once", async () => {
     const { service, runtime, runId } = await startRun([
       failsExecution("Agent execution failed"),
       succeeds(VALID_PROPOSAL_OUTPUT),
@@ -606,5 +608,249 @@ describe("walking skeleton: safe recovery and cleanup", () => {
     expect(runtime.starts.length).toBe(4);
     expect(details.attempts[0]?.status).toBe("failed");
     expect(details.attempts[0]?.errorCode).toBe("AGENT_EXECUTION_FAILED");
+  });
+});
+
+describe("walking skeleton: rejection and revision", () => {
+  it("routes a rejected proposal back to the Planner and completes after approval", async () => {
+    const { service, runId } = await startRun([
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("completed");
+    expect(details.run.revision).toBe(1);
+    expect(details.turns.map((turn) => turn.kind)).toEqual([
+      "initial_proposal",
+      "proposal_review",
+      "proposal_revision",
+      "proposal_review",
+      "finalization",
+    ]);
+    expect(details.turns.every((turn) => turn.status === "committed")).toBe(true);
+  });
+
+  it("treats a rejection as a committed review, not a failed attempt", async () => {
+    const { service, runId } = await startRun([
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+    const rejection = details.turns[1];
+
+    expect(rejection?.status).toBe("committed");
+    expect(rejection?.attemptCount).toBe(1);
+    expect(details.attempts.every((attempt) => attempt.status === "succeeded")).toBe(true);
+    expect(details.turns.every((turn) => turn.attemptCount === 1)).toBe(true);
+  });
+
+  it("fails the run once the revision limit is reached", async () => {
+    const { service, runId } = await startRun([
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_REVISIONS_EXCEEDED");
+    expect(details.run.revision).toBe(2);
+    expect(details.artifacts.filter((artifact) => artifact.type === "final")).toEqual([]);
+  });
+
+  it("fails the run once the turn limit is reached", async () => {
+    const context = harness([
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const runId = await seedRun(context, { maxTurns: 3 });
+    const details = await settle(context.service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_TURNS_EXCEEDED");
+    expect(details.turns).toHaveLength(3);
+  });
+});
+
+describe("walking skeleton: recovery matrix", () => {
+  it("retries once after a timeout and then completes", async () => {
+    const { service, runId } = await startRun([
+      timesOut("Attempt exceeded its time limit"),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("completed");
+    expect(details.attempts[0]?.status).toBe("timed_out");
+    expect(details.attempts[0]?.errorCode).toBe("ATTEMPT_TIMED_OUT");
+    expect(details.attempts[1]?.status).toBe("succeeded");
+    expect(details.turns[0]?.attemptCount).toBe(2);
+  });
+
+  it("fails the run after two runtime failures", async () => {
+    const { service, runId } = await startRun([
+      failsExecution("Agent execution failed"),
+      failsExecution("Agent execution failed"),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_ATTEMPTS_EXCEEDED");
+    expect(details.run.errorMessage).toContain("Agent execution failed");
+    expect(details.attempts.map((attempt) => attempt.status)).toEqual(["failed", "failed"]);
+  });
+
+  it("fails the run after two timeouts", async () => {
+    const { service, runId } = await startRun([timesOut("slow"), timesOut("slow")]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_ATTEMPTS_EXCEEDED");
+    expect(details.attempts.map((attempt) => attempt.status)).toEqual([
+      "timed_out",
+      "timed_out",
+    ]);
+  });
+
+  it("retries once when the runtime cannot start the Agent at all", async () => {
+    const { service, runId } = await startRun([
+      failsToStart("Agent runtime is unavailable"),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    expect(details.run.status).toBe("completed");
+    expect(details.attempts[0]?.status).toBe("failed");
+    expect(details.attempts[0]?.errorMessage).toBe("Agent runtime is unavailable");
+    expect(details.attempts[0]?.agentRunId).toBeUndefined();
+  });
+
+  it("ignores a late success that arrives after the lease is gone", async () => {
+    const { service, runtime, runId } = await startRun([deferred()]);
+    await runtime.waitForStarts(1);
+    await service.stopRun(runId);
+
+    const before = await service.getRun(runId);
+    expect(before?.run.status).toBe("stopped");
+
+    runtime.resolveAttempt(runtime.pendingAttemptIds()[0]!, {
+      kind: "succeeded",
+      rawOutput: VALID_PROPOSAL_OUTPUT,
+    });
+    await flush();
+
+    const after = await service.getRun(runId);
+    expect(after?.run.status).toBe("stopped");
+    expect(after?.artifacts).toEqual([]);
+    expect(after?.turns[0]?.status).toBe("cancelled");
+    expect(after?.run.version).toBe(before?.run.version);
+  });
+
+  it("stops cleanly when the Agent is cancelled mid-attempt", async () => {
+    const { service, runId } = await startRun([cancelled("Attempt cancelled")]);
+    const details = await settle(service, runId);
+
+    expect(["failed", "stopped"]).toContain(details.run.status);
+    expect(details.attempts[0]?.status).toBe("cancelled");
+    expect(details.artifacts).toEqual([]);
+  });
+});
+
+describe("walking skeleton: Phase 1 matrix coverage", () => {
+  const SCENARIOS = [
+    { name: "normal approval", steps: HAPPY_PATH, status: "completed" },
+    {
+      name: "reject, revise, approve",
+      steps: [
+        succeeds(VALID_PROPOSAL_OUTPUT),
+        succeeds(REJECTING_REVIEW_OUTPUT),
+        succeeds(VALID_PROPOSAL_OUTPUT),
+        succeeds(APPROVING_REVIEW_OUTPUT),
+        succeeds(VALID_FINAL_OUTPUT),
+      ],
+      status: "completed",
+    },
+    {
+      name: "invalid then success",
+      steps: [
+        succeeds(INVALID_ARTIFACT_OUTPUT),
+        succeeds(VALID_PROPOSAL_OUTPUT),
+        succeeds(APPROVING_REVIEW_OUTPUT),
+        succeeds(VALID_FINAL_OUTPUT),
+      ],
+      status: "completed",
+    },
+    {
+      name: "invalid twice",
+      steps: [succeeds(INVALID_ARTIFACT_OUTPUT), succeeds(INVALID_ARTIFACT_OUTPUT)],
+      status: "failed",
+    },
+    {
+      name: "timeout then success",
+      steps: [
+        timesOut("slow"),
+        succeeds(VALID_PROPOSAL_OUTPUT),
+        succeeds(APPROVING_REVIEW_OUTPUT),
+        succeeds(VALID_FINAL_OUTPUT),
+      ],
+      status: "completed",
+    },
+    {
+      name: "runtime failure twice",
+      steps: [failsExecution("down"), failsExecution("down")],
+      status: "failed",
+    },
+  ] as const;
+
+  for (const scenario of SCENARIOS) {
+    it(`${scenario.name} settles as ${scenario.status}`, async () => {
+      const { service, runId } = await startRun([...scenario.steps]);
+      const details = await settle(service, runId);
+
+      expect(details.run.status).toBe(scenario.status);
+      expect(details.run.activeTurnId).toBeUndefined();
+      expect(details.turns.every((turn) => turn.activeAttemptId === undefined)).toBe(true);
+      if (scenario.status === "completed") {
+        expect(details.run.finalArtifactId).toBeDefined();
+      } else {
+        expect(details.run.finalArtifactId).toBeUndefined();
+        expect(details.run.errorCode).toBeDefined();
+      }
+    });
+  }
+
+  it("never commits more than one artifact per logical turn", async () => {
+    const { service, runId } = await startRun([
+      succeeds(INVALID_ARTIFACT_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(REJECTING_REVIEW_OUTPUT),
+      succeeds(VALID_PROPOSAL_OUTPUT),
+      succeeds(APPROVING_REVIEW_OUTPUT),
+      succeeds(VALID_FINAL_OUTPUT),
+    ]);
+    const details = await settle(service, runId);
+
+    const committedTurnIds = details.artifacts.map((artifact) => artifact.turnId);
+    expect(new Set(committedTurnIds).size).toBe(committedTurnIds.length);
+    expect(details.artifacts).toHaveLength(
+      details.turns.filter((turn) => turn.status === "committed").length,
+    );
   });
 });
