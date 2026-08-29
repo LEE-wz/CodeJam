@@ -27,6 +27,32 @@ This file closes questions that can be answered from the checked-out code and is
 
 ## Resolved contract deviations
 
+### Mini-RFC: artifact schema field limits
+
+**Status:** Approved by the user on 2026-08-29 for P1-05.
+
+**Current contract and blocker:** The frozen artifact contract requires strict
+Zod schemas with bounded strings and arrays but does not assign numeric limits.
+P1-05 cannot provide stable boundary behavior or tests without those values.
+
+**Approved change:** Proposal/review section keys and review issue codes are
+limited to 64 characters; section keys use the existing required-section slug
+format. Section and final titles are limited to 120 characters, proposal
+summaries to 1,000, section content to 6,000, issue messages to 1,000, review
+feedback to 2,000, and final content to 16,000. Proposal sections contain 1–20
+items and review issues 0–20 items. Every textual field is trimmed and non-empty.
+All objects are strict. The separate raw `outputMaxChars` check remains P1-06.
+
+**Affected files/workstreams:** Artifact schemas and tests, protocol parsing,
+prompt output-contract documentation, and future API/UI artifact fixtures. There
+is no persistence-shape change because the TypeScript payload fields are
+unchanged.
+
+**Required evidence:** Each valid fixture parses; exact string/array boundaries
+are accepted; one-over boundaries, empty strings, invalid section-key slugs, and
+unknown root/nested fields are rejected. Decision consistency and proposal
+coverage remain P1-07 cross-field rules.
+
 ### Mini-RFC: workflow view includes committed turns
 
 **Status:** Approved by the user on 2026-08-29 for P1-01.

@@ -33,7 +33,7 @@ If workflow semantics, schema behavior, context visibility, or expected test evi
 
 ### Artifact protocol
 
-- [ ] **P1-05** Implement strict, bounded Zod schemas for proposal, review, and final payloads.
+- [x] **P1-05** Implement strict, bounded Zod schemas for proposal, review, and final payloads.
 - [ ] **P1-06** Enforce the parsing order: output size, optional single outer JSON fence, JSON parse, expected type/version, schema, then cross-field/coverage rules.
 - [ ] **P1-07** Enforce required proposal section keys exactly once, reject/approve issue consistency, non-empty final content, and backend-owned provenance.
 - [ ] **P1-08** Test plain/fenced valid JSON, commentary, malformed/wrong type, unknown fields, oversize output, section coverage/duplicates, inconsistent reviews, and Agent-forged IDs.

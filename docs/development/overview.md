@@ -437,6 +437,24 @@ Deterministic artifact rules:
 - A final artifact is accepted only after an approving review and must be non-empty.
 - All strings and arrays have Zod limits; total serialized output must be within `outputMaxChars`.
 
+Approved artifact schema limits:
+
+| Field | Limit |
+|---|---:|
+| Section key and review issue code | 64 characters |
+| Section key format | `^[a-z0-9][a-z0-9_-]*$` |
+| Section title and final title | 120 characters |
+| Proposal summary | 1,000 characters |
+| Section content | 6,000 characters |
+| Proposal sections | 1–20 items |
+| Review issues | 0–20 items |
+| Review issue message | 1,000 characters |
+| Review feedback | 2,000 characters |
+| Final content | 16,000 characters |
+
+All textual fields are trimmed and non-empty, and every object is strict. These
+field limits are independent of the earlier total raw-output size check.
+
 ### 7.2 Event contract
 
 ```ts
