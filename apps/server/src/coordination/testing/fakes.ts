@@ -148,29 +148,132 @@ export class FakeCoordinationRepository implements CoordinationRepository {
   }
 }
 
+/**
+ * One scripted step per `CoordinationRuntime.start()` call.
+ *
+ * `deferred` is what makes race tests possible without sleeping: the attempt
+ * starts, the service awaits its completion, and the test decides exactly when
+ * -- and with which outcome -- that completion resolves.
+ */
+export type ScriptedRuntimeStep =
+  | { kind: "outcome"; outcome: RuntimeOutcome }
+  | { kind: "deferred" }
+  | { kind: "start_failed"; message: string };
+
+export const succeeds = (rawOutput: string): ScriptedRuntimeStep => ({
+  kind: "outcome",
+  outcome: { kind: "succeeded", rawOutput },
+});
+
+export const timesOut = (message = "Attempt timed out"): ScriptedRuntimeStep => ({
+  kind: "outcome",
+  outcome: { kind: "timed_out", message },
+});
+
+export const failsExecution = (
+  message = "Agent execution failed",
+): ScriptedRuntimeStep => ({ kind: "outcome", outcome: { kind: "failed", message } });
+
+export const cancelled = (message = "Attempt cancelled"): ScriptedRuntimeStep => ({
+  kind: "outcome",
+  outcome: { kind: "cancelled", message },
+});
+
+export const deferred = (): ScriptedRuntimeStep => ({ kind: "deferred" });
+
+export const failsToStart = (
+  message = "Agent execution could not start",
+): ScriptedRuntimeStep => ({ kind: "start_failed", message });
+
+const isRuntimeOutcome = (
+  step: ScriptedRuntimeStep | RuntimeOutcome,
+): step is RuntimeOutcome =>
+  step.kind === "succeeded" ||
+  step.kind === "timed_out" ||
+  step.kind === "cancelled" ||
+  step.kind === "failed";
+
 export class ScriptedCoordinationRuntime implements CoordinationRuntime {
   readonly starts: RuntimeExecutionInput[] = [];
   readonly cancelledAttemptIds: string[] = [];
+
+  private readonly steps: ScriptedRuntimeStep[];
+  private readonly pending = new Map<string, (outcome: RuntimeOutcome) => void>();
+  private readonly startWaiters: Array<{ count: number; resolve: () => void }> = [];
   private nextAgentRun = 1;
 
-  constructor(private readonly outcomes: RuntimeOutcome[] = []) {}
+  constructor(steps: Array<ScriptedRuntimeStep | RuntimeOutcome> = []) {
+    this.steps = steps.map((step) =>
+      isRuntimeOutcome(step) ? { kind: "outcome", outcome: step } : step,
+    );
+  }
 
   async start(input: RuntimeExecutionInput): Promise<RuntimeStartResult> {
     this.starts.push({ ...input });
-    const outcome = this.outcomes.shift();
-    if (!outcome) {
+    this.releaseStartWaiters();
+
+    const step = this.steps.shift();
+    if (!step) {
       return { kind: "failed", message: "No runtime outcome scripted" };
     }
+    if (step.kind === "start_failed") {
+      return { kind: "failed", message: step.message };
+    }
+
     const agentRunId = `agent-run-${String(this.nextAgentRun).padStart(4, "0")}`;
     this.nextAgentRun += 1;
-    return {
-      kind: "started",
-      handle: { agentRunId, completion: Promise.resolve(outcome) },
-    };
+
+    const completion =
+      step.kind === "outcome"
+        ? Promise.resolve(step.outcome)
+        : new Promise<RuntimeOutcome>((resolve) => {
+            this.pending.set(input.attemptId, resolve);
+          });
+
+    return { kind: "started", handle: { agentRunId, completion } };
   }
 
+  /**
+   * Records the cancellation without resolving a deferred completion. Tests stay
+   * in control of the late result, which is exactly the race the lease has to
+   * survive: a cancelled attempt may still return successfully afterwards.
+   */
   async cancelAttempt(attemptId: string): Promise<boolean> {
     this.cancelledAttemptIds.push(attemptId);
-    return true;
+    return this.pending.has(attemptId);
+  }
+
+  /** Resolves a deferred attempt with the outcome the test chooses. */
+  resolveAttempt(attemptId: string, outcome: RuntimeOutcome): void {
+    const resolve = this.pending.get(attemptId);
+    if (!resolve) {
+      throw new Error(`No deferred attempt is pending for ${attemptId}`);
+    }
+    this.pending.delete(attemptId);
+    resolve(outcome);
+  }
+
+  pendingAttemptIds(): string[] {
+    return [...this.pending.keys()];
+  }
+
+  /** Resolves once `count` attempts have been started. */
+  waitForStarts(count: number): Promise<void> {
+    if (this.starts.length >= count) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.startWaiters.push({ count, resolve });
+    });
+  }
+
+  private releaseStartWaiters(): void {
+    for (let index = this.startWaiters.length - 1; index >= 0; index -= 1) {
+      const waiter = this.startWaiters[index];
+      if (waiter && this.starts.length >= waiter.count) {
+        this.startWaiters.splice(index, 1);
+        waiter.resolve();
+      }
+    }
   }
 }
