@@ -16,7 +16,7 @@ Requirements:
 ARK_API_KEY=your-ark-api-key ARK_MODEL=ep-your-endpoint-id npm run poc
 ```
 
-Open <http://localhost:3000>. Press `Ctrl+C` to stop the server and remove this
+Open <http://localhost:3001>. Press `Ctrl+C` to stop the server and remove this
 instance's remaining Runtime containers.
 
 Force an engine with `CONTAINER_ENGINE=docker` or
@@ -121,7 +121,7 @@ Check Runtime readiness:
 ```bash
 docker info                       # Or: podman info
 docker image inspect volc-agent-runtime:local
-curl http://localhost:3000/api/system
+curl http://localhost:3001/api/system
 ```
 
 If a bind mount is rejected, set `LOCAL_POC_DATA_ROOT` to a directory shared
