@@ -8,6 +8,7 @@ import { EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND } from "./artifact-protocol.js";
 import { ARTIFACT_SCHEMA_LIMITS } from "./schemas.js";
 import type {
   ArtifactType,
+  CoordinationArtifact,
   CoordinationRun,
   CoordinationTurn,
   CoordinationTurnKind,
@@ -84,16 +85,80 @@ const buildContractSection = (run: CoordinationRun, turn: CoordinationTurn): str
 };
 
 /**
- * Renders the artifacts this role and turn may read. P1-09 fixes the section's
- * position in the envelope; the role-visibility matrix that selects them is
- * P1-10.
+ * The role-visibility matrix (overview Section 5.2). It is deliberately
+ * expressed as a whitelist per turn kind: an Agent sees the committed artifacts
+ * its own turn needs and nothing else -- no other Agent's thread, no superseded
+ * draft, no event history.
+ */
+const ROLE_VISIBILITY: Readonly<Record<CoordinationTurnKind, readonly ArtifactType[]>> = {
+  initial_proposal: [],
+  proposal_review: ["proposal"],
+  proposal_revision: ["proposal", "review"],
+  finalization: ["proposal", "review"],
+};
+
+/**
+ * Resolves the artifacts this turn may read.
+ *
+ * The workflow already decided which committed artifacts are current and put
+ * them on `turn.inputArtifactIds`; this builder never re-derives "latest"
+ * (it is not given the turns needed to do so). It applies the role whitelist on
+ * top of that decision, so a malformed or over-broad turn record still cannot
+ * widen what a role sees. At most one artifact per allowed type is included.
+ */
+const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[] => {
+  const allowed = ROLE_VISIBILITY[input.turn.kind];
+  if (allowed.length === 0) {
+    return [];
+  }
+
+  const byId = new Map(
+    input.artifacts
+      .filter((artifact) => artifact.runId === input.run.id)
+      .map((artifact) => [artifact.id, artifact] as const),
+  );
+
+  const chosen = new Map<ArtifactType, CoordinationArtifact>();
+  for (const id of input.turn.inputArtifactIds) {
+    const artifact = byId.get(id);
+    if (!artifact || !allowed.includes(artifact.type) || chosen.has(artifact.type)) {
+      continue;
+    }
+    chosen.set(artifact.type, artifact);
+  }
+
+  return allowed.flatMap((type) => {
+    const artifact = chosen.get(type);
+    return artifact ? [artifact] : [];
+  });
+};
+
+/**
+ * Renders only the payloads of the visible artifacts. Artifact identifiers are
+ * deliberately withheld from the prompt: the Agent is told never to emit IDs,
+ * so it is never shown one it could echo back as forged provenance. Evidence
+ * still records what was shown through `includedArtifactIds`.
  */
 const buildArtifactSection = (
-  _input: ContextBuildInput,
-): { text: string; includedArtifactIds: string[] } => ({
-  text: [SECTION.artifacts, NO_ARTIFACTS].join("\n"),
-  includedArtifactIds: [],
-});
+  input: ContextBuildInput,
+): { text: string; includedArtifactIds: string[] } => {
+  const visible = selectVisibleArtifacts(input);
+  if (visible.length === 0) {
+    return {
+      text: [SECTION.artifacts, NO_ARTIFACTS].join("\n"),
+      includedArtifactIds: [],
+    };
+  }
+
+  const blocks = visible.map((artifact) =>
+    [`${artifact.type}:`, JSON.stringify(artifact.payload)].join("\n"),
+  );
+
+  return {
+    text: [SECTION.artifacts, ...blocks].join("\n"),
+    includedArtifactIds: visible.map((artifact) => artifact.id),
+  };
+};
 
 const buildTaskSection = (turn: CoordinationTurn): string =>
   [SECTION.task, TASK_INSTRUCTIONS[turn.kind]].join("\n");

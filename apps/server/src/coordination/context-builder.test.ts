@@ -11,11 +11,19 @@ import type {
 import { DEFAULT_COORDINATION_POLICY } from "./types.js";
 import { FIXED_NOW } from "./testing/controls.js";
 import {
+  APPROVING_REVIEW_ARTIFACT,
+  APPROVING_REVIEW_PAYLOAD,
   CRITIC_AGENT,
   FINALIZER_AGENT,
   OBJECTIVE,
   PLANNER_AGENT,
+  REJECTING_REVIEW_ARTIFACT,
+  REJECTING_REVIEW_PAYLOAD,
   REQUIRED_SECTIONS,
+  VALID_FINAL_ARTIFACT,
+  VALID_FINAL_PAYLOAD,
+  VALID_PROPOSAL_ARTIFACT,
+  VALID_PROPOSAL_PAYLOAD,
 } from "./testing/fixtures.js";
 
 export const TURN_KINDS: CoordinationTurnKind[] = [
@@ -224,5 +232,143 @@ describe("context builder: prompt digest", () => {
     const { prompt, promptDigest } = buildEnvelope("finalization");
 
     expect(prompt).not.toContain(promptDigest);
+  });
+});
+
+const ALL_ARTIFACTS: CoordinationArtifact[] = [
+  VALID_PROPOSAL_ARTIFACT,
+  REJECTING_REVIEW_ARTIFACT,
+  APPROVING_REVIEW_ARTIFACT,
+  VALID_FINAL_ARTIFACT,
+];
+
+const artifactsBlock = (prompt: string): string =>
+  prompt.slice(prompt.indexOf("[COMMITTED INPUT ARTIFACTS]"), prompt.indexOf("[YOUR TASK]"));
+
+describe("context builder: role visibility matrix", () => {
+  it("shows the initial Planner no artifacts at all", () => {
+    const envelope = buildEnvelope("initial_proposal", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([]);
+    expect(artifactsBlock(envelope.prompt)).toContain("(none for this turn)");
+  });
+
+  it("shows the initial Planner nothing even if its turn wrongly references artifacts", () => {
+    const envelope = buildEnvelope("initial_proposal", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([]);
+    expect(envelope.prompt).not.toContain(VALID_PROPOSAL_PAYLOAD.summary);
+  });
+
+  it("shows the Critic the proposal only, never a review", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
+    expect(envelope.prompt).toContain(VALID_PROPOSAL_PAYLOAD.summary);
+    expect(envelope.prompt).not.toContain(REJECTING_REVIEW_PAYLOAD.feedback);
+  });
+
+  it("shows a revising Planner the latest proposal and the rejecting review", () => {
+    const envelope = buildEnvelope("proposal_revision", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([
+      VALID_PROPOSAL_ARTIFACT.id,
+      REJECTING_REVIEW_ARTIFACT.id,
+    ]);
+    expect(envelope.prompt).toContain(VALID_PROPOSAL_PAYLOAD.summary);
+    expect(envelope.prompt).toContain(REJECTING_REVIEW_PAYLOAD.feedback);
+    expect(envelope.prompt).toContain(REJECTING_REVIEW_PAYLOAD.issues[0]!.message);
+  });
+
+  it("shows the Finaliser the approved proposal and approving review", () => {
+    const envelope = buildEnvelope("finalization", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([
+      VALID_PROPOSAL_ARTIFACT.id,
+      APPROVING_REVIEW_ARTIFACT.id,
+    ]);
+    expect(envelope.prompt).toContain(APPROVING_REVIEW_PAYLOAD.feedback);
+    expect(envelope.prompt).not.toContain(REJECTING_REVIEW_PAYLOAD.feedback);
+  });
+
+  it("excludes committed artifacts the turn does not reference", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
+    expect(envelope.prompt).not.toContain(VALID_FINAL_PAYLOAD.content);
+    expect(envelope.prompt).not.toContain(APPROVING_REVIEW_PAYLOAD.feedback);
+  });
+
+  it("excludes an artifact that belongs to another run", () => {
+    const foreign: CoordinationArtifact = {
+      ...VALID_PROPOSAL_ARTIFACT,
+      id: "artifact-foreign",
+      runId: "run-9999",
+    };
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [foreign],
+      inputArtifactIds: [foreign.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([]);
+    expect(artifactsBlock(envelope.prompt)).toContain("(none for this turn)");
+  });
+
+  it("orders proposal before review regardless of reference order", () => {
+    const envelope = buildEnvelope("proposal_revision", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [REJECTING_REVIEW_ARTIFACT.id, VALID_PROPOSAL_ARTIFACT.id],
+    });
+    const block = artifactsBlock(envelope.prompt);
+
+    expect(envelope.includedArtifactIds).toEqual([
+      VALID_PROPOSAL_ARTIFACT.id,
+      REJECTING_REVIEW_ARTIFACT.id,
+    ]);
+    expect(block.indexOf("proposal:")).toBeLessThan(block.indexOf("review:"));
+  });
+
+  it("includes at most one artifact of each allowed type", () => {
+    const supersededProposal: CoordinationArtifact = {
+      ...VALID_PROPOSAL_ARTIFACT,
+      id: "artifact-proposal-older",
+    };
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [VALID_PROPOSAL_ARTIFACT, supersededProposal],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, supersededProposal.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
+  });
+
+  it("never writes an artifact identifier into the prompt", () => {
+    const envelope = buildEnvelope("finalization", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
+    });
+
+    for (const artifact of ALL_ARTIFACTS) {
+      expect(envelope.prompt).not.toContain(artifact.id);
+      expect(envelope.prompt).not.toContain(artifact.turnId);
+    }
+    expect(envelope.includedArtifactIds).toHaveLength(2);
   });
 });
