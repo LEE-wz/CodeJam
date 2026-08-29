@@ -5,8 +5,10 @@ import type {
   PromptEnvelope,
 } from "./contracts.js";
 import { EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND } from "./artifact-protocol.js";
+import { CoordinationError } from "./errors.js";
 import { ARTIFACT_SCHEMA_LIMITS } from "./schemas.js";
 import type {
+  ArtifactPayload,
   ArtifactType,
   CoordinationArtifact,
   CoordinationRun,
@@ -34,6 +36,73 @@ const SECTION = {
 } as const;
 
 const NO_ARTIFACTS = "(none for this turn)";
+
+export const CONTEXT_TRUNCATION_MARKER = "...[truncated]";
+
+const RETRY_HEADING =
+  "Your previous attempt did not produce a valid artifact. Correct every problem below:";
+
+/**
+ * Descending ladder of per-field character caps used when a prompt does not fit
+ * `policy.contextMaxChars`. A fixed ladder (rather than a search) keeps the
+ * chosen cap, and therefore the prompt and its digest, reproducible for the same
+ * input. The last rung is the point below which a truncated artifact stops
+ * conveying a meaningful task, so a prompt that still does not fit is failed
+ * rather than sent misleading (overview Section 11.6).
+ */
+const FIELD_CAP_LADDER = [6_000, 3_000, 1_500, 750, 400, 200] as const;
+
+/**
+ * Deterministic JSON with recursively sorted keys. Two payloads that differ only
+ * in key insertion order serialise identically, so the prompt and its digest are
+ * stable for the same committed content.
+ */
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+    .join(",")}}`;
+};
+
+const capText = (value: string, cap: number): string =>
+  value.length <= cap ? value : `${value.slice(0, cap)}${CONTEXT_TRUNCATION_MARKER}`;
+
+/**
+ * Caps only the long free-text fields. Section keys and titles, review decisions,
+ * issue codes, and the final title are never shortened, so a truncated proposal
+ * still shows every required section it covers.
+ */
+const capPayload = (payload: ArtifactPayload, cap: number): unknown => {
+  if (payload.type === "proposal") {
+    return {
+      ...payload,
+      summary: capText(payload.summary, cap),
+      sections: payload.sections.map((section) => ({
+        ...section,
+        content: capText(section.content, cap),
+      })),
+    };
+  }
+  if (payload.type === "review") {
+    return {
+      ...payload,
+      feedback: capText(payload.feedback, cap),
+      issues: payload.issues.map((issue) => ({
+        ...issue,
+        message: capText(issue.message, cap),
+      })),
+    };
+  }
+  return { ...payload, content: capText(payload.content, cap) };
+};
 
 /**
  * Role-specific instruction for each turn kind. The backend, not the model,
@@ -140,28 +209,46 @@ const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[
  * still records what was shown through `includedArtifactIds`.
  */
 const buildArtifactSection = (
-  input: ContextBuildInput,
-): { text: string; includedArtifactIds: string[] } => {
-  const visible = selectVisibleArtifacts(input);
+  visible: CoordinationArtifact[],
+  fieldCap: number,
+): string => {
   if (visible.length === 0) {
-    return {
-      text: [SECTION.artifacts, NO_ARTIFACTS].join("\n"),
-      includedArtifactIds: [],
-    };
+    return [SECTION.artifacts, NO_ARTIFACTS].join("\n");
   }
 
   const blocks = visible.map((artifact) =>
-    [`${artifact.type}:`, JSON.stringify(artifact.payload)].join("\n"),
+    [`${artifact.type}:`, canonicalJson(capPayload(artifact.payload, fieldCap))].join("\n"),
   );
 
-  return {
-    text: [SECTION.artifacts, ...blocks].join("\n"),
-    includedArtifactIds: visible.map((artifact) => artifact.id),
-  };
+  return [SECTION.artifacts, ...blocks].join("\n");
 };
 
-const buildTaskSection = (turn: CoordinationTurn): string =>
-  [SECTION.task, TASK_INSTRUCTIONS[turn.kind]].join("\n");
+/**
+ * The role instruction plus, on a retry, only the concise validator or runtime
+ * feedback the service passed in (overview Section 11.3). Nothing else from the
+ * failed attempt -- no raw output, lease, Agent Run ID, or event detail -- is
+ * available to this builder, so none of it can reach the prompt.
+ */
+const buildTaskSection = (
+  turn: CoordinationTurn,
+  retryValidationErrors: string[],
+  fieldCap: number,
+): string => {
+  const lines = [SECTION.task, TASK_INSTRUCTIONS[turn.kind]];
+  const feedback = [...new Set(retryValidationErrors)].filter(
+    (entry) => entry.trim().length > 0,
+  );
+
+  if (feedback.length > 0) {
+    lines.push(
+      "",
+      RETRY_HEADING,
+      ...feedback.map((entry) => `  - ${capText(entry.trim(), fieldCap)}`),
+    );
+  }
+
+  return lines.join("\n");
+};
 
 const buildOutputSection = (expected: ArtifactType): string =>
   [
@@ -179,20 +266,33 @@ export const digestPrompt = (prompt: string): string =>
 export class RoleScopedContextBuilder implements ContextBuilder {
   build(input: ContextBuildInput): PromptEnvelope {
     const expected = EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[input.turn.kind];
-    const artifacts = buildArtifactSection(input);
+    const visible = selectVisibleArtifacts(input);
+    const contract = buildContractSection(input.run, input.turn);
+    const output = buildOutputSection(expected);
+    const limit = input.run.policy.contextMaxChars;
 
-    const prompt = [
-      buildContractSection(input.run, input.turn),
-      artifacts.text,
-      buildTaskSection(input.turn),
-      buildOutputSection(expected),
-    ].join("\n\n");
+    for (const fieldCap of [Number.POSITIVE_INFINITY, ...FIELD_CAP_LADDER]) {
+      const prompt = [
+        contract,
+        buildArtifactSection(visible, fieldCap),
+        buildTaskSection(input.turn, input.retryValidationErrors, fieldCap),
+        output,
+      ].join("\n\n");
 
-    return {
-      prompt,
-      promptDigest: digestPrompt(prompt),
-      includedArtifactIds: artifacts.includedArtifactIds,
-      truncated: false,
-    };
+      if (prompt.length <= limit) {
+        return {
+          prompt,
+          promptDigest: digestPrompt(prompt),
+          includedArtifactIds: visible.map((artifact) => artifact.id),
+          truncated: Number.isFinite(fieldCap),
+        };
+      }
+    }
+
+    throw new CoordinationError(
+      400,
+      "VALIDATION_FAILED",
+      "Coordination context does not fit the configured size limit",
+    );
   }
 }

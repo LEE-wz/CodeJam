@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND } from "./artifact-protocol.js";
-import { digestPrompt, RoleScopedContextBuilder } from "./context-builder.js";
+import {
+  CONTEXT_TRUNCATION_MARKER,
+  digestPrompt,
+  RoleScopedContextBuilder,
+} from "./context-builder.js";
+import { CoordinationError } from "./errors.js";
 import type { ContextBuildInput } from "./contracts.js";
 import type {
   CoordinationArtifact,
   CoordinationRun,
   CoordinationTurn,
   CoordinationTurnKind,
+  ProposalPayload,
 } from "./types.js";
 import { DEFAULT_COORDINATION_POLICY } from "./types.js";
 import { FIXED_NOW } from "./testing/controls.js";
@@ -370,5 +376,202 @@ describe("context builder: role visibility matrix", () => {
       expect(envelope.prompt).not.toContain(artifact.turnId);
     }
     expect(envelope.includedArtifactIds).toHaveLength(2);
+  });
+});
+
+const bigSection = (key: string, size: number) => ({
+  key,
+  title: `Long Title For ${key}`,
+  content: "z".repeat(size),
+});
+
+const bigProposalArtifact = (size: number): CoordinationArtifact => ({
+  ...VALID_PROPOSAL_ARTIFACT,
+  payload: {
+    schemaVersion: 1,
+    type: "proposal",
+    summary: "s".repeat(size),
+    sections: REQUIRED_SECTIONS.map((required) => bigSection(required.key, size)),
+  },
+});
+
+describe("context builder: canonical serialization", () => {
+  it("serializes artifact payloads with recursively sorted keys", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [VALID_PROPOSAL_ARTIFACT],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+
+    expect(envelope.prompt).toContain(
+      '{"schemaVersion":1,"sections":[{"content":',
+    );
+    expect(artifactsBlock(envelope.prompt)).toContain('"type":"proposal"');
+  });
+
+  it("produces the same prompt and digest when only key order differs", () => {
+    const ordered: ProposalPayload = {
+      schemaVersion: 1,
+      type: "proposal",
+      summary: "Ship a focused pilot.",
+      sections: [{ key: "users", title: "Target Users", content: "Students." }],
+    };
+    const shuffled: ProposalPayload = {
+      sections: [{ content: "Students.", title: "Target Users", key: "users" }],
+      summary: "Ship a focused pilot.",
+      type: "proposal",
+      schemaVersion: 1,
+    };
+
+    const first = buildEnvelope("proposal_review", {
+      artifacts: [{ ...VALID_PROPOSAL_ARTIFACT, payload: ordered }],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+    const second = buildEnvelope("proposal_review", {
+      artifacts: [{ ...VALID_PROPOSAL_ARTIFACT, payload: shuffled }],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+
+    expect(first.prompt).toBe(second.prompt);
+    expect(first.promptDigest).toBe(second.promptDigest);
+  });
+
+  it("gives separate builder instances the same digest for the same input", () => {
+    const options = {
+      artifacts: [VALID_PROPOSAL_ARTIFACT, REJECTING_REVIEW_ARTIFACT],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
+    };
+
+    expect(buildEnvelope("proposal_revision", options).promptDigest).toBe(
+      buildEnvelope("proposal_revision", options).promptDigest,
+    );
+  });
+});
+
+describe("context builder: deterministic size handling", () => {
+  it("does not truncate a prompt that already fits", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [VALID_PROPOSAL_ARTIFACT],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+
+    expect(envelope.truncated).toBe(false);
+    expect(envelope.prompt).not.toContain(CONTEXT_TRUNCATION_MARKER);
+    expect(envelope.prompt.length).toBeLessThanOrEqual(
+      DEFAULT_COORDINATION_POLICY.contextMaxChars,
+    );
+  });
+
+  it("truncates long content with an explicit marker and reports it", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [bigProposalArtifact(6_000)],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+
+    expect(envelope.truncated).toBe(true);
+    expect(envelope.prompt).toContain(CONTEXT_TRUNCATION_MARKER);
+    expect(envelope.prompt.length).toBeLessThanOrEqual(
+      DEFAULT_COORDINATION_POLICY.contextMaxChars,
+    );
+  });
+
+  it("keeps every section key and title intact while truncating content", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [bigProposalArtifact(6_000)],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    });
+
+    for (const required of REQUIRED_SECTIONS) {
+      expect(envelope.prompt).toContain(`"key":"${required.key}"`);
+      expect(envelope.prompt).toContain(`"title":"Long Title For ${required.key}"`);
+    }
+  });
+
+  it("chooses the same cap, prompt, and digest for the same oversize input", () => {
+    const options = {
+      artifacts: [bigProposalArtifact(6_000)],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+    };
+    const first = buildEnvelope("proposal_review", options);
+    const second = buildEnvelope("proposal_review", options);
+
+    expect(first.prompt).toBe(second.prompt);
+    expect(first.promptDigest).toBe(second.promptDigest);
+  });
+
+  it("uses a larger cap when a larger cap already fits", () => {
+    const roomy = buildEnvelope("proposal_review", {
+      artifacts: [bigProposalArtifact(6_000)],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+      run: { policy: { ...DEFAULT_COORDINATION_POLICY, contextMaxChars: 60_000 } },
+    });
+
+    expect(roomy.truncated).toBe(false);
+    expect(roomy.prompt).not.toContain(CONTEXT_TRUNCATION_MARKER);
+  });
+
+  it("fails safely rather than sending misleading context it cannot fit", () => {
+    expect(() =>
+      buildEnvelope("proposal_review", {
+        artifacts: [bigProposalArtifact(6_000)],
+        inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+        run: { policy: { ...DEFAULT_COORDINATION_POLICY, contextMaxChars: 600 } },
+      }),
+    ).toThrow(CoordinationError);
+
+    try {
+      buildEnvelope("initial_proposal", {
+        run: { policy: { ...DEFAULT_COORDINATION_POLICY, contextMaxChars: 50 } },
+      });
+      throw new Error("expected the builder to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CoordinationError);
+      expect((error as CoordinationError).code).toBe("VALIDATION_FAILED");
+    }
+  });
+});
+
+describe("context builder: retry feedback", () => {
+  it("adds no feedback block on a first attempt", () => {
+    const { prompt } = buildEnvelope("initial_proposal");
+
+    expect(prompt).not.toContain("Your previous attempt");
+  });
+
+  it("includes only the validator feedback it was given, inside the task section", () => {
+    const { prompt } = buildEnvelope("initial_proposal", {
+      retryValidationErrors: [
+        'Proposal is missing required section "risks"',
+        "Agent output is not a single JSON object",
+      ],
+    });
+    const task = prompt.slice(prompt.indexOf("[YOUR TASK]"), prompt.indexOf("[OUTPUT CONTRACT]"));
+
+    expect(task).toContain("Your previous attempt did not produce a valid artifact");
+    expect(task).toContain('- Proposal is missing required section "risks"');
+    expect(task).toContain("- Agent output is not a single JSON object");
+  });
+
+  it("de-duplicates and drops blank feedback deterministically", () => {
+    const { prompt } = buildEnvelope("initial_proposal", {
+      retryValidationErrors: ["Same problem", "Same problem", "   ", ""],
+    });
+    const occurrences = prompt.split("- Same problem").length - 1;
+
+    expect(occurrences).toBe(1);
+    expect(prompt).not.toContain("-    \n");
+  });
+
+  it("truncates feedback under context pressure instead of dropping the artifact", () => {
+    const envelope = buildEnvelope("proposal_review", {
+      artifacts: [bigProposalArtifact(6_000)],
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+      retryValidationErrors: ["f".repeat(9_000)],
+    });
+
+    expect(envelope.truncated).toBe(true);
+    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
+    expect(envelope.prompt.length).toBeLessThanOrEqual(
+      DEFAULT_COORDINATION_POLICY.contextMaxChars,
+    );
   });
 });
