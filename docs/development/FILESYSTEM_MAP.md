@@ -21,6 +21,7 @@ Reading a direct dependency is allowed only far enough to understand the contrac
 | `docs/development/STATUS.md` | Current phase, checkpoint, evidence, next action | Start and end of every task |
 | `docs/development/overview.md` | Product plan and frozen contracts | Contract or phase behavior must be confirmed |
 | `docs/development/ASSUMPTIONS_AND_DECISIONS.md` | Resolved questions and deviations | A prior decision or ambiguity is relevant |
+| `docs/development/PHASE_2_HANDOFF.md` | Decisions and constraints carried out of Phase 1 | Start of Phase 2, and before any mini-RFC affecting `DatabaseV2` |
 | `docs/development/phases/<current-phase>.md` | Current instruction sheet | Every task; do not open later phases without a need |
 | `package.json`, `package-lock.json`, `apps/*/package.json` | Scripts and dependency contracts | Verification/dependency work |
 | `docker-compose.yml`, `Dockerfile`, `.dockerignore` | Required Compose verification/runtime | Compose testing, build, or runtime work |

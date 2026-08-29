@@ -19,8 +19,10 @@ implementation work:
    satisfy its entry criterion of branching from the completed checkpoint.
 3. Give explicit sign-off to begin Phase 2. P2-01 is the next task ID.
 
-Carry the four deferred items in **Phase 1 handoff to Phase 2** below into the
-Phase 2 task list before starting P2-01.
+[`PHASE_2_HANDOFF.md`](./PHASE_2_HANDOFF.md) states each decision, its options,
+and its deadline for whoever implements Phase 2. Carry the four deferred items in
+**Phase 1 handoff to Phase 2** below into the Phase 2 task list before starting
+P2-01.
 
 Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
