@@ -31,7 +31,7 @@ locals {
   runtime_env = join("\n", [
     "NODE_ENV=production",
     "HOST=0.0.0.0",
-    "PORT=3000",
+    "PORT=3001",
     "PUBLIC_PORT=80",
     "LOG_LEVEL=info",
     "APP_AUTH_TOKEN=${var.app_auth_token}",

@@ -41,8 +41,8 @@ RUN mkdir -p /app/data /app/workspaces /app/codex-home \
     && chown -R node:node /app
 
 USER node
-EXPOSE 3000
+EXPOSE 3001
 HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 CMD ["node", "apps/server/dist/index.js"]

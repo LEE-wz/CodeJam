@@ -14,13 +14,13 @@ services:
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
-      PORT: 3000
+      PORT: 3001
       APP_DATA_DIR: /app/data
       AGENT_WORKSPACE_ROOT: /app/workspaces
       CODEX_HOME: /app/codex-home
       CODEX_SANDBOX_MODE: ${CODEX_SANDBOX_MODE:-workspace-write}
     ports:
-      - "${PUBLIC_PORT:-3000}:3000"
+      - "${PUBLIC_PORT:-3001}:3001"
     volumes:
       - ./data:/app/data
       - ./workspaces:/app/workspaces

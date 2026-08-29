@@ -78,11 +78,11 @@ script automatically selects Docker, Colima, or Podman.
 
 ### 4. Open the browser
 
-Visit <http://localhost:3000>, or open it from the terminal:
+Visit <http://localhost:3001>, or open it from the terminal:
 
 ```bash
-open http://localhost:3000       # macOS
-xdg-open http://localhost:3000   # Linux desktop
+open http://localhost:3001       # macOS
+xdg-open http://localhost:3001   # Linux desktop
 ```
 
 In the Web UI:
@@ -148,7 +148,7 @@ Start the application:
 docker compose up --build
 ```
 
-Open <http://localhost:3000>. Stop it without deleting Agent data:
+Open <http://localhost:3001>. Stop it without deleting Agent data:
 
 ```bash
 docker compose down
@@ -164,7 +164,7 @@ npm run dev
 ```
 
 - Web UI: <http://localhost:5173>
-- API: <http://localhost:3000>
+- API: <http://localhost:3001>
 
 Use local paths in `.env` when running outside Docker:
 

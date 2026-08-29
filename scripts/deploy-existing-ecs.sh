@@ -59,4 +59,4 @@ fi
 docker compose --env-file "$env_file" ps
 
 public_port="$(sed -n 's/^PUBLIC_PORT=//p' "$env_file" | tail -n 1)"
-echo "Agent Launchpad is starting on port ${public_port:-3000}."
+echo "Agent Launchpad is starting on port ${public_port:-3001}."
