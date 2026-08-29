@@ -575,3 +575,184 @@ describe("context builder: retry feedback", () => {
     );
   });
 });
+
+describe("context builder: superseded history is excluded", () => {
+  it("shows a revising Planner only the referenced draft and review", () => {
+    const supersededProposal: CoordinationArtifact = {
+      ...VALID_PROPOSAL_ARTIFACT,
+      id: "artifact-proposal-v1",
+      turnId: "turn-proposal-v1",
+      payload: {
+        schemaVersion: 1,
+        type: "proposal",
+        summary: "FIRST-DRAFT-SUMMARY",
+        sections: REQUIRED_SECTIONS.map((required) => ({
+          key: required.key,
+          title: required.title,
+          content: "FIRST-DRAFT-CONTENT",
+        })),
+      },
+    };
+    const supersededReview: CoordinationArtifact = {
+      ...REJECTING_REVIEW_ARTIFACT,
+      id: "artifact-review-v1",
+      turnId: "turn-review-v1",
+      payload: {
+        schemaVersion: 1,
+        type: "review",
+        decision: "reject",
+        issues: [{ code: "OLD_ISSUE", message: "FIRST-ROUND-ISSUE" }],
+        feedback: "FIRST-ROUND-FEEDBACK",
+      },
+    };
+    const currentProposal: CoordinationArtifact = {
+      ...VALID_PROPOSAL_ARTIFACT,
+      id: "artifact-proposal-v2",
+      turnId: "turn-proposal-v2",
+    };
+
+    const envelope = buildEnvelope("proposal_revision", {
+      artifacts: [
+        supersededProposal,
+        supersededReview,
+        currentProposal,
+        REJECTING_REVIEW_ARTIFACT,
+      ],
+      inputArtifactIds: [currentProposal.id, REJECTING_REVIEW_ARTIFACT.id],
+    });
+
+    expect(envelope.includedArtifactIds).toEqual([
+      currentProposal.id,
+      REJECTING_REVIEW_ARTIFACT.id,
+    ]);
+    expect(envelope.prompt).not.toContain("FIRST-DRAFT-SUMMARY");
+    expect(envelope.prompt).not.toContain("FIRST-DRAFT-CONTENT");
+    expect(envelope.prompt).not.toContain("FIRST-ROUND-FEEDBACK");
+    expect(envelope.prompt).not.toContain("FIRST-ROUND-ISSUE");
+    expect(envelope.prompt).toContain(REJECTING_REVIEW_PAYLOAD.feedback);
+  });
+
+  it("never shows the Finaliser a rejected round", () => {
+    const envelope = buildEnvelope("finalization", {
+      artifacts: ALL_ARTIFACTS,
+      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
+    });
+
+    expect(envelope.prompt).not.toContain(REJECTING_REVIEW_PAYLOAD.feedback);
+    expect(envelope.prompt).not.toContain(REJECTING_REVIEW_PAYLOAD.issues[0]!.message);
+  });
+
+  it("never shows any role a previously committed final artifact", () => {
+    for (const kind of TURN_KINDS) {
+      const envelope = buildEnvelope(kind, {
+        artifacts: ALL_ARTIFACTS,
+        inputArtifactIds: ALL_ARTIFACTS.map((artifact) => artifact.id),
+      });
+
+      expect(envelope.prompt).not.toContain(VALID_FINAL_PAYLOAD.content);
+      expect(envelope.includedArtifactIds).not.toContain(VALID_FINAL_ARTIFACT.id);
+    }
+  });
+});
+
+describe("context builder: no operational state reaches a prompt", () => {
+  const SECRETS = {
+    runId: "run-SECRET-RUNID",
+    turnId: "turn-SECRET-TURNID",
+    plannerAgentId: "agent-SECRET-PLANNER",
+    criticAgentId: "agent-SECRET-CRITIC",
+    agentName: "SECRET-AGENT-NAME",
+    leaseToken: "lease-SECRET-TOKEN",
+    agentRunId: "agent-run-SECRET",
+    threadId: "thread-SECRET",
+    authorization: "Bearer SECRET-TOKEN",
+  };
+
+  const sensitiveEnvelope = () => {
+    const run: CoordinationRun = {
+      ...baseRun,
+      id: SECRETS.runId,
+      participants: [
+        {
+          role: "planner",
+          agentId: SECRETS.plannerAgentId,
+          agentNameSnapshot: SECRETS.agentName,
+        },
+        {
+          role: "critic",
+          agentId: SECRETS.criticAgentId,
+          agentNameSnapshot: SECRETS.agentName,
+        },
+        {
+          role: "finalizer",
+          agentId: FINALIZER_AGENT.id,
+          agentNameSnapshot: SECRETS.agentName,
+        },
+      ],
+      version: 41,
+    };
+    const proposal: CoordinationArtifact = {
+      ...VALID_PROPOSAL_ARTIFACT,
+      runId: SECRETS.runId,
+    };
+    const turn: CoordinationTurn = {
+      ...turnOfKind("proposal_review", [proposal.id]),
+      id: SECRETS.turnId,
+      runId: SECRETS.runId,
+      agentId: SECRETS.criticAgentId,
+      activeAttemptId: "attempt-SECRET",
+      lastValidationErrors: ["stale error that must not be reused"],
+    };
+
+    return new RoleScopedContextBuilder().build({
+      run,
+      turn,
+      artifacts: [proposal],
+      retryValidationErrors: [],
+    });
+  };
+
+  it("omits run, turn, attempt, and Agent identifiers", () => {
+    const { prompt } = sensitiveEnvelope();
+
+    for (const value of Object.values(SECRETS)) {
+      expect(prompt).not.toContain(value);
+    }
+    expect(prompt).not.toContain("attempt-SECRET");
+  });
+
+  it("omits run bookkeeping such as version, status, and revision counters", () => {
+    const { prompt } = sensitiveEnvelope();
+
+    expect(prompt).not.toContain("version");
+    expect(prompt).not.toContain("revision");
+    expect(prompt).not.toContain("nextTurnSequence");
+    expect(prompt).not.toContain("leaseToken");
+  });
+
+  it("ignores validation errors stored on the turn record", () => {
+    const { prompt } = sensitiveEnvelope();
+
+    expect(prompt).not.toContain("stale error that must not be reused");
+    expect(prompt).not.toContain("Your previous attempt");
+  });
+
+  it("builds from committed artifacts only, with no access to prompts or events", () => {
+    const input: ContextBuildInput = {
+      run: baseRun,
+      turn: turnOfKind("proposal_review", [VALID_PROPOSAL_ARTIFACT.id]),
+      artifacts: [VALID_PROPOSAL_ARTIFACT],
+      retryValidationErrors: [],
+    };
+
+    expect(Object.keys(input).sort()).toEqual([
+      "artifacts",
+      "retryValidationErrors",
+      "run",
+      "turn",
+    ]);
+    expect(new RoleScopedContextBuilder().build(input).prompt).toContain(
+      VALID_PROPOSAL_PAYLOAD.summary,
+    );
+  });
+});
