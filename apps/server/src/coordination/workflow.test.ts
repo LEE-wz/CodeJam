@@ -163,214 +163,187 @@ describe("latest committed artifact selectors", () => {
   });
 });
 
-describe("VerifiedHandoffWorkflowV1 normal routing", () => {
+const revisedProposal: CoordinationArtifact = {
+  ...VALID_PROPOSAL_ARTIFACT,
+  id: "artifact-proposal-revision",
+  turnId: "turn-proposal-revision",
+};
+
+const withRun = (
+  input: WorkflowView,
+  overrides: Omit<Partial<CoordinationRun>, "policy"> & {
+    policy?: Partial<CoordinationRun["policy"]>;
+  },
+): WorkflowView => ({
+  ...input,
+  run: {
+    ...input.run,
+    ...overrides,
+    policy: { ...input.run.policy, ...overrides.policy },
+  },
+});
+
+const proposalView = (): WorkflowView =>
+  view(
+    [VALID_PROPOSAL_ARTIFACT],
+    [committedTurn(1, VALID_PROPOSAL_ARTIFACT)],
+  );
+
+const reviewView = (review: CoordinationArtifact): WorkflowView =>
+  view(
+    [VALID_PROPOSAL_ARTIFACT, review],
+    [committedTurn(1, VALID_PROPOSAL_ARTIFACT), committedTurn(2, review)],
+  );
+
+const finalView = (review: CoordinationArtifact): WorkflowView =>
+  view(
+    [VALID_PROPOSAL_ARTIFACT, review, VALID_FINAL_ARTIFACT],
+    [
+      committedTurn(1, VALID_PROPOSAL_ARTIFACT),
+      committedTurn(2, review),
+      committedTurn(3, VALID_FINAL_ARTIFACT),
+    ],
+  );
+
+describe("VerifiedHandoffWorkflowV1 routing decision table", () => {
   const workflow = new VerifiedHandoffWorkflowV1();
-
-  it("schedules the initial Planner proposal for a new run", () => {
-    expect(workflow.decideNext(view([], []))).toEqual({
-      kind: "schedule",
-      role: "planner",
-      turnKind: "initial_proposal",
-      phase: "drafting",
-      revision: 0,
-      inputArtifactIds: [],
-      expectedArtifactType: "proposal",
-    });
-  });
-
-  it("schedules Critic with the latest proposal", () => {
-    expect(
-      workflow.decideNext(
-        view([VALID_PROPOSAL_ARTIFACT], [committedTurn(1, VALID_PROPOSAL_ARTIFACT)]),
-      ),
-    ).toEqual({
-      kind: "schedule",
-      role: "critic",
-      turnKind: "proposal_review",
-      phase: "reviewing",
-      revision: 0,
-      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
-      expectedArtifactType: "review",
-    });
-  });
-
-  it("routes a rejection to Planner for a complete replacement proposal", () => {
-    expect(
-      workflow.decideNext(
-        view(
-          [VALID_PROPOSAL_ARTIFACT, REJECTING_REVIEW_ARTIFACT],
-          [
-            committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-            committedTurn(2, REJECTING_REVIEW_ARTIFACT),
-          ],
+  const cases = [
+    {
+      name: "new run schedules Planner",
+      input: () => view([], []),
+      expected: {
+        kind: "schedule",
+        role: "planner",
+        turnKind: "initial_proposal",
+        phase: "drafting",
+        revision: 0,
+        inputArtifactIds: [],
+        expectedArtifactType: "proposal",
+      },
+    },
+    {
+      name: "proposal schedules Critic",
+      input: proposalView,
+      expected: {
+        kind: "schedule",
+        role: "critic",
+        turnKind: "proposal_review",
+        phase: "reviewing",
+        revision: 0,
+        inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
+        expectedArtifactType: "review",
+      },
+    },
+    {
+      name: "reject schedules Planner revision",
+      input: () => reviewView(REJECTING_REVIEW_ARTIFACT),
+      expected: {
+        kind: "schedule",
+        role: "planner",
+        turnKind: "proposal_revision",
+        phase: "revising",
+        revision: 1,
+        inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
+        expectedArtifactType: "proposal",
+      },
+    },
+    {
+      name: "revised proposal schedules another Critic review",
+      input: () =>
+        withRun(
+          view(
+            [revisedProposal, REJECTING_REVIEW_ARTIFACT, VALID_PROPOSAL_ARTIFACT],
+            [
+              committedTurn(3, revisedProposal),
+              committedTurn(2, REJECTING_REVIEW_ARTIFACT),
+              committedTurn(1, VALID_PROPOSAL_ARTIFACT),
+            ],
+          ),
+          { revision: 1 },
         ),
-      ),
-    ).toEqual({
-      kind: "schedule",
-      role: "planner",
-      turnKind: "proposal_revision",
-      phase: "revising",
-      revision: 1,
-      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
-      expectedArtifactType: "proposal",
-    });
-  });
+      expected: {
+        kind: "schedule",
+        role: "critic",
+        turnKind: "proposal_review",
+        phase: "reviewing",
+        revision: 1,
+        inputArtifactIds: [revisedProposal.id],
+        expectedArtifactType: "review",
+      },
+    },
+    {
+      name: "approve schedules Finaliser",
+      input: () => reviewView(APPROVING_REVIEW_ARTIFACT),
+      expected: {
+        kind: "schedule",
+        role: "finalizer",
+        turnKind: "finalization",
+        phase: "finalizing",
+        revision: 0,
+        inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
+        expectedArtifactType: "final",
+      },
+    },
+    {
+      name: "final artifact completes the run",
+      input: () => finalView(APPROVING_REVIEW_ARTIFACT),
+      expected: { kind: "complete", finalArtifactId: VALID_FINAL_ARTIFACT.id },
+    },
+    {
+      name: "reject at revision limit fails",
+      input: () =>
+        withRun(reviewView(REJECTING_REVIEW_ARTIFACT), {
+          revision: 2,
+          policy: { maxRevisions: 2 },
+        }),
+      expected: { kind: "fail", code: "MAX_REVISIONS_EXCEEDED" },
+    },
+    {
+      name: "schedule above turn limit fails",
+      input: () => withRun(proposalView(), { policy: { maxTurns: 1 } }),
+      expected: { kind: "fail", code: "MAX_TURNS_EXCEEDED" },
+    },
+    {
+      name: "completion at turn limit remains valid",
+      input: () =>
+        withRun(finalView(APPROVING_REVIEW_ARTIFACT), {
+          policy: { maxTurns: 3 },
+        }),
+      expected: { kind: "complete", finalArtifactId: VALID_FINAL_ARTIFACT.id },
+    },
+  ];
 
-  it("routes an approval to Finaliser with the approved proposal and review", () => {
-    expect(
-      workflow.decideNext(
-        view(
-          [VALID_PROPOSAL_ARTIFACT, APPROVING_REVIEW_ARTIFACT],
-          [
-            committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-            committedTurn(2, APPROVING_REVIEW_ARTIFACT),
-          ],
-        ),
-      ),
-    ).toEqual({
-      kind: "schedule",
-      role: "finalizer",
-      turnKind: "finalization",
-      phase: "finalizing",
-      revision: 0,
-      inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
-      expectedArtifactType: "final",
-    });
-  });
-
-  it("completes with the committed final artifact", () => {
-    expect(
-      workflow.decideNext(
-        view(
-          [VALID_PROPOSAL_ARTIFACT, APPROVING_REVIEW_ARTIFACT, VALID_FINAL_ARTIFACT],
-          [
-            committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-            committedTurn(2, APPROVING_REVIEW_ARTIFACT),
-            committedTurn(3, VALID_FINAL_ARTIFACT),
-          ],
-        ),
-      ),
-    ).toEqual({ kind: "complete", finalArtifactId: VALID_FINAL_ARTIFACT.id });
-  });
-
-  it("reviews a newer revised proposal instead of following its older rejection", () => {
-    const revision = {
-      ...VALID_PROPOSAL_ARTIFACT,
-      id: "artifact-proposal-revision",
-      turnId: "turn-proposal-revision",
-    };
-    const input = view(
-      [revision, REJECTING_REVIEW_ARTIFACT, VALID_PROPOSAL_ARTIFACT],
-      [
-        committedTurn(3, revision),
-        committedTurn(2, REJECTING_REVIEW_ARTIFACT),
-        committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-      ],
-    );
-    input.run.revision = 1;
-
-    expect(
-      workflow.decideNext(input),
-    ).toMatchObject({
-      kind: "schedule",
-      role: "critic",
-      revision: 1,
-      inputArtifactIds: [revision.id],
-    });
+  it.each(cases)("$name", ({ input, expected }) => {
+    expect(workflow.decideNext(input())).toMatchObject(expected);
   });
 });
 
-describe("VerifiedHandoffWorkflowV1 limits and durable-state guards", () => {
+describe("VerifiedHandoffWorkflowV1 invalid-state table", () => {
   const workflow = new VerifiedHandoffWorkflowV1();
-  const proposalAndReview = (
-    review: CoordinationArtifact = REJECTING_REVIEW_ARTIFACT,
-  ): WorkflowView =>
-    view(
-      [VALID_PROPOSAL_ARTIFACT, review],
-      [committedTurn(1, VALID_PROPOSAL_ARTIFACT), committedTurn(2, review)],
-    );
-
-  it("fails a rejection when the configured revision limit is reached", () => {
-    const input = proposalAndReview();
-    input.run.revision = 2;
-    input.run.policy = { ...input.run.policy, maxRevisions: 2 };
-
-    expect(workflow.decideNext(input)).toMatchObject({
-      kind: "fail",
-      code: "MAX_REVISIONS_EXCEEDED",
-    });
-  });
-
-  it("fails before scheduling a turn above maxTurns", () => {
-    const input = view(
-      [VALID_PROPOSAL_ARTIFACT],
-      [committedTurn(1, VALID_PROPOSAL_ARTIFACT)],
-    );
-    input.run.policy = { ...input.run.policy, maxTurns: 1 };
-
-    expect(workflow.decideNext(input)).toMatchObject({
-      kind: "fail",
-      code: "MAX_TURNS_EXCEEDED",
-    });
-  });
-
-  it("allows completion when the final artifact consumes maxTurns", () => {
-    const input = view(
-      [VALID_PROPOSAL_ARTIFACT, APPROVING_REVIEW_ARTIFACT, VALID_FINAL_ARTIFACT],
-      [
-        committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-        committedTurn(2, APPROVING_REVIEW_ARTIFACT),
-        committedTurn(3, VALID_FINAL_ARTIFACT),
-      ],
-    );
-    input.run.policy = { ...input.run.policy, maxTurns: 3 };
-
-    expect(workflow.decideNext(input)).toEqual({
-      kind: "complete",
-      finalArtifactId: VALID_FINAL_ARTIFACT.id,
-    });
-  });
-
-  it("fails safely when a review exists without a proposal", () => {
-    expect(
-      workflow.decideNext(
-        view(
-          [APPROVING_REVIEW_ARTIFACT],
-          [committedTurn(1, APPROVING_REVIEW_ARTIFACT)],
-        ),
-      ),
-    ).toMatchObject({ kind: "fail", code: "INVALID_STATE" });
-  });
-
-  it("fails safely when a final artifact follows a rejecting review", () => {
-    expect(
-      workflow.decideNext(
-        view(
-          [VALID_PROPOSAL_ARTIFACT, REJECTING_REVIEW_ARTIFACT, VALID_FINAL_ARTIFACT],
-          [
-            committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-            committedTurn(2, REJECTING_REVIEW_ARTIFACT),
-            committedTurn(3, VALID_FINAL_ARTIFACT),
-          ],
-        ),
-      ),
-    ).toMatchObject({ kind: "fail", code: "INVALID_STATE" });
-  });
-
-  it("fails safely when an artifact is attached to an uncommitted turn", () => {
-    const turn = {
-      ...committedTurn(1, VALID_PROPOSAL_ARTIFACT),
-      status: "running" as const,
-    };
-
-    expect(
-      workflow.decideNext(view([VALID_PROPOSAL_ARTIFACT], [turn])),
-    ).toMatchObject({ kind: "fail", code: "INVALID_STATE" });
-  });
-
-  it("fails safely when turn sequences are duplicated", () => {
-    expect(
-      workflow.decideNext(
+  const cases = [
+    {
+      name: "non-running run",
+      input: () => withRun(view([], []), { status: "completed" }),
+    },
+    {
+      name: "active turn",
+      input: () => withRun(view([], []), { activeTurnId: "turn-active" }),
+    },
+    {
+      name: "invalid next sequence",
+      input: () => withRun(view([], []), { nextTurnSequence: 0 }),
+    },
+    {
+      name: "negative revision",
+      input: () => withRun(view([], []), { revision: -1 }),
+    },
+    {
+      name: "next sequence behind committed history",
+      input: () => withRun(proposalView(), { nextTurnSequence: 1 }),
+    },
+    {
+      name: "duplicate turn sequence",
+      input: () =>
         view(
           [VALID_PROPOSAL_ARTIFACT, APPROVING_REVIEW_ARTIFACT],
           [
@@ -378,15 +351,73 @@ describe("VerifiedHandoffWorkflowV1 limits and durable-state guards", () => {
             committedTurn(1, APPROVING_REVIEW_ARTIFACT),
           ],
         ),
-      ),
-    ).toMatchObject({ kind: "fail", code: "INVALID_STATE" });
-  });
+    },
+    {
+      name: "duplicate artifact identity",
+      input: () =>
+        view(
+          [VALID_PROPOSAL_ARTIFACT, VALID_PROPOSAL_ARTIFACT],
+          [committedTurn(1, VALID_PROPOSAL_ARTIFACT)],
+        ),
+    },
+    {
+      name: "artifact on uncommitted turn",
+      input: () =>
+        view(
+          [VALID_PROPOSAL_ARTIFACT],
+          [
+            {
+              ...committedTurn(1, VALID_PROPOSAL_ARTIFACT),
+              status: "running",
+            },
+          ],
+        ),
+    },
+    {
+      name: "committed turn without its output artifact",
+      input: () => view([], [committedTurn(1, VALID_PROPOSAL_ARTIFACT)]),
+    },
+    {
+      name: "artifact role does not match turn",
+      input: () =>
+        view(
+          [VALID_PROPOSAL_ARTIFACT],
+          [
+            {
+              ...committedTurn(1, VALID_PROPOSAL_ARTIFACT),
+              role: "critic",
+            },
+          ],
+        ),
+    },
+    {
+      name: "review without proposal",
+      input: () =>
+        view(
+          [APPROVING_REVIEW_ARTIFACT],
+          [committedTurn(1, APPROVING_REVIEW_ARTIFACT)],
+        ),
+    },
+    {
+      name: "final after rejecting review",
+      input: () => finalView(REJECTING_REVIEW_ARTIFACT),
+    },
+    {
+      name: "proposal supersedes approving review",
+      input: () =>
+        view(
+          [revisedProposal, APPROVING_REVIEW_ARTIFACT, VALID_PROPOSAL_ARTIFACT],
+          [
+            committedTurn(3, revisedProposal),
+            committedTurn(2, APPROVING_REVIEW_ARTIFACT),
+            committedTurn(1, VALID_PROPOSAL_ARTIFACT),
+          ],
+        ),
+    },
+  ];
 
-  it("fails safely instead of scheduling while another turn is active", () => {
-    const input = view([], []);
-    input.run.activeTurnId = "turn-active";
-
-    expect(workflow.decideNext(input)).toMatchObject({
+  it.each(cases)("$name fails safely", ({ input }) => {
+    expect(workflow.decideNext(input())).toMatchObject({
       kind: "fail",
       code: "INVALID_STATE",
     });

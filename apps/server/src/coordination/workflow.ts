@@ -84,6 +84,9 @@ const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
   if (!Number.isInteger(view.run.nextTurnSequence) || view.run.nextTurnSequence < 1) {
     return invalidState("Run has an invalid next turn sequence");
   }
+  if (!Number.isInteger(view.run.revision) || view.run.revision < 0) {
+    return invalidState("Run has an invalid revision");
+  }
 
   const turns = view.turns.filter((turn) => turn.runId === view.run.id);
   const artifacts = view.artifacts.filter((artifact) => artifact.runId === view.run.id);
@@ -138,6 +141,7 @@ const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
       artifact.turnId !== turn.id ||
       turn.role !== expected.role ||
       artifact.createdByRole !== expected.role ||
+      artifact.createdByAgentId !== turn.agentId ||
       artifact.type !== expected.type
     ) {
       return invalidState("Committed turn has an invalid role or artifact output");

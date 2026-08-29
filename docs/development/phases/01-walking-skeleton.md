@@ -29,7 +29,7 @@ If workflow semantics, schema behavior, context visibility, or expected test evi
 - [x] **P1-01** Implement deterministic selectors for the latest committed proposal, review, and final artifact by turn sequence.
 - [x] **P1-02** Route new run → Planner, proposal → Critic, rejection → Planner revision, approval → Finaliser, and final artifact → complete.
 - [x] **P1-03** Enforce `maxRevisions` and `maxTurns`; map impossible durable state to safe `INVALID_STATE` failure.
-- [ ] **P1-04** Add table tests for every routing branch and boundary. No repository, clock, or runtime is allowed in these tests.
+- [x] **P1-04** Add table tests for every routing branch and boundary. No repository, clock, or runtime is allowed in these tests.
 
 ### Artifact protocol
 
