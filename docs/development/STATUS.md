@@ -1,7 +1,7 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 10:27:04 UTC
-**Audited commit:** `2ca91fe` plus the recorded P1-01 working tree (contracts frozen at `ea469b2`, tag `relay/contracts-v1`)
+**Last audit:** 2026-08-29 10:27:46 UTC
+**Audited commit:** `bd691de` (contracts frozen at `ea469b2`, amended by the approved P1-01 mini-RFC)
 **Implementation branch:** `phase1-p1-01-latest-artifact-selectors` (base `2ca91fe`)
 **Current phase:** Phase 1 — In-Memory Walking Skeleton (in progress)
 **Current gate:** Checkpoint 0 verified
@@ -94,8 +94,8 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | 2026-08-29 | `ea469b2` | Live application availability | **Partial:** `/api/health` is healthy and `/api/auth` confirms authentication is required. Manual authenticated lifecycle/model turns were not attempted without authorized credentials. |
 | 2026-08-29 10:04:04 UTC | `d806e8f` | P0-04 manual existing-application regression | **Passed:** health, Agent list/create/edit/stop/start, one ordinary Playground run, return to ready, message persistence after refresh, deletion, and post-delete refresh. Optional stopped-Agent message rejection was not checked. |
 | 2026-08-29 10:04:04 UTC | `d806e8f` | P0-05 manual three-Agent baseline | **Passed:** three genuinely fresh Agents began ready with empty histories; Planner, Critic, and Finaliser each completed one ordinary turn; all returned ready; final isolation and readiness passed. |
-| 2026-08-29 10:27:04 UTC | `phase1-p1-01-latest-artifact-selectors` | P1-01 focused Docker Compose test | **Passed:** `workflow.test.ts`, 4 tests covering deterministic sequence selection and invalid candidate exclusion. |
-| 2026-08-29 10:27:04 UTC | `phase1-p1-01-latest-artifact-selectors` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 27 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings for later security review. |
+| 2026-08-29 10:27:04 UTC | `bd691de` | P1-01 focused Docker Compose test | **Passed:** `workflow.test.ts`, 4 tests covering deterministic sequence selection and invalid candidate exclusion. |
+| 2026-08-29 10:27:04 UTC | `bd691de` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 27 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings for later security review. |
 
 ## Manual Phase 0 verification report
 
