@@ -34,24 +34,24 @@ If workflow semantics, schema behavior, context visibility, or expected test evi
 ### Artifact protocol
 
 - [x] **P1-05** Implement strict, bounded Zod schemas for proposal, review, and final payloads.
-- [ ] **P1-06** Enforce the parsing order: output size, optional single outer JSON fence, JSON parse, expected type/version, schema, then cross-field/coverage rules.
-- [ ] **P1-07** Enforce required proposal section keys exactly once, reject/approve issue consistency, non-empty final content, and backend-owned provenance.
-- [ ] **P1-08** Test plain/fenced valid JSON, commentary, malformed/wrong type, unknown fields, oversize output, section coverage/duplicates, inconsistent reviews, and Agent-forged IDs.
+- [x] **P1-06** Enforce the parsing order: output size, optional single outer JSON fence, JSON parse, expected type/version, schema, then cross-field/coverage rules.
+- [x] **P1-07** Enforce required proposal section keys exactly once, reject/approve issue consistency, non-empty final content, and backend-owned provenance.
+- [x] **P1-08** Test plain/fenced valid JSON, commentary, malformed/wrong type, unknown fields, oversize output, section coverage/duplicates, inconsistent reviews, and Agent-forged IDs.
 
 ### Scoped context builder
 
-- [ ] **P1-09** Implement the backend contract header and templates for initial proposal, critique, revision, and finalization.
-- [ ] **P1-10** Include only the context allowed by the role matrix: initial none; Critic latest proposal; revising Planner latest proposal plus rejecting review; Finaliser approved proposal plus approving review.
-- [ ] **P1-11** Add canonical serialization, stable digest, deterministic size handling, and retry feedback containing only safe validator/runtime feedback.
-- [ ] **P1-12** Test excluded superseded artifacts and absence of raw prompts, events, auth data, leases, Agent thread IDs, and unrelated state.
+- [x] **P1-09** Implement the backend contract header and templates for initial proposal, critique, revision, and finalization.
+- [x] **P1-10** Include only the context allowed by the role matrix: initial none; Critic latest proposal; revising Planner latest proposal plus rejecting review; Finaliser approved proposal plus approving review.
+- [x] **P1-11** Add canonical serialization, stable digest, deterministic size handling, and retry feedback containing only safe validator/runtime feedback.
+- [x] **P1-12** Test excluded superseded artifacts and absence of raw prompts, events, auth data, leases, Agent thread IDs, and unrelated state.
 
 ### Scripted runtime and orchestration
 
-- [ ] **P1-13** Implement queued scripted outcomes and captured calls, including manually resolvable deferred calls for races.
-- [ ] **P1-14** Implement service create/list/detail validation and one local loop per run.
-- [ ] **P1-15** Implement schedule → attempt → runtime → validate → lease commit with state reload between durable transitions.
-- [ ] **P1-16** Implement bounded retry feedback, terminal completion/failure, safe top-level catch, active-loop cleanup, and stop cancellation.
-- [ ] **P1-17** Test normal approval, reject/revise/approve, invalid→retry→success, invalid twice, timeout→retry, failure twice, stale commit, duplicate start, and stop during a deferred attempt.
+- [x] **P1-13** Implement queued scripted outcomes and captured calls, including manually resolvable deferred calls for races.
+- [x] **P1-14** Implement service create/list/detail validation and one local loop per run.
+- [x] **P1-15** Implement schedule → attempt → runtime → validate → lease commit with state reload between durable transitions.
+- [x] **P1-16** Implement bounded retry feedback, terminal completion/failure, safe top-level catch, active-loop cleanup, and stop cancellation.
+- [x] **P1-17** Test normal approval, reject/revise/approve, invalid→retry→success, invalid twice, timeout→retry, failure twice, stale commit, duplicate start, and stop during a deferred attempt.
 
 ## Requirements and boundaries
 

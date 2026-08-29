@@ -1,33 +1,61 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 17:40:48 UTC
-**Audited commit:** `f3caed5` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
-**Implementation branch:** `phase1-p1-17-service-matrix` (base `356c1e5`; one task branch per task, chained from `phase1-p1-06-artifact-parsing-order`)
-**Current phase:** Phase 1 — In-Memory Walking Skeleton (implementation complete, verification outstanding)
-**Current gate:** Checkpoint 0 verified; Checkpoint 1 awaiting its Docker Compose gate
-**Overall state:** Phase 0 `complete`; P1-01–P1-06 `complete`; P1-07–P1-17 `implemented_unverified`
+**Last audit:** 2026-08-29 17:52 UTC
+**Audited commit:** `91cdbd1` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
+**Implementation branch:** `phase1-checkpoint-1-signoff` (Phase 1 work on task branches chained from `phase1-p1-06-artifact-parsing-order`, base `356c1e5`)
+**Current phase:** Phase 1 — In-Memory Walking Skeleton (complete)
+**Current gate:** Checkpoint 1 verified
+**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 not started and not authorised
 
 ## Resume here
 
-1. Run the standard Docker Compose `npm run check` from the runbook on
-   `phase1-p1-17-service-matrix`. Expect **14 server test files and 237 tests**,
-   plus both builds. Until it passes, P1-07–P1-17 stay `implemented_unverified`
-   and Checkpoint 1 stays open.
-2. Record that result in the verification log below, promote P1-07–P1-17 to
-   `complete` if it passes, and close Checkpoint 1.
-3. Review the Phase 1 implementation decisions now recorded in
-   [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) — especially
-   the meaning of `sizeChars` — because Phase 2 persists artifacts and makes
-   those choices expensive to change.
+Phase 1 is closed. Three items gate the start of Phase 2, and none of them is
+implementation work:
 
-Do not begin P2-01 until Phase 1 is signed off. Do not connect Relay to real
-Agents until the Phase 2 correctness and race gates pass.
+1. Confirm or correct the nine Phase 1 implementation decisions recorded in
+   [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md). `sizeChars`
+   is the one that becomes expensive once P2-01 persists artifacts.
+2. Fast-forward the integration branch to the verified Phase 1 tip so P2-01 can
+   satisfy its entry criterion of branching from the completed checkpoint.
+3. Give explicit sign-off to begin Phase 2. P2-01 is the next task ID.
+
+Carry the four deferred items in **Phase 1 handoff to Phase 2** below into the
+Phase 2 task list before starting P2-01.
+
+Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
 ## Last checkpoint
 
-Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes the overview-aligned types and interfaces, removes the accidental events route, adds all Phase 0 module shells and shared deterministic testing controls/fixtures/fakes, and proves service construction. The authenticated manual baseline and three-Agent checks passed against Phase 0 HEAD `d806e8f` at 2026-08-29 10:04:04 UTC.
+Checkpoint 1 is complete. The real workflow, artifact protocol, and role-scoped
+context builder drive the real `CoordinationService` against an in-memory
+repository and a scripted runtime, with no disk, HTTP server, timer, or model
+call in any automated test. The full Docker Compose `npm run check` passed on the
+Phase 1 tip: server and web typechecks, 14 server test files with 237 tests, web
+build, and server build.
+
+Checkpoint 0 remains as recorded: commit `ea469b2`, tagged `relay/contracts-v1`,
+froze the overview-aligned types and interfaces.
+
+## Phase 1 handoff to Phase 2
+
+Four behaviours are specified in the frozen contract but cannot be produced by
+Phase 1 code. They are deferred deliberately, not overlooked, and each needs an
+owner in Phase 2:
+
+| Item | Current state | Where it belongs |
+|---|---|---|
+| `attempt.stale_ignored` | No code path can produce this status. A late or duplicate result is correctly refused by the lease, but leaves no evidence row. | P2-05/P2-09, with events |
+| `truncated` context flag | `PromptEnvelope.truncated` is computed correctly and then dropped by the service. `CoordinationAttempt` has no field for it, so overview Section 11.6's "record `truncated: true` in attempt metadata/event details" is unmet. | P2-05 event details, or a mini-RFC adding the attempt field |
+| `attempt.outputDigest` | Declared in the frozen type and never written by any code path. | P2-09/P2-11, alongside commit |
+| `includedArtifactIds` | Returned by the context builder and dropped by the service; `turn.inputArtifactIds` carries most of the same evidence. | P2-09, or drop it from the envelope by mini-RFC |
+
+The shared Phase 1 fixtures, fakes, deterministic controls, in-memory
+repository, and scripted runtime are frozen for Phase 2 repository and API
+tests, as the phase sheet's handoff requires. Extend them additively; changing
+existing fixture behaviour requires a recorded decision because Phase 2 tests
+will depend on it.
 
 ## Phase 0 task ledger
 
@@ -39,25 +67,42 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | P0-11 | `complete` | Immutable commit `ea469b2`, tag `relay/contracts-v1`. |
 | P0-12–P0-17 | `complete` | Module shells, deterministic kit, shared fixtures/fakes, scripted runtime, and construction test pass. |
 
+## Phase 1 task ledger
+
+| Tasks | Status | Evidence |
+|---|---|---|
+| P1-01–P1-04 | `complete` | Pure workflow selectors, full routing table, ceilings, invalid-state guards; 26 pure tests. |
+| P1-05 | `complete` | Strict bounded proposal/review/final schemas; 20 boundary tests. |
+| P1-06 | `complete` | Frozen Section 11.4 parsing order as fail-fast steps; Compose check passed with 12 files / 87 tests. |
+| P1-07 | `complete` | Section coverage and uniqueness, reject/approve issue consistency, backend provenance. |
+| P1-08 | `complete` | 23-row valid/adversarial matrix plus forged-provenance and injected-instruction cases; 72 protocol tests total. |
+| P1-09–P1-12 | `complete` | Contract envelope and four role templates, Section 5.2 visibility whitelist, canonical serialisation, reproducible truncation ladder with safe failure, bounded retry feedback, leakage and superseded-history tests; 45 context tests. |
+| P1-13 | `complete` | Scripted runtime with queued outcomes, captured calls, deferred manually-resolvable completions, and start waiters; 9 kit tests. |
+| P1-14 | `complete` | Create validation: slug normalisation before duplicate rejection, frozen key/title limits, create-time context-cap probe using the real builder, one local loop per run; 12 service tests. |
+| P1-15–P1-17 | `complete` | Shared in-memory repository with lease/active-attempt/status enforcement, and the walking-skeleton matrix over the real components; 36 tests. |
+
+All Phase 1 evidence is the single Docker Compose `npm run check` recorded below;
+no task was promoted on a host-only or focused run.
+
 ## Implemented inventory
 
 | Area | Evidence | Status | Notes |
 |---|---|---|---|
 | Domain model/default policy | `apps/server/src/coordination/types.ts` | `complete` | Frozen against overview Sections 7–8 at `relay/contracts-v1`. |
 | Component contracts | `apps/server/src/coordination/contracts.ts` | `complete` | Frozen overview boundaries include repository/runtime/workflow/context/protocol/redaction/execution control. |
-| Coordination error envelope | `coordination/errors.ts`, `app.ts` | `implemented_unverified` | `CoordinationError` receives structured API envelope. |
-| Service create/list/detail | `coordination/service.ts` | `implemented_unverified` | P1-14 adds slug normalisation of required sections, frozen title/key limits, and a create-time context-cap probe that builds a real probe prompt. |
-| Background orchestration | `coordination/service.ts` | `implemented_unverified` | Scheduling, retries, runtime attachment, validation, commits, completion/failure, and local loop cleanup exist. |
-| Stop handling | `coordination/service.ts` | `implemented_unverified` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal HTTP semantics are frozen, while race evidence remains Phase 1/2 work. |
+| Coordination error envelope | `coordination/errors.ts`, `app.ts` | `complete` | `CoordinationError` receives structured API envelope. |
+| Service create/list/detail | `coordination/service.ts` | `complete` | P1-14 adds slug normalisation of required sections, frozen title/key limits, and a create-time context-cap probe that builds a real probe prompt. |
+| Background orchestration | `coordination/service.ts` | `complete` | Scheduling, retries, runtime attachment, validation, commits, completion/failure, and local loop cleanup exist. |
+| Stop handling | `coordination/service.ts` | `complete` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal HTTP semantics are frozen, while race evidence remains Phase 1/2 work. |
 | HTTP routes | `coordination/routes.ts`, `app.ts` | `complete` | Frozen list/create/detail/start/stop surface; accidental events route removed and tested as absent. |
 | Phase 0 testing kit | `coordination/testing/**`, `construction.test.ts` | `complete` | Deterministic controls, full fixture pack, fakes, scripted runtime, and construction proof pass. |
 | Pure workflow selectors/routing | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `complete` | P1-01–P1-04 pass: deterministic selectors, all routing transitions, revision/turn ceilings, invalid-state guards, and exhaustive pure decision tables. |
 | Strict artifact schemas | `coordination/schemas.ts`, `coordination/schemas.test.ts` | `complete` | P1-05 strict bounded proposal/review/final Zod schemas pass exact string/array boundaries, trimming, slug, discriminator, optional-field normalization, and unknown-field tests. |
-| Artifact parser/protocol | `coordination/artifact-protocol.ts`, `artifact-protocol.test.ts` | `implemented_unverified` | P1-06–P1-08: frozen Section 11.4 order enforced as fail-fast steps (size, trim, one outer fence, one JSON parse, expected type, schema version, bounded schema, cross-field rules, backend provenance), plus the coverage/consistency rules and a 72-test valid/adversarial matrix including forged provenance and injected instructions. |
-| Role-scoped context builder | `coordination/context-builder.ts`, `context-builder.test.ts` | `implemented_unverified` | P1-09–P1-12: Section 11.5 envelope, four role templates, the Section 5.2 visibility whitelist, canonical key-sorted serialisation, a reproducible truncation ladder with safe failure, bounded retry feedback, and leakage tests covering identifiers, bookkeeping, and superseded history. |
-| Shared Phase 1 fakes | `coordination/testing/memory-repository.ts`, `testing/fakes.ts` | `implemented_unverified` | P1-13/P1-15: scripted runtime gains deferred, manually resolvable completions plus start waiters for race tests; the in-memory repository enforces lease, active-attempt, and status checks and returns deep copies so callers must reload. |
-| Walking-skeleton evidence | `coordination/walking-skeleton.test.ts` | `implemented_unverified` | P1-15–P1-17: the real workflow, protocol, and context builder drive normal, reject/revise/approve, invalid→retry→success, invalid twice, timeout→retry, failure twice, start-failure, revision-limit, turn-limit, duplicate-start, stop-during-deferred, and late-result cases with no disk, HTTP, timers, or model. |
-| Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | Create-validation coverage added in P1-14; walking-skeleton coverage now uses real components rather than test-local stubs. |
+| Artifact parser/protocol | `coordination/artifact-protocol.ts`, `artifact-protocol.test.ts` | `complete` | P1-06–P1-08: frozen Section 11.4 order enforced as fail-fast steps (size, trim, one outer fence, one JSON parse, expected type, schema version, bounded schema, cross-field rules, backend provenance), plus the coverage/consistency rules and a 72-test valid/adversarial matrix including forged provenance and injected instructions. |
+| Role-scoped context builder | `coordination/context-builder.ts`, `context-builder.test.ts` | `complete` | P1-09–P1-12: Section 11.5 envelope, four role templates, the Section 5.2 visibility whitelist, canonical key-sorted serialisation, a reproducible truncation ladder with safe failure, bounded retry feedback, and leakage tests covering identifiers, bookkeeping, and superseded history. |
+| Shared Phase 1 fakes | `coordination/testing/memory-repository.ts`, `testing/fakes.ts` | `complete` | P1-13/P1-15: scripted runtime gains deferred, manually resolvable completions plus start waiters for race tests; the in-memory repository enforces lease, active-attempt, and status checks and returns deep copies so callers must reload. |
+| Walking-skeleton evidence | `coordination/walking-skeleton.test.ts` | `complete` | P1-15–P1-17: the real workflow, protocol, and context builder drive normal, reject/revise/approve, invalid→retry→success, invalid twice, timeout→retry, failure twice, start-failure, revision-limit, turn-limit, duplicate-start, stop-during-deferred, and late-result cases with no disk, HTTP, timers, or model. |
+| Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `complete` | Create-validation coverage added in P1-14; walking-skeleton coverage now uses real components rather than test-local stubs. |
 
 ## Outstanding by phase
 
@@ -67,11 +112,8 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 
 ### Phase 1
 
-- Implementation for P1-06–P1-17 is complete on the chained task branches.
-- The only outstanding Phase 1 work is the Docker Compose `npm run check` gate
-  and the STATUS promotion that follows it.
-- Not owned by Phase 1, and deliberately deferred: `attempt.stale_ignored`
-  evidence rows (events are P2-05) and run-scoped cancellation (P3-04).
+- Complete. No Phase 1 tasks remain. Four contract behaviours are carried into
+  Phase 2; see **Phase 1 handoff to Phase 2** above.
 
 ### Phase 2
 
@@ -119,7 +161,8 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | 2026-08-29 11:12:02 UTC | `162da1d` | P1-05 focused Docker Compose test | **Passed:** `schemas.test.ts`, 20 tests covering valid fixtures, every string/array boundary, whitespace, strictness, slugs, discriminators, and optional normalization. |
 | 2026-08-29 11:12:47 UTC | `162da1d` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 11 server test files with 69 tests, web build, and server build. |
 | 2026-08-29 | `ea15e37` | P1-06 final scoped Docker Compose `npm run check` | **Passed** (user-run): 12 server test files with 87 tests, both builds. P1-06 is `complete` on this evidence. |
-| 2026-08-29 17:40 UTC | `f3caed5` | P1-07–P1-17 Docker Compose `npm run check` | **Not run.** No container engine is reachable from the environment the work was done in: the shell holding the checkout has no Docker, Podman, or Colima, and the alternative host is blocked from pulling `node:22-bookworm-slim` (403). Per the runbook these tasks therefore stay `implemented_unverified`; the check must be run on a host with Docker before any promotion. |
+| 2026-08-29 17:40 UTC | `f3caed5` | P1-07–P1-17 Docker Compose `npm run check` | **Not run.** No container engine is reachable from the environment the work was done in: the shell holding the checkout has no Docker, Podman, or Colima, and the alternative host is blocked from pulling `node:22-bookworm-slim` (403). Per the runbook these tasks therefore stay `implemented_unverified`; the check must be run on a host with Docker before any promotion. **Superseded by the passing gate recorded below.** |
+| 2026-08-29 17:43:51 UTC | `f3caed5` | **Checkpoint 1 gate** — final scoped Docker Compose `npm run check` | **Passed:** server and web typechecks, 14 server test files with 237 tests, web build, and server build. Image built from `node:22-bookworm-slim`; `npm ci` continues to report 1 moderate and 5 high audit findings held for release review. This is the sole completion evidence for P1-07–P1-17. |
 | 2026-08-29 17:40 UTC | `f3caed5` | Non-authoritative pre-check | 14 server test files, 237 tests, both builds pass under Node 22.23.2 / npm 10.9.8 from a clean `npm ci --include=dev` over the same source snapshot the Compose command copies, run outside the checkout. Recorded only to predict the Compose result. **This is not completion evidence and does not satisfy any gate.** |
 
 ## Manual Phase 0 verification report
@@ -164,7 +207,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | Code ahead of gates | Merged code can create false confidence about completion. | Retain `implemented_unverified` until required phase evidence passes. |
 | Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
 | Current Agent cancellation is keyed by Agent ID | Could cancel unrelated later work after races. | Implement run-scoped cancellation in Phase 3 only after Phase 2 correctness gates. |
-| Docker unreachable from the environment used for P1-07–P1-17 | The mandatory Compose gate could not be executed there, so twelve tasks carry implementation without completion evidence. | Run the runbook command on a host with Docker, then promote the task IDs. Do not weaken the Docker-only rule to close the gap. |
+| ~~Docker unreachable from the environment used for P1-07–P1-17~~ | Resolved. The gate was run on a host with Docker and passed; the tasks were promoted on that evidence. | Closed 2026-08-29. Any future assistant-run work must route the gate to a host with a container engine rather than substituting a host runner. |
 | Phase 1 implementation decisions not yet confirmed | Nine choices were made where the frozen contract is silent; `sizeChars` becomes costly to change once Phase 2 persists artifacts. | Review the decision table in `ASSUMPTIONS_AND_DECISIONS.md` before starting P2-01. |
 
 ## Decision log summary
