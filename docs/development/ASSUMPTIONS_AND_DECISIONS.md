@@ -1,0 +1,69 @@
+# Relay Assumptions and Resolved Questions
+
+**Last audited:** 2026-08-29  
+**Baseline commit:** `3d24d1b`  
+**Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
+
+This file closes questions that can be answered from the checked-out code and isolates the few items that require measurement or a team contract change.
+
+## Resolved Sprint 0 questions
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Does `AgentService` expose completion as a promise? | No. `sendMessage()` returns the queued run/message while `executeRun()` remains private and its promise is stored internally. | Phase 3 must add `startExecution()` returning an `AgentExecutionHandle`, retain `sendMessage()` as a compatibility wrapper, and add run-scoped cancellation. |
+| Does `JsonStore` have a migration hook? | No. `initialize()` parses directly as `Database` and rejects any version other than `1`. | Phase 2 must add explicit v1 parsing and additive v1→v2 migration before changing the empty database to v2. A future/invalid version must be rejected without overwriting the file. |
+| Where are route modules registered? | `createApp(config, service, coordination?)` conditionally calls `registerCoordinationRoutes(...)` after existing Agent routes and before static-file setup. | Preserve this seam. Phase 2 must construct the real coordination dependencies in `index.ts`, initialize them after `AgentService`, and pass the service into `createApp`. |
+| Which spelling is canonical? | Code and API values use `finalizer`. | Use “Finaliser” in user-facing copy to match the product narrative, but never use it as a stored enum or API value. Tests should assert `finalizer` in code. |
+| How should stopping a terminal run behave? | The current service returns the terminal run and the route returns `202`. | Treat stop as idempotent for MVP. Freeze this only after route tests explicitly cover completed, failed, and stopped runs; if the team prefers `200`, change the contract and implementation together before Checkpoint 0. |
+
+## Measured later, not open design questions
+
+| Item | How it is resolved | Required evidence |
+|---|---|---|
+| Real model latency | Measure in Phase 3 with three fresh demo Agents and the seeded short objective. Do not lower the normal timeout merely to manufacture a failure. | Record per-turn and total timings for at least three successful rehearsals; confirm `perAttemptTimeoutMs=120000` is practical or approve a mini-RFC. |
+| Schema compliance of real output | Exercise each role prompt through the real runtime after pure protocol tests pass. Validators remain authoritative. | Several successful outputs for proposal, rejecting/approving review, and final schemas; record only redacted results. |
+| Old thread contamination | Use fresh Agents for the MVP demo as required by the plan. | Rehearsal checklist confirms fresh Agents; per-run threads remain post-MVP unless promoted by mini-RFC. |
+
+## Contract deviations requiring action
+
+### Extra events endpoint
+
+The implementation exposes `GET /api/coordination-runs/:id/events`, but the frozen route table only requires list, create, detail, start, and stop. The detail response already contains events.
+
+**Decision for the current runbook:** this endpoint is not required for MVP and must not become a UI dependency. Before Checkpoint 0, either remove it or approve a mini-RFC adding it to the API contract and tests. Keeping an undocumented accidental API is not an acceptable freeze state.
+
+### Contracts merged before the contract gate
+
+The domain types, interfaces, service, and routes are present at baseline commit `3d24d1b`, but their presence does not prove Sprint 0 complete. Shared deterministic artifact fixtures, empty modules/fakes for all workstreams, a successful baseline check, and an explicit contract review are still required.
+
+### Shared conversation availability
+
+The supplied ChatGPT share URL was inaccessible during this audit: the page reader could not fetch it, direct HTTP was stopped by a Cloudflare challenge, and the available browser runner requires Node 20 while the environment currently has Node 18. The implementation plan was therefore treated as authoritative, per the user request. If the shared conversation contains decisions absent from `overview.md`, copy those decisions into this file before freezing Checkpoint 0.
+
+## Repository assumptions confirmed
+
+- The project is TypeScript with ECMAScript modules.
+- Fastify and Zod are the server route/validation pattern; React is the client.
+- `AgentService.initialize()` marks queued/running Agent runs cancelled and busy Agents ready after restart.
+- The JSON database is version 1 and `JsonStore` serializes mutations for a single process.
+- The web client uses the existing API wrapper/polling style.
+- Node.js 22+ and npm 10+ are repository prerequisites.
+
+## Invariants that may not be weakened
+
+- Exactly three distinct, pre-created Agents map to fixed roles.
+- Backend state, never model prose, chooses the next role and terminal state.
+- Artifacts are strict, bounded, versioned JSON and immutable after commit.
+- Critic rejection is a committed workflow outcome; invalid/runtime output is an attempt failure.
+- Only the active attempt and lease may commit.
+- A timeout must settle/cancel the correlated Agent run before retrying the same Agent.
+- Stops and restarts settle conservatively; late results are visible but ignored.
+- Events and logs contain bounded, allowlisted, redacted metadata—not raw prompts or output.
+
+## Mandatory workflow decisions
+
+- Every task begins on a new task branch created from the intended current base. Direct implementation on `main` or the shared integration branch is prohibited.
+- Every task consults `FILESYSTEM_MAP.md` first and limits file access to its mapped primary and justified conditional paths.
+- All testing and verification runs through Docker Compose. Host Node/npm results are not accepted as completion evidence.
+- Every completed development or implementation ends with a passing Docker Compose execution of `npm run check`; focused tests do not replace it.
+- When any contract, phase instruction, file boundary, behavior, or acceptance criterion is unclear, work pauses for clarification. The answer is recorded before implementation resumes; assumptions are not silently substituted.
