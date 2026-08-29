@@ -1,16 +1,16 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 10:39:39 UTC
-**Audited commit:** `b0c1292` (contracts frozen at `ea469b2`, amended by the approved P1-01 mini-RFC)
-**Implementation branch:** `phase1-p1-04-workflow-table` (base `12a8a6b`)
+**Last audit:** 2026-08-29 11:12:47 UTC
+**Audited commit:** `162da1d` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
+**Implementation branch:** `phase1-p1-05-artifact-schemas` (base `7daf6f7`)
 **Current phase:** Phase 1 — In-Memory Walking Skeleton (in progress)
 **Current gate:** Checkpoint 0 verified
-**Overall state:** Phase 0 `complete`; P1-01–P1-04 `complete`; Checkpoint 1 remains open
+**Overall state:** Phase 0 `complete`; P1-01–P1-05 `complete`; Checkpoint 1 remains open
 
 ## Resume here
 
-1. Begin **P1-05** on a new task branch: implement strict, bounded Zod schemas for proposal, review, and final payloads.
-2. Continue with **P1-06–P1-07** parser ordering, expected type/version, coverage, review consistency, and backend-owned provenance.
+1. Begin **P1-06** on a new task branch: enforce output-size, optional outer-fence, JSON, expected type/version, and schema parsing order.
+2. Continue with **P1-07** proposal coverage, review consistency, non-empty final content, and backend-owned provenance.
 3. Complete **P1-08** with the required valid and adversarial protocol test matrix, using the same focused-then-full Compose gates.
 
 Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
@@ -44,6 +44,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | HTTP routes | `coordination/routes.ts`, `app.ts` | `complete` | Frozen list/create/detail/start/stop surface; accidental events route removed and tested as absent. |
 | Phase 0 testing kit | `coordination/testing/**`, `construction.test.ts` | `complete` | Deterministic controls, full fixture pack, fakes, scripted runtime, and construction proof pass. |
 | Pure workflow selectors/routing | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `complete` | P1-01–P1-04 pass: deterministic selectors, all routing transitions, revision/turn ceilings, invalid-state guards, and exhaustive pure decision tables. |
+| Strict artifact schemas | `coordination/schemas.ts`, `coordination/schemas.test.ts` | `complete` | P1-05 strict bounded proposal/review/final Zod schemas pass exact string/array boundaries, trimming, slug, discriminator, optional-field normalization, and unknown-field tests. |
 | Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | Existing orchestration is ahead of the gate; Phase 1 still needs exhaustive workflow/protocol evidence. |
 
 ## Outstanding by phase
@@ -54,7 +55,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 
 ### Phase 1
 
-- Strict artifact schemas/parser/protocol and adversarial tests.
+- Artifact parser/protocol and adversarial tests (P1-06–P1-08); strict bounded schemas are complete.
 - Role-scoped context builder, digest, bounds, and leakage tests.
 - Reusable scripted runtime with deferred/failure/timeout/cancel outcomes.
 - Walking-skeleton tests using real workflow/protocol/context rather than test-local stubs.
@@ -102,6 +103,9 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | 2026-08-29 10:36:10 UTC | `6f03c3e` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 41 tests, web build, and server build. |
 | 2026-08-29 10:38:50 UTC | `b0c1292` | P1-04 focused Docker Compose test | **Passed:** `workflow.test.ts`, 26 pure tests: 4 selector tests, 9 routing/limit table rows, and 13 invalid-state table rows. |
 | 2026-08-29 10:39:39 UTC | `b0c1292` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 49 tests, web build, and server build. |
+| 2026-08-29 11:10 UTC | `phase1-p1-05-artifact-schemas` | Initial P1-05 full Docker Compose `npm run check` | **Failed at server typecheck:** Zod's optional `sectionKey` output included explicit `undefined`, conflicting with the frozen exact-optional `ReviewIssue` type. Schema output was normalized to omit undefined rather than weakening the type. |
+| 2026-08-29 11:12:02 UTC | `162da1d` | P1-05 focused Docker Compose test | **Passed:** `schemas.test.ts`, 20 tests covering valid fixtures, every string/array boundary, whitespace, strictness, slugs, discriminators, and optional normalization. |
+| 2026-08-29 11:12:47 UTC | `162da1d` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 11 server test files with 69 tests, web build, and server build. |
 
 ## Manual Phase 0 verification report
 
@@ -157,6 +161,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 - The detail route is the only event retrieval contract; the accidental `/events` endpoint was removed.
 - Frozen contract commit is `ea469b2`, tagged `relay/contracts-v1`.
 - Approved P1-01 mini-RFC adds committed turns to `WorkflowView`; selectors order by `turn.sequence`, never artifact array position or timestamps.
+- Approved P1-05 mini-RFC freezes numeric artifact field/array limits while retaining the separate raw-output cap for P1-06.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 
