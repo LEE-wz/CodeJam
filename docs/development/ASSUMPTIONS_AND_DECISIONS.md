@@ -80,6 +80,35 @@ misleading timestamps, artifact type filtering, and exclusion of uncommitted,
 mismatched, and cross-run records. The full Docker Compose `npm run check` must
 pass.
 
+### Phase 1 implementation decisions awaiting confirmation
+
+**Status:** Recorded on 2026-08-29 for P1-06 to P1-17. Each sits where the frozen
+contract is silent. None changes a frozen type, route, or persisted shape, so
+none required a mini-RFC; all are cheap to change before Phase 2 persists
+artifacts, and expensive afterwards. Confirm or correct them before Checkpoint 2.
+
+| Decision | Choice made | Why | Reversal cost |
+|---|---|---|---|
+| `CoordinationArtifact.sizeChars` | Length of the raw Agent output that was measured against `outputMaxChars` | Only the parsed payload is stored, so this is the sole surviving record of how large the model's response was | Cheap now; a stored-field meaning change after Phase 2 |
+| Retry feedback bounds | At most 10 messages, each at most 500 characters | Overview Section 11.3 requires concise feedback but assigns no numbers; the context cap still applies on top | Cheap, prompt-only |
+| Context truncation | Fixed descending ladder of per-field caps (6000, 3000, 1500, 750, 400, 200), lowest rung then fails | A fixed ladder keeps the chosen cap, prompt, and digest reproducible; a search would not | Cheap, prompt-only |
+| Truncatable fields | Proposal summary and section content, review feedback and issue messages, final content only | Section keys and titles stay intact so a truncated proposal still shows the coverage it claims (Section 11.6 forbids silently removing required section content) | Cheap, prompt-only |
+| Artifact identifiers in prompts | Withheld; only payloads are serialised | The output contract forbids emitting IDs, so an Agent is never shown one it could echo back as forged provenance; `includedArtifactIds` still records what was shown | Cheap, prompt-only |
+| Retry feedback placement | Appended inside `[YOUR TASK]`, not as a fifth envelope section | Keeps the Section 11.5 envelope literally four sections while satisfying Section 11.3 | Cheap, prompt-only |
+| Required section key normalisation | Trimmed and lower-cased before the duplicate check, then rejected unless it matches the frozen slug format | Section 25.1 requires normalising to the documented slug format and rejecting duplicates; without this a run could be created that no Agent output could ever satisfy | Cheap; changes accepted create inputs |
+| Create-time context check | `createRun` builds a probe prompt with the real context builder and rejects the run if it cannot fit | Section 11.6 requires failing creation when the objective and sections alone do not fit; using the real builder means creation cannot succeed for a run whose first prompt is impossible | Cheap |
+| Cross-field rules for final artifacts | Non-empty final title and content are left to the bounded schema and asserted by test rather than re-checked in the cross-field step | The trimmed schema already guarantees it; a second check would be dead code | Cheap |
+
+Two related gaps are deliberately left to their own phases rather than solved
+here:
+
+- A stale commit cannot record `attempt.stale_ignored`, because events are
+  Phase 2 (P2-05) and `finishAttempt` does not accept that status. The late
+  result is still refused; only its evidence row is missing.
+- `CoordinationTurn.lastValidationErrors` records validator messages only. A
+  runtime timeout or failure surfaces through the attempt's `errorCode` and
+  `errorMessage` and through the failed run's message, not through that field.
+
 ### Extra events endpoint
 
 The implementation previously exposed `GET /api/coordination-runs/:id/events`, but the frozen route table only requires list, create, detail, start, and stop. The detail response already contains events. The extra route was removed in `ea469b2`, and its route test now verifies `404` so it cannot silently return as an accidental UI dependency.
