@@ -1,7 +1,8 @@
 # Relay Assumptions and Resolved Questions
 
 **Last audited:** 2026-08-29  
-**Baseline commit:** `3d24d1b`  
+**Baseline commit:** `655fba5`
+**Accepted contract commit:** `ea469b2` (`relay/contracts-v1`)
 **Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
 
 This file closes questions that can be answered from the checked-out code and isolates the few items that require measurement or a team contract change.
@@ -14,7 +15,7 @@ This file closes questions that can be answered from the checked-out code and is
 | Does `JsonStore` have a migration hook? | No. `initialize()` parses directly as `Database` and rejects any version other than `1`. | Phase 2 must add explicit v1 parsing and additive v1→v2 migration before changing the empty database to v2. A future/invalid version must be rejected without overwriting the file. |
 | Where are route modules registered? | `createApp(config, service, coordination?)` conditionally calls `registerCoordinationRoutes(...)` after existing Agent routes and before static-file setup. | Preserve this seam. Phase 2 must construct the real coordination dependencies in `index.ts`, initialize them after `AgentService`, and pass the service into `createApp`. |
 | Which spelling is canonical? | Code and API values use `finalizer`. | Use “Finaliser” in user-facing copy to match the product narrative, but never use it as a stored enum or API value. Tests should assert `finalizer` in code. |
-| How should stopping a terminal run behave? | The current service returns the terminal run and the route returns `202`. | Treat stop as idempotent for MVP. Freeze this only after route tests explicitly cover completed, failed, and stopped runs; if the team prefers `200`, change the contract and implementation together before Checkpoint 0. |
+| How should stopping a terminal run behave? | The service returns the terminal run and the route returns `202` with `accepted: true`. | Stop is idempotent for MVP. Route tests cover completed, failed, and stopped runs; changing this now requires a mini-RFC. |
 
 ## Measured later, not open design questions
 
@@ -24,17 +25,19 @@ This file closes questions that can be answered from the checked-out code and is
 | Schema compliance of real output | Exercise each role prompt through the real runtime after pure protocol tests pass. Validators remain authoritative. | Several successful outputs for proposal, rejecting/approving review, and final schemas; record only redacted results. |
 | Old thread contamination | Use fresh Agents for the MVP demo as required by the plan. | Rehearsal checklist confirms fresh Agents; per-run threads remain post-MVP unless promoted by mini-RFC. |
 
-## Contract deviations requiring action
+## Resolved contract deviations
 
 ### Extra events endpoint
 
-The implementation exposes `GET /api/coordination-runs/:id/events`, but the frozen route table only requires list, create, detail, start, and stop. The detail response already contains events.
+The implementation previously exposed `GET /api/coordination-runs/:id/events`, but the frozen route table only requires list, create, detail, start, and stop. The detail response already contains events. The extra route was removed in `ea469b2`, and its route test now verifies `404` so it cannot silently return as an accidental UI dependency.
 
-**Decision for the current runbook:** this endpoint is not required for MVP and must not become a UI dependency. Before Checkpoint 0, either remove it or approve a mini-RFC adding it to the API contract and tests. Keeping an undocumented accidental API is not an acceptable freeze state.
+### Contract export drift
+
+The same contract freeze restored the API response envelopes, `Redactor`, and the future `AgentExecutionControl` boundary from overview Sections 8–9. The service-only logger interface moved into `service.ts` so it does not impose an implementation detail on other workstreams.
 
 ### Contracts merged before the contract gate
 
-The domain types, interfaces, service, and routes are present at baseline commit `3d24d1b`, but their presence does not prove Sprint 0 complete. Shared deterministic artifact fixtures, empty modules/fakes for all workstreams, a successful baseline check, and an explicit contract review are still required.
+The domain types, interfaces, service, and routes were present before the contract gate. Commit `ea469b2` adds the missing shared deterministic artifacts, controls, fakes, module shells, construction test, and explicit contract corrections. Checkpoint 0 still requires the manual baseline and three-Agent checks.
 
 ### Shared conversation availability
 

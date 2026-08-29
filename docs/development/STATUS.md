@@ -1,18 +1,17 @@
 # Relay Development Status
 
 **Last audit:** 2026-08-29 UTC  
-**Audited commit:** `3d24d1b` (`main`)  
-**Documentation work branch:** `docs/development-workflow-rules`  
+**Audited commit:** `ea469b2` (`relay/contracts-v1`)
+**Implementation branch:** `phase0-contract-freeze`
 **Current phase:** Phase 0 — Baseline and Contract Freeze  
-**Current gate:** Checkpoint 0 not yet verified  
-**Overall state:** `in_progress`; some Phase 1 run-manager work is merged ahead of the gate
+**Current gate:** Checkpoint 0 blocked only on manual baseline/demo-Agent evidence
+**Overall state:** `in_progress`; contract/scaffolding implementation is verified, P0-04/P0-05 remain blocked
 
 ## Resume here
 
-1. **P0-01:** switch to Node.js 22+ and npm 10+.
-2. **P0-02/P0-03:** install from the lockfile and run `npm run check`; record actual results.
-3. **P0-08/P0-09:** review the merged contract files against overview Sections 7–11 and resolve the extra `/events` endpoint.
-4. **P0-12–P0-17:** add remaining module shells, shared deterministic fixtures/fakes, and the compile construction test.
+1. Obtain authorized access to the running app without copying credentials into commands or documentation.
+2. **P0-04:** manually verify Agent list/create/edit/start/stop/delete and one Playground turn.
+3. **P0-05:** create three fresh demo Agents and verify one ordinary turn for each, then record only redacted pass/fail evidence.
 
 Do not mark Checkpoint 0 complete or connect real Agents until these actions and the full Phase 0 gate pass.
 
@@ -20,32 +19,38 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 
 ## Last checkpoint
 
-The latest repository checkpoint is merge commit `3d24d1b`, “Merge branch 'branch-coordination-run-manager-and-api'.” It adds the coordination domain/contracts, service/orchestration loop, routes, error mapping, and tests. This is a code merge, not a completed integration checkpoint under the implementation plan.
+The accepted contract checkpoint is commit `ea469b2`, tagged `relay/contracts-v1`. It freezes the overview-aligned types and interfaces, removes the accidental events route, adds all Phase 0 module shells and shared deterministic testing controls/fixtures/fakes, and proves service construction. This is not Checkpoint 0 completion until P0-04/P0-05 pass.
+
+## Phase 0 task ledger
+
+| Tasks | Status | Evidence |
+|---|---|---|
+| P0-01–P0-03 | `complete` | Compose reports Node `22.23.2`, npm `10.9.8`; clean lockfile install and full check pass. |
+| P0-04–P0-05 | `blocked` | Live service is healthy but requires an undisclosed auth token; real turns require authorized model configuration. Browser runner also lacks Chrome. |
+| P0-06–P0-10 | `complete` | Scope/ADRs reviewed; contracts corrected; extra endpoint removed; terminal stop semantics frozen with tests. |
+| P0-11 | `complete` | Immutable commit `ea469b2`, tag `relay/contracts-v1`. |
+| P0-12–P0-17 | `complete` | Module shells, deterministic kit, shared fixtures/fakes, scripted runtime, and construction test pass. |
 
 ## Implemented inventory
 
 | Area | Evidence | Status | Notes |
 |---|---|---|---|
-| Domain model/default policy | `apps/server/src/coordination/types.ts` | `implemented_unverified` | Matches the planned type family on static review; must be formally diffed/frozen. |
-| Component contracts | `apps/server/src/coordination/contracts.ts` | `implemented_unverified` | Repository/runtime/workflow/context/protocol boundaries exist. |
+| Domain model/default policy | `apps/server/src/coordination/types.ts` | `complete` | Frozen against overview Sections 7–8 at `relay/contracts-v1`. |
+| Component contracts | `apps/server/src/coordination/contracts.ts` | `complete` | Frozen overview boundaries include repository/runtime/workflow/context/protocol/redaction/execution control. |
 | Coordination error envelope | `coordination/errors.ts`, `app.ts` | `implemented_unverified` | `CoordinationError` receives structured API envelope. |
 | Service create/list/detail | `coordination/service.ts` | `implemented_unverified` | Dependency injection, participant snapshots, defaults, and validations exist. |
 | Background orchestration | `coordination/service.ts` | `implemented_unverified` | Scheduling, retries, runtime attachment, validation, commits, completion/failure, and local loop cleanup exist. |
-| Stop handling | `coordination/service.ts` | `implemented_unverified` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal status tests still needed. |
-| HTTP routes | `coordination/routes.ts`, `app.ts` | `implemented_unverified` | List/create/detail/start/stop plus an extra non-contract events route. Registration seam exists. |
-| Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | In-file memory fakes cover some paths; they are not yet the shared Sprint 0 fixture pack. |
+| Stop handling | `coordination/service.ts` | `implemented_unverified` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal HTTP semantics are frozen, while race evidence remains Phase 1/2 work. |
+| HTTP routes | `coordination/routes.ts`, `app.ts` | `complete` | Frozen list/create/detail/start/stop surface; accidental events route removed and tested as absent. |
+| Phase 0 testing kit | `coordination/testing/**`, `construction.test.ts` | `complete` | Deterministic controls, full fixture pack, fakes, scripted runtime, and construction proof pass. |
+| Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | Existing orchestration is ahead of the gate; Phase 1 still needs exhaustive workflow/protocol evidence. |
 
 ## Outstanding by phase
 
 ### Phase 0
 
-- Environment baseline and successful `npm run check`.
-- Manual baseline app and three fresh-Agent checks.
-- Formal team review/freeze of scope, decisions, contracts, defaults, route semantics, and stop behavior.
-- Resolve the extra `/api/coordination-runs/:id/events` route.
-- Missing module shells for workflow, schemas/protocol, context, repository, runtime gateway, events, and redaction.
-- Shared fixed clock/IDs, artifact fixtures, fake repository, scripted runtime, and compile construction test.
-- Record the immutable `relay/contracts-v1` commit/tag.
+- Manual baseline application lifecycle and Playground-turn check (P0-04).
+- Three fresh demo Agents with one ordinary real turn each (P0-05).
 
 ### Phase 1
 
@@ -84,16 +89,20 @@ The latest repository checkpoint is merge commit `3d24d1b`, “Merge branch 'bra
 | 2026-08-29 | `docs/development-workflow-rules` | Clean-copy Compose check | **Failed:** tar could not preserve host UID/GID metadata in the anonymous volume and the source snapshot was broader than the filesystem map permits. Command narrowed to npm/TypeScript contracts plus `apps/` and uses `--no-same-owner`. |
 | 2026-08-29 | `docs/development-workflow-rules` | Scoped-copy Compose check | **Failed:** Compose sets `NODE_ENV=production`, so plain `npm ci` omitted TypeScript/Vitest development dependencies. Command updated to `npm ci --include=dev`. |
 | 2026-08-29 | `docs/development-workflow-rules` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 7 server test files with 17 tests, web build, and server build. |
+| 2026-08-29 | `ea469b2` | Focused Compose typecheck and contract tests | **Passed:** server/web typechecks plus construction and route contract tests. |
+| 2026-08-29 | `ea469b2` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 9 server test files with 23 tests, web build, and server build. `npm ci` reported 1 moderate and 5 high audit findings for later security review. |
+| 2026-08-29 | `ea469b2` | Live application availability | **Partial:** `/api/health` is healthy and `/api/auth` confirms authentication is required. Manual authenticated lifecycle/model turns were not attempted without authorized credentials. |
 
 ## Known blockers and risks
 
 | Item | Impact | Resolution |
 |---|---|---|
-| Node 18 instead of Node 22+ | Cannot install/verify the project in its supported environment; Playwright CLI also requires Node 20+. | Upgrade/switch Node before baseline verification. |
-| Dependencies absent | `tsc` and tests cannot run. | Run `npm ci` after switching Node. |
+| Manual app authentication unavailable | P0-04/P0-05 cannot exercise protected APIs without disclosing or bypassing the configured token. | User supplies an authorized browser session or performs the checklist and returns redacted evidence. |
+| Model credentials unavailable to this session | A real Playground turn and three demo-Agent turns cannot be proven. | Run with authorized scoped Ark configuration; never copy keys or raw output into status docs. |
+| Browser runtime lacks Chrome | Playwright UI smoke could not start even though its CLI wrapper is available. | Install Chrome for Playwright or use an already-authorized manual browser. |
 | Shared ChatGPT context inaccessible in this environment | Possible decisions outside `overview.md` were not audited. | Copy any missing decisions into `ASSUMPTIONS_AND_DECISIONS.md`; overview remains current authority. |
 | Code ahead of gates | Merged code can create false confidence about completion. | Retain `implemented_unverified` until required phase evidence passes. |
-| Extra `/events` endpoint | API drift from frozen route table. | Remove it or approve/document it via mini-RFC before Checkpoint 0. |
+| Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
 | Current Agent cancellation is keyed by Agent ID | Could cancel unrelated later work after races. | Implement run-scoped cancellation in Phase 3 only after Phase 2 correctness gates. |
 
 ## Decision log summary
@@ -103,7 +112,9 @@ The latest repository checkpoint is merge commit `3d24d1b`, “Merge branch 'bra
 - `JsonStore` requires explicit additive migration; there is no existing hook.
 - Routes register through optional `createApp(..., coordination)`; real composition in `index.ts` is outstanding.
 - Real latency/schema reliability are measured Phase 3 gates, not assumptions.
-- Terminal stop is treated as idempotent in the current implementation, pending explicit freeze tests.
+- Terminal stop is frozen as idempotent `202` with explicit completed/failed/stopped route tests.
+- The detail route is the only event retrieval contract; the accidental `/events` endpoint was removed.
+- Frozen contract commit is `ea469b2`, tagged `relay/contracts-v1`.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

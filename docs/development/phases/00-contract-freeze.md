@@ -30,29 +30,29 @@ If any contract, route behavior, task boundary, or expected evidence is unclear,
 
 ### Environment and baseline
 
-- [ ] **P0-01** Verify `node --version` is 22+ and `npm --version` is 10+.
-- [ ] **P0-02** Install from the checked-in lockfile. Prefer `npm ci` on a clean dependency tree; use `npm install` only when intentionally updating the lockfile.
-- [ ] **P0-03** Run `npm run check` before further Relay changes and record the result.
+- [x] **P0-01** Verify `node --version` is 22+ and `npm --version` is 10+.
+- [x] **P0-02** Install from the checked-in lockfile. Prefer `npm ci` on a clean dependency tree; use `npm install` only when intentionally updating the lockfile.
+- [x] **P0-03** Run `npm run check` before further Relay changes and record the result.
 - [ ] **P0-04** Start the existing app and verify Agent list/create/edit/start/stop/delete and one Playground turn still work.
 - [ ] **P0-05** Create three fresh demo Agents and prove one simple ordinary turn works for each. Do not put credentials or raw output in docs.
 
 ### Product and contract freeze
 
-- [ ] **P0-06** Confirm fixed Planner → Critic → Finaliser workflow, exactly three distinct pre-created Agents, sequential turns, and explicit non-goals.
-- [ ] **P0-07** Review ADR-01 through ADR-14 and default limits. Confirm code spelling `finalizer` and the UI label “Finaliser.”
-- [ ] **P0-08** Diff `types.ts` and `contracts.ts` against overview Sections 7 and 9. Correct accidental drift through an approved mini-RFC.
-- [ ] **P0-09** Confirm API route/envelope/status semantics. Resolve the extra `/events` endpoint noted in the decisions file.
-- [ ] **P0-10** Confirm parsing, retry versus revision, maximum revisions, stop, restart, reservation, lease, and stale-result semantics.
-- [ ] **P0-11** Tag or record the accepted contract commit as `relay/contracts-v1` (a Git tag or immutable commit reference is sufficient).
+- [x] **P0-06** Confirm fixed Planner → Critic → Finaliser workflow, exactly three distinct pre-created Agents, sequential turns, and explicit non-goals.
+- [x] **P0-07** Review ADR-01 through ADR-14 and default limits. Confirm code spelling `finalizer` and the UI label “Finaliser.”
+- [x] **P0-08** Diff `types.ts` and `contracts.ts` against overview Sections 7 and 9. Correct accidental drift through an approved mini-RFC.
+- [x] **P0-09** Confirm API route/envelope/status semantics. Resolve the extra `/events` endpoint noted in the decisions file.
+- [x] **P0-10** Confirm parsing, retry versus revision, maximum revisions, stop, restart, reservation, lease, and stale-result semantics.
+- [x] **P0-11** Tag or record the accepted contract commit as `relay/contracts-v1` (a Git tag or immutable commit reference is sufficient).
 
 ### Shared implementation scaffolding
 
-- [ ] **P0-12** Add compilable module shells for `workflow.ts`, `schemas.ts`, `artifact-protocol.ts`, `context-builder.ts`, `repository.ts`, `runtime-gateway.ts`, `events.ts`, and `redaction.ts` as applicable.
-- [ ] **P0-13** Add a fixed/advancing clock and deterministic generator for run, turn, attempt, artifact, event, and lease IDs.
-- [ ] **P0-14** Add three stable Agent fixtures, one objective, and three required sections.
-- [ ] **P0-15** Add valid proposal, rejecting review, approving review, and final artifact fixtures plus at least one invalid output.
-- [ ] **P0-16** Add shared fake repository and scripted runtime contracts. Unused methods may fail loudly with `NotImplemented`.
-- [ ] **P0-17** Add a compile-only construction test for `CoordinationService` using all fake dependencies.
+- [x] **P0-12** Add compilable module shells for `workflow.ts`, `schemas.ts`, `artifact-protocol.ts`, `context-builder.ts`, `repository.ts`, `runtime-gateway.ts`, `events.ts`, and `redaction.ts` as applicable.
+- [x] **P0-13** Add a fixed/advancing clock and deterministic generator for run, turn, attempt, artifact, event, and lease IDs.
+- [x] **P0-14** Add three stable Agent fixtures, one objective, and three required sections.
+- [x] **P0-15** Add valid proposal, rejecting review, approving review, and final artifact fixtures plus at least one invalid output.
+- [x] **P0-16** Add shared fake repository and scripted runtime contracts. Unused methods may fail loudly with `NotImplemented`.
+- [x] **P0-17** Add a compile-only construction test for `CoordinationService` using all fake dependencies.
 
 ## Requirements and review rules
 
