@@ -33,8 +33,8 @@ If any contract, route behavior, task boundary, or expected evidence is unclear,
 - [x] **P0-01** Verify `node --version` is 22+ and `npm --version` is 10+.
 - [x] **P0-02** Install from the checked-in lockfile. Prefer `npm ci` on a clean dependency tree; use `npm install` only when intentionally updating the lockfile.
 - [x] **P0-03** Run `npm run check` before further Relay changes and record the result.
-- [ ] **P0-04** Start the existing app and verify Agent list/create/edit/start/stop/delete and one Playground turn still work.
-- [ ] **P0-05** Create three fresh demo Agents and prove one simple ordinary turn works for each. Do not put credentials or raw output in docs.
+- [x] **P0-04** Start the existing app and verify Agent list/create/edit/start/stop/delete and one Playground turn still work.
+- [x] **P0-05** Create three fresh demo Agents and prove one simple ordinary turn works for each. Do not put credentials or raw output in docs.
 
 ### Product and contract freeze
 

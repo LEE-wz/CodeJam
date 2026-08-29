@@ -1,32 +1,32 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 UTC  
-**Audited commit:** `ea469b2` (`relay/contracts-v1`)
+**Last audit:** 2026-08-29 10:04:04 UTC
+**Audited commit:** `d806e8f` (contracts frozen at `ea469b2`, tag `relay/contracts-v1`)
 **Implementation branch:** `phase0-contract-freeze`
-**Current phase:** Phase 0 — Baseline and Contract Freeze  
-**Current gate:** Checkpoint 0 blocked only on manual baseline/demo-Agent evidence
-**Overall state:** `in_progress`; contract/scaffolding implementation is verified, P0-04/P0-05 remain blocked
+**Current phase:** Phase 1 — In-Memory Walking Skeleton (ready to start)
+**Current gate:** Checkpoint 0 verified
+**Overall state:** Phase 0 `complete`; all P0-01–P0-17 tasks and required evidence are complete
 
 ## Resume here
 
-1. Obtain authorized access to the running app without copying credentials into commands or documentation.
-2. **P0-04:** manually verify Agent list/create/edit/start/stop/delete and one Playground turn.
-3. **P0-05:** create three fresh demo Agents and verify one ordinary turn for each, then record only redacted pass/fail evidence.
+1. Create a new Phase 1 task branch from the completed Phase 0 checkpoint.
+2. Review the Phase 1 filesystem map and begin **P1-01**, deterministic latest-artifact selectors.
+3. Run focused checks through Docker Compose and retain the full repository check as the completion gate.
 
-Do not mark Checkpoint 0 complete or connect real Agents until these actions and the full Phase 0 gate pass.
+Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
 ## Last checkpoint
 
-The accepted contract checkpoint is commit `ea469b2`, tagged `relay/contracts-v1`. It freezes the overview-aligned types and interfaces, removes the accidental events route, adds all Phase 0 module shells and shared deterministic testing controls/fixtures/fakes, and proves service construction. This is not Checkpoint 0 completion until P0-04/P0-05 pass.
+Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes the overview-aligned types and interfaces, removes the accidental events route, adds all Phase 0 module shells and shared deterministic testing controls/fixtures/fakes, and proves service construction. The authenticated manual baseline and three-Agent checks passed against Phase 0 HEAD `d806e8f` at 2026-08-29 10:04:04 UTC.
 
 ## Phase 0 task ledger
 
 | Tasks | Status | Evidence |
 |---|---|---|
 | P0-01–P0-03 | `complete` | Compose reports Node `22.23.2`, npm `10.9.8`; clean lockfile install and full check pass. |
-| P0-04–P0-05 | `blocked` | Live service is healthy but requires an undisclosed auth token; real turns require authorized model configuration. Browser runner also lacks Chrome. |
+| P0-04–P0-05 | `complete` | User-performed authenticated checks passed for the full temporary-Agent lifecycle, one Playground turn, three fresh Agents, one ordinary turn each, readiness, persistence, and isolation. |
 | P0-06–P0-10 | `complete` | Scope/ADRs reviewed; contracts corrected; extra endpoint removed; terminal stop semantics frozen with tests. |
 | P0-11 | `complete` | Immutable commit `ea469b2`, tag `relay/contracts-v1`. |
 | P0-12–P0-17 | `complete` | Module shells, deterministic kit, shared fixtures/fakes, scripted runtime, and construction test pass. |
@@ -49,8 +49,7 @@ The accepted contract checkpoint is commit `ea469b2`, tagged `relay/contracts-v1
 
 ### Phase 0
 
-- Manual baseline application lifecycle and Playground-turn check (P0-04).
-- Three fresh demo Agents with one ordinary real turn each (P0-05).
+- Complete. No Phase 0 tasks remain.
 
 ### Phase 1
 
@@ -92,14 +91,47 @@ The accepted contract checkpoint is commit `ea469b2`, tagged `relay/contracts-v1
 | 2026-08-29 | `ea469b2` | Focused Compose typecheck and contract tests | **Passed:** server/web typechecks plus construction and route contract tests. |
 | 2026-08-29 | `ea469b2` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 9 server test files with 23 tests, web build, and server build. `npm ci` reported 1 moderate and 5 high audit findings for later security review. |
 | 2026-08-29 | `ea469b2` | Live application availability | **Partial:** `/api/health` is healthy and `/api/auth` confirms authentication is required. Manual authenticated lifecycle/model turns were not attempted without authorized credentials. |
+| 2026-08-29 10:04:04 UTC | `d806e8f` | P0-04 manual existing-application regression | **Passed:** health, Agent list/create/edit/stop/start, one ordinary Playground run, return to ready, message persistence after refresh, deletion, and post-delete refresh. Optional stopped-Agent message rejection was not checked. |
+| 2026-08-29 10:04:04 UTC | `d806e8f` | P0-05 manual three-Agent baseline | **Passed:** three genuinely fresh Agents began ready with empty histories; Planner, Critic, and Finaliser each completed one ordinary turn; all returned ready; final isolation and readiness passed. |
+
+## Manual Phase 0 verification report
+
+### P0-04 — Existing application regression
+
+| Check | Result |
+|---|---|
+| Health endpoint | Passed |
+| Agent list | Passed |
+| Create temporary Agent | Passed |
+| Edit temporary Agent | Passed |
+| Stop temporary Agent | Passed |
+| Stopped-Agent message rejection | Not checked; optional and not required by P0-04 |
+| Start temporary Agent | Passed |
+| Execute one ordinary Playground run | Passed |
+| Agent returned to ready | Passed |
+| Messages persisted after refresh | Passed |
+| Delete temporary Agent | Passed |
+| Refresh after deletion | Passed |
+| Overall P0-04 | **Passed** |
+
+### P0-05 — Three fresh Agents
+
+| Check | Result |
+|---|---|
+| Create three genuinely fresh Agents | Passed |
+| All began ready with empty histories | Passed |
+| Verify three-Agent baseline | Passed |
+| Planner ordinary turn | Passed |
+| Critic ordinary turn | Passed |
+| Finaliser ordinary turn | Passed |
+| All returned to ready | Passed |
+| Final isolation and readiness | Passed |
+| Overall P0-05 | **Passed** |
 
 ## Known blockers and risks
 
 | Item | Impact | Resolution |
 |---|---|---|
-| Manual app authentication unavailable | P0-04/P0-05 cannot exercise protected APIs without disclosing or bypassing the configured token. | User supplies an authorized browser session or performs the checklist and returns redacted evidence. |
-| Model credentials unavailable to this session | A real Playground turn and three demo-Agent turns cannot be proven. | Run with authorized scoped Ark configuration; never copy keys or raw output into status docs. |
-| Browser runtime lacks Chrome | Playwright UI smoke could not start even though its CLI wrapper is available. | Install Chrome for Playwright or use an already-authorized manual browser. |
 | Shared ChatGPT context inaccessible in this environment | Possible decisions outside `overview.md` were not audited. | Copy any missing decisions into `ASSUMPTIONS_AND_DECISIONS.md`; overview remains current authority. |
 | Code ahead of gates | Merged code can create false confidence about completion. | Retain `implemented_unverified` until required phase evidence passes. |
 | Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
