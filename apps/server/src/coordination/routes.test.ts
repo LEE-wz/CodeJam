@@ -114,13 +114,50 @@ describe("Coordination HTTP routes", () => {
     expect(startedResponse.json()).toMatchObject({ accepted: true, run: { status: "running" } });
     expect(started).toBe(true);
 
-    const eventsResponse = await app.inject({
+    const detailResponse = await app.inject({
+      method: "GET",
+      url: "/api/coordination-runs/" + runId,
+      headers,
+    });
+    expect(detailResponse.statusCode).toBe(200);
+    expect(detailResponse.json()).toMatchObject({ run: { id: runId }, events: [] });
+
+    const removedEventsResponse = await app.inject({
       method: "GET",
       url: "/api/coordination-runs/" + runId + "/events",
       headers,
     });
-    expect(eventsResponse.statusCode).toBe(200);
-    expect(eventsResponse.json()).toEqual({ events: [] });
+    expect(removedEventsResponse.statusCode).toBe(404);
     await app.close();
   });
+
+  it.each(["completed", "failed", "stopped"] as const)(
+    "treats stop as idempotent for a %s run",
+    async (status) => {
+      const terminalRun: CoordinationRun = { ...run, status };
+      const coordination: CoordinationServiceContract = {
+        initialize: async () => undefined,
+        listRuns: async () => [terminalRun],
+        getRun: async () => ({ ...details, run: terminalRun }),
+        createRun: async () => terminalRun,
+        startRun: async () => terminalRun,
+        stopRun: async () => terminalRun,
+      };
+      const app = await createApp(
+        loadConfig({ NODE_ENV: "test", APP_AUTH_TOKEN: "a-strong-test-token" }),
+        agentService,
+        coordination,
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/coordination-runs/" + runId + "/stop",
+        headers: { authorization: "Bearer a-strong-test-token" },
+      });
+
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toMatchObject({ accepted: true, run: { status } });
+      await app.close();
+    },
+  );
 });

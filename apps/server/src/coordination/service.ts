@@ -3,7 +3,6 @@ import type {
   Clock,
   ContextBuilder,
   CoordinationAgentDirectory,
-  CoordinationLogger,
   CoordinationRepository,
   CoordinationRuntime,
   CoordinationServiceContract,
@@ -27,6 +26,10 @@ const terminalStatuses = new Set(["completed", "failed", "stopped"]);
 
 const isTerminal = (status: CoordinationRun["status"]): boolean =>
   terminalStatuses.has(status);
+
+interface CoordinationLogger {
+  error(context: { runId: CoordinationRunId }, message: string): void;
+}
 
 interface CoordinationServiceDependencies {
   agentDirectory: CoordinationAgentDirectory;

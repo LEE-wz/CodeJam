@@ -79,15 +79,6 @@ export async function registerCoordinationRoutes(
     return details;
   });
 
-  app.get("/api/coordination-runs/:id/events", async (request) => {
-    const { id } = parseInput(runIdParams, request.params);
-    const details = await coordination.getRun(id);
-    if (!details) {
-      throw new CoordinationError(404, "NOT_FOUND", "Coordination run not found");
-    }
-    return { events: details.events };
-  });
-
   app.post("/api/coordination-runs/:id/start", async (request, reply) => {
     const { id } = parseInput(runIdParams, request.params);
     const run = await coordination.startRun(id);

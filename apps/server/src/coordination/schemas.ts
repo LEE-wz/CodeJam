@@ -1,0 +1,1 @@
+export const COORDINATION_ARTIFACT_SCHEMA_VERSION = 1 as const;

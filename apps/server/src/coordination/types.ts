@@ -276,3 +276,32 @@ export interface CreateCoordinationRunRequest {
       }
     | undefined;
 }
+
+export interface ListCoordinationRunsResponse {
+  runs: CoordinationRun[];
+}
+
+export interface GetCoordinationRunResponse extends CoordinationRunDetails {}
+
+export interface CreateCoordinationRunResponse {
+  run: CoordinationRun;
+}
+
+export interface StartCoordinationRunResponse {
+  run: CoordinationRun;
+  accepted: true;
+}
+
+export interface StopCoordinationRunResponse {
+  run: CoordinationRun;
+  accepted: true;
+}
+
+export interface ApiErrorResponse {
+  error: {
+    code: CoordinationErrorCode;
+    message: string;
+    fieldErrors?: Record<string, string[]>;
+    requestId?: string;
+  };
+}

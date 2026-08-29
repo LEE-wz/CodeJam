@@ -237,6 +237,35 @@ export interface CoordinationRuntime {
   cancelAttempt(attemptId: CoordinationAttemptId): Promise<boolean>;
 }
 
-export interface CoordinationLogger {
-  error(context: { runId: CoordinationRunId }, message: string): void;
+export interface Redactor {
+  text(value: string, maxChars: number): string;
+  eventDetails(
+    value: Record<string, unknown>,
+  ): Record<string, string | number | boolean | null | string[]>;
+}
+
+export interface StartAgentExecutionRequest {
+  agentId: AgentId;
+  prompt: string;
+  source: "playground" | "coordination";
+  coordination?: {
+    runId: CoordinationRunId;
+    turnId: CoordinationTurnId;
+    attemptId: CoordinationAttemptId;
+  };
+}
+
+export interface AgentExecutionHandle {
+  agentRunId: AgentRunId;
+  messageId: string;
+  completion: Promise<{
+    status: "completed" | "failed" | "cancelled";
+    output?: string;
+    error?: string;
+  }>;
+}
+
+export interface AgentExecutionControl {
+  startExecution(input: StartAgentExecutionRequest): Promise<AgentExecutionHandle>;
+  cancelRun(agentRunId: AgentRunId): Promise<boolean>;
 }
