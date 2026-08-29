@@ -20,9 +20,12 @@ export const ARTIFACT_SCHEMA_LIMITS = {
   finalContentChars: 16_000,
 } as const;
 
+/** Frozen section-key slug format (overview Section 7.1). */
+export const SECTION_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 const sectionKeySchema = boundedText(ARTIFACT_SCHEMA_LIMITS.keyChars).regex(
-  /^[a-z0-9][a-z0-9_-]*$/,
+  SECTION_KEY_PATTERN,
 );
 
 export const proposalSectionSchema = z

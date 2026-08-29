@@ -9,6 +9,7 @@ import type {
   IdGenerator,
   VerifiedHandoffWorkflow,
 } from "./contracts.js";
+import { RoleScopedContextBuilder } from "./context-builder.js";
 import { CoordinationService } from "./service.js";
 import type {
   CoordinationArtifact,
@@ -413,7 +414,10 @@ function protocol(ids: IdGenerator): ArtifactProtocol {
   };
 }
 
-function makeService(outputs: string[] = ["proposal", "review", "final"]) {
+function makeService(
+  outputs: string[] = ["proposal", "review", "final"],
+  overrides: { contextBuilder?: ContextBuilder } = {},
+) {
   const ids = new TestIds();
   const repository = new MemoryRepository();
   const runtime = new ScriptedRuntime(outputs);
@@ -421,7 +425,7 @@ function makeService(outputs: string[] = ["proposal", "review", "final"]) {
     agentDirectory: agents,
     repository,
     workflow,
-    contextBuilder,
+    contextBuilder: overrides.contextBuilder ?? contextBuilder,
     artifactProtocol: protocol(ids),
     runtime,
     clock,
@@ -506,5 +510,131 @@ describe("CoordinationService", () => {
     await expect.poll(async () => (await service.getRun(run.id))?.attempts.length).toBe(1);
     await expect(service.startRun(run.id)).rejects.toMatchObject({ statusCode: 409 });
     await expect(service.stopRun(run.id)).resolves.toMatchObject({ status: "stopped" });
+  });
+});
+
+describe("CoordinationService create validation", () => {
+  it("normalises required section keys to the frozen slug format", async () => {
+    const { service } = makeService();
+    const run = await service.createRun({
+      ...request,
+      requiredSections: [
+        { key: "  Users  ", title: "  Target Users  " },
+        { key: "RISKS", title: "Risks" },
+      ],
+    });
+
+    expect(run.requiredSections).toEqual([
+      { key: "users", title: "Target Users" },
+      { key: "risks", title: "Risks" },
+    ]);
+  });
+
+  it("rejects a required section key no Agent output could ever match", async () => {
+    const { service } = makeService();
+
+    await expect(
+      service.createRun({
+        ...request,
+        requiredSections: [{ key: "target users", title: "Target Users" }],
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+
+    await expect(
+      service.createRun({
+        ...request,
+        requiredSections: [{ key: "-leading-dash", title: "Bad" }],
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects required section keys that collide only after normalisation", async () => {
+    const { service } = makeService();
+
+    await expect(
+      service.createRun({
+        ...request,
+        requiredSections: [
+          { key: "users", title: "Target Users" },
+          { key: " Users ", title: "Duplicate" },
+        ],
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+  });
+
+  it("rejects a required section title beyond the frozen artifact limit", async () => {
+    const { service } = makeService();
+
+    await expect(
+      service.createRun({
+        ...request,
+        requiredSections: [{ key: "users", title: "T".repeat(121) }],
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+  });
+
+  it("refuses a run whose objective cannot fit the context limit", async () => {
+    const { service } = makeService(undefined, {
+      contextBuilder: new RoleScopedContextBuilder(),
+    });
+
+    await expect(
+      service.createRun({ ...request, objective: "o".repeat(20_000) }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+
+    await expect(
+      service.createRun({ ...request, objective: "A short, buildable objective." }),
+    ).resolves.toMatchObject({ status: "created" });
+  });
+
+  it("rejects an unknown Agent before creating anything", async () => {
+    const directory: CoordinationAgentDirectory = { async getAgentsByIds() { return []; } };
+    const ids = new TestIds();
+    const repository = new MemoryRepository();
+    const service = new CoordinationService({
+      agentDirectory: directory,
+      repository,
+      workflow,
+      contextBuilder,
+      artifactProtocol: protocol(ids),
+      runtime: new ScriptedRuntime([]),
+      clock,
+      ids,
+    });
+
+    await expect(service.createRun(request)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "NOT_FOUND",
+    });
+    await expect(repository.listRuns()).resolves.toEqual([]);
+  });
+
+  it("rejects a policy outside the frozen ranges", async () => {
+    const { service } = makeService();
+
+    await expect(
+      service.createRun({ ...request, policy: { maxRevisions: 9 } }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+    await expect(
+      service.createRun({ ...request, policy: { maxTurns: 2 } }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+    await expect(
+      service.createRun({ ...request, policy: { perAttemptTimeoutMs: 1_000 } }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+  });
+
+  it("lists newest runs and returns run detail by id", async () => {
+    const { service } = makeService();
+    const first = await service.createRun(request);
+    const second = await service.createRun({ ...request, name: "Second review" });
+
+    const listed = await service.listRuns();
+    expect(listed.map((run) => run.id)).toContain(first.id);
+    expect(listed.map((run) => run.id)).toContain(second.id);
+
+    const detail = await service.getRun(second.id);
+    expect(detail?.run.name).toBe("Second review");
+    expect(detail?.turns).toEqual([]);
+    expect(await service.getRun("run-missing")).toBeUndefined();
   });
 });
