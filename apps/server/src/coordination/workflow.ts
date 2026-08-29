@@ -1,4 +1,8 @@
-import type { WorkflowView } from "./contracts.js";
+import type {
+  VerifiedHandoffWorkflow,
+  WorkflowDecision,
+  WorkflowView,
+} from "./contracts.js";
 import type { ArtifactType, CoordinationArtifact } from "./types.js";
 
 export type {
@@ -51,3 +55,75 @@ export const selectLatestCommittedFinal = (
   view: WorkflowView,
 ): ArtifactOfType<"final"> | undefined =>
   selectLatestCommittedArtifact(view, "final");
+
+const committedSequence = (
+  view: WorkflowView,
+  artifact: CoordinationArtifact,
+): number | undefined =>
+  view.turns.find(
+    (turn) =>
+      turn.runId === view.run.id &&
+      turn.id === artifact.turnId &&
+      turn.status === "committed" &&
+      turn.outputArtifactId === artifact.id,
+  )?.sequence;
+
+export class VerifiedHandoffWorkflowV1 implements VerifiedHandoffWorkflow {
+  decideNext(view: WorkflowView): WorkflowDecision {
+    const proposal = selectLatestCommittedProposal(view);
+    const review = selectLatestCommittedReview(view);
+    const finalArtifact = selectLatestCommittedFinal(view);
+
+    if (finalArtifact) {
+      return { kind: "complete", finalArtifactId: finalArtifact.id };
+    }
+
+    if (!proposal) {
+      return {
+        kind: "schedule",
+        role: "planner",
+        turnKind: "initial_proposal",
+        phase: "drafting",
+        revision: view.run.revision,
+        inputArtifactIds: [],
+        expectedArtifactType: "proposal",
+      };
+    }
+
+    const proposalSequence = committedSequence(view, proposal);
+    const reviewSequence = review ? committedSequence(view, review) : undefined;
+    if (!review || proposalSequence! > reviewSequence!) {
+      return {
+        kind: "schedule",
+        role: "critic",
+        turnKind: "proposal_review",
+        phase: "reviewing",
+        revision: view.run.revision,
+        inputArtifactIds: [proposal.id],
+        expectedArtifactType: "review",
+      };
+    }
+
+    if (review.payload.decision === "reject") {
+      return {
+        kind: "schedule",
+        role: "planner",
+        turnKind: "proposal_revision",
+        phase: "revising",
+        revision: view.run.revision + 1,
+        inputArtifactIds: [proposal.id, review.id],
+        expectedArtifactType: "proposal",
+      };
+    }
+
+    return {
+      kind: "schedule",
+      role: "finalizer",
+      turnKind: "finalization",
+      phase: "finalizing",
+      revision: view.run.revision,
+      inputArtifactIds: [proposal.id, review.id],
+      expectedArtifactType: "final",
+    };
+  }
+}
