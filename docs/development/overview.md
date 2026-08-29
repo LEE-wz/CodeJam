@@ -672,6 +672,7 @@ export type WorkflowDecision =
 
 export interface WorkflowView {
   run: CoordinationRun;
+  turns: CoordinationTurn[];
   artifacts: CoordinationArtifact[];
 }
 

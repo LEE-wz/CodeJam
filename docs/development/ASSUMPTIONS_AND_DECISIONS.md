@@ -27,6 +27,33 @@ This file closes questions that can be answered from the checked-out code and is
 
 ## Resolved contract deviations
 
+### Mini-RFC: workflow view includes committed turns
+
+**Status:** Approved by the user on 2026-08-29 for P1-01.
+
+**Current contract and blocker:** The frozen `WorkflowView` contains a run and
+its artifacts, while P1-01 requires latest-artifact selectors to order artifacts
+by committed turn sequence. An artifact contains only `turnId`; artifact array
+order and timestamps are not ordering contracts, so the required selector cannot
+be implemented from the frozen view without guessing.
+
+**Approved change:** Add `turns: CoordinationTurn[]` to `WorkflowView`. The
+workflow receives the turns already loaded in `CoordinationRunDetails` and uses
+them only as immutable input. A candidate artifact is committed only when its
+same-run turn has `status: "committed"` and `outputArtifactId` equal to the
+artifact ID. Latest selection compares `turn.sequence`, never timestamps or
+array position.
+
+**Affected files/workstreams:** The overview and TypeScript workflow contract,
+the coordination service call site, pure workflow selectors, and their tests.
+There is no persisted-schema or HTTP API change. Phase 2 repositories must not
+rely on artifact array ordering.
+
+**Required evidence:** Focused pure selector tests cover shuffled input,
+misleading timestamps, artifact type filtering, and exclusion of uncommitted,
+mismatched, and cross-run records. The full Docker Compose `npm run check` must
+pass.
+
 ### Extra events endpoint
 
 The implementation previously exposed `GET /api/coordination-runs/:id/events`, but the frozen route table only requires list, create, detail, start, and stop. The detail response already contains events. The extra route was removed in `ea469b2`, and its route test now verifies `404` so it cannot silently return as an accidental UI dependency.

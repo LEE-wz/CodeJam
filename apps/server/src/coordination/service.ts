@@ -204,6 +204,7 @@ export class CoordinationService implements CoordinationServiceContract {
 
       const decision = this.dependencies.workflow.decideNext({
         run: details.run,
+        turns: details.turns,
         artifacts: details.artifacts,
       });
       if (decision.kind === "complete") {

@@ -1,17 +1,17 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 10:04:04 UTC
-**Audited commit:** `d806e8f` (contracts frozen at `ea469b2`, tag `relay/contracts-v1`)
-**Implementation branch:** `phase0-contract-freeze`
-**Current phase:** Phase 1 — In-Memory Walking Skeleton (ready to start)
+**Last audit:** 2026-08-29 10:27:04 UTC
+**Audited commit:** `2ca91fe` plus the recorded P1-01 working tree (contracts frozen at `ea469b2`, tag `relay/contracts-v1`)
+**Implementation branch:** `phase1-p1-01-latest-artifact-selectors` (base `2ca91fe`)
+**Current phase:** Phase 1 — In-Memory Walking Skeleton (in progress)
 **Current gate:** Checkpoint 0 verified
-**Overall state:** Phase 0 `complete`; all P0-01–P0-17 tasks and required evidence are complete
+**Overall state:** Phase 0 `complete`; P1-01 `complete`; Checkpoint 1 remains open
 
 ## Resume here
 
-1. Create a new Phase 1 task branch from the completed Phase 0 checkpoint.
-2. Review the Phase 1 filesystem map and begin **P1-01**, deterministic latest-artifact selectors.
-3. Run focused checks through Docker Compose and retain the full repository check as the completion gate.
+1. Begin **P1-02** on a new task branch after the P1-01 change is committed: implement the pure routing transitions using the verified selectors.
+2. Continue with **P1-03**, enforcing revision/turn limits and safe invalid-state failures.
+3. Complete **P1-04** with exhaustive table tests and a passing Docker Compose full check.
 
 Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
@@ -43,6 +43,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | Stop handling | `coordination/service.ts` | `implemented_unverified` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal HTTP semantics are frozen, while race evidence remains Phase 1/2 work. |
 | HTTP routes | `coordination/routes.ts`, `app.ts` | `complete` | Frozen list/create/detail/start/stop surface; accidental events route removed and tested as absent. |
 | Phase 0 testing kit | `coordination/testing/**`, `construction.test.ts` | `complete` | Deterministic controls, full fixture pack, fakes, scripted runtime, and construction proof pass. |
+| Latest committed artifact selectors | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `complete` | P1-01 selects proposal/review/final artifacts by committed turn sequence; shuffled arrays, misleading timestamps, unfinished/mismatched turns, types, and run isolation are covered. |
 | Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | Existing orchestration is ahead of the gate; Phase 1 still needs exhaustive workflow/protocol evidence. |
 
 ## Outstanding by phase
@@ -53,7 +54,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 
 ### Phase 1
 
-- Real pure workflow implementation and exhaustive table tests.
+- Pure workflow routing, boundary enforcement, and exhaustive table tests (P1-02–P1-04); P1-01 selectors are complete.
 - Strict artifact schemas/parser/protocol and adversarial tests.
 - Role-scoped context builder, digest, bounds, and leakage tests.
 - Reusable scripted runtime with deferred/failure/timeout/cancel outcomes.
@@ -93,6 +94,8 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | 2026-08-29 | `ea469b2` | Live application availability | **Partial:** `/api/health` is healthy and `/api/auth` confirms authentication is required. Manual authenticated lifecycle/model turns were not attempted without authorized credentials. |
 | 2026-08-29 10:04:04 UTC | `d806e8f` | P0-04 manual existing-application regression | **Passed:** health, Agent list/create/edit/stop/start, one ordinary Playground run, return to ready, message persistence after refresh, deletion, and post-delete refresh. Optional stopped-Agent message rejection was not checked. |
 | 2026-08-29 10:04:04 UTC | `d806e8f` | P0-05 manual three-Agent baseline | **Passed:** three genuinely fresh Agents began ready with empty histories; Planner, Critic, and Finaliser each completed one ordinary turn; all returned ready; final isolation and readiness passed. |
+| 2026-08-29 10:27:04 UTC | `phase1-p1-01-latest-artifact-selectors` | P1-01 focused Docker Compose test | **Passed:** `workflow.test.ts`, 4 tests covering deterministic sequence selection and invalid candidate exclusion. |
+| 2026-08-29 10:27:04 UTC | `phase1-p1-01-latest-artifact-selectors` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 27 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings for later security review. |
 
 ## Manual Phase 0 verification report
 
@@ -147,6 +150,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 - Terminal stop is frozen as idempotent `202` with explicit completed/failed/stopped route tests.
 - The detail route is the only event retrieval contract; the accidental `/events` endpoint was removed.
 - Frozen contract commit is `ea469b2`, tagged `relay/contracts-v1`.
+- Approved P1-01 mini-RFC adds committed turns to `WorkflowView`; selectors order by `turn.sequence`, never artifact array position or timestamps.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 
