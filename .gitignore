@@ -14,3 +14,8 @@ coverage/
 deploy/volcengine/.terraform/
 deploy/volcengine/*.tfstate*
 deploy/volcengine/terraform.tfvars
+
+analysis.md
+multi-agent-coordination-middleware-design-spec.md
+multi-agent-coordination-simple-explainer.md
+relay-verified-handoffs-implementation-plan.md
