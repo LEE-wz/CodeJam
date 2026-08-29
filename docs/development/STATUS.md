@@ -1,17 +1,17 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 10:36:10 UTC
-**Audited commit:** `6f03c3e` (contracts frozen at `ea469b2`, amended by the approved P1-01 mini-RFC)
-**Implementation branch:** `phase1-p1-03-workflow-guards` (base `56f13f5`)
+**Last audit:** 2026-08-29 10:39:39 UTC
+**Audited commit:** `b0c1292` (contracts frozen at `ea469b2`, amended by the approved P1-01 mini-RFC)
+**Implementation branch:** `phase1-p1-04-workflow-table` (base `12a8a6b`)
 **Current phase:** Phase 1 — In-Memory Walking Skeleton (in progress)
 **Current gate:** Checkpoint 0 verified
-**Overall state:** Phase 0 `complete`; P1-01–P1-03 `complete`; Checkpoint 1 remains open
+**Overall state:** Phase 0 `complete`; P1-01–P1-04 `complete`; Checkpoint 1 remains open
 
 ## Resume here
 
-1. Complete **P1-04** on a new task branch with exhaustive table tests across every routing and boundary branch.
-2. Run the focused workflow suite and mandatory Docker Compose full check.
-3. If both pass, begin P1-05 strict artifact schemas as the next Phase 1 workstream.
+1. Begin **P1-05** on a new task branch: implement strict, bounded Zod schemas for proposal, review, and final payloads.
+2. Continue with **P1-06–P1-07** parser ordering, expected type/version, coverage, review consistency, and backend-owned provenance.
+3. Complete **P1-08** with the required valid and adversarial protocol test matrix, using the same focused-then-full Compose gates.
 
 Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
@@ -43,7 +43,7 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | Stop handling | `coordination/service.ts` | `implemented_unverified` | Durable request, active-attempt cancellation, and finish-stop flow exist; terminal HTTP semantics are frozen, while race evidence remains Phase 1/2 work. |
 | HTTP routes | `coordination/routes.ts`, `app.ts` | `complete` | Frozen list/create/detail/start/stop surface; accidental events route removed and tested as absent. |
 | Phase 0 testing kit | `coordination/testing/**`, `construction.test.ts` | `complete` | Deterministic controls, full fixture pack, fakes, scripted runtime, and construction proof pass. |
-| Pure workflow selectors/routing | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `in_progress` | P1-01–P1-03 are complete: selectors, normal routing, revision/turn ceilings, and invalid-state guards pass; the exhaustive P1-04 table remains. |
+| Pure workflow selectors/routing | `coordination/workflow.ts`, `coordination/workflow.test.ts` | `complete` | P1-01–P1-04 pass: deterministic selectors, all routing transitions, revision/turn ceilings, invalid-state guards, and exhaustive pure decision tables. |
 | Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `implemented_unverified` | Existing orchestration is ahead of the gate; Phase 1 still needs exhaustive workflow/protocol evidence. |
 
 ## Outstanding by phase
@@ -54,7 +54,6 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 
 ### Phase 1
 
-- Exhaustive pure workflow routing/boundary table tests (P1-04); implementation tasks P1-01–P1-03 are complete.
 - Strict artifact schemas/parser/protocol and adversarial tests.
 - Role-scoped context builder, digest, bounds, and leakage tests.
 - Reusable scripted runtime with deferred/failure/timeout/cancel outcomes.
@@ -101,6 +100,8 @@ Checkpoint 0 is complete. Commit `ea469b2`, tagged `relay/contracts-v1`, freezes
 | 2026-08-29 10:34:53 UTC | `phase1-p1-03-workflow-guards` | Initial P1-03 focused Docker Compose test | **Failed:** 17/18 passed; the revised-proposal fixture reset `nextTurnSequence` below its committed turns and correctly received `INVALID_STATE`. The fixture was corrected without weakening the guard. |
 | 2026-08-29 10:35:17 UTC | `6f03c3e` | P1-03 focused Docker Compose test | **Passed:** `workflow.test.ts`, 18 tests covering selectors, normal routing, ceilings, and malformed durable states. |
 | 2026-08-29 10:36:10 UTC | `6f03c3e` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 41 tests, web build, and server build. |
+| 2026-08-29 10:38:50 UTC | `b0c1292` | P1-04 focused Docker Compose test | **Passed:** `workflow.test.ts`, 26 pure tests: 4 selector tests, 9 routing/limit table rows, and 13 invalid-state table rows. |
+| 2026-08-29 10:39:39 UTC | `b0c1292` | Final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 10 server test files with 49 tests, web build, and server build. |
 
 ## Manual Phase 0 verification report
 
