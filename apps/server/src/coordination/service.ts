@@ -11,6 +11,7 @@ import type {
   WorkflowDecision,
 } from "./contracts.js";
 import { CoordinationError } from "./errors.js";
+import { ARTIFACT_SCHEMA_LIMITS, SECTION_KEY_PATTERN } from "./schemas.js";
 import {
   DEFAULT_COORDINATION_POLICY,
   type CoordinationAttempt,
@@ -20,6 +21,7 @@ import {
   type CoordinationRunId,
   type CoordinationTurn,
   type CreateCoordinationRunRequest,
+  type RequiredSection,
 } from "./types.js";
 
 const terminalStatuses = new Set(["completed", "failed", "stopped"]);
@@ -66,7 +68,8 @@ export class CoordinationService implements CoordinationServiceContract {
   }
 
   async createRun(input: CreateCoordinationRunRequest): Promise<CoordinationRun> {
-    this.validateCreateInput(input);
+    const requiredSections = this.normalizeRequiredSections(input.requiredSections);
+    this.validateCreateInput(input, requiredSections);
     const agentIds = [
       input.agents.plannerAgentId,
       input.agents.criticAgentId,
@@ -103,26 +106,84 @@ export class CoordinationService implements CoordinationServiceContract {
       return { role, agentId, agentNameSnapshot: agent.name };
     });
 
-    return this.dependencies.repository.createRun({
-      run: {
-        id: this.dependencies.ids.runId(),
-        name: input.name.trim(),
-        objective: input.objective.trim(),
-        requiredSections: input.requiredSections.map((section) => ({
-          key: section.key.trim(),
-          title: section.title.trim(),
-        })),
-        participants,
-        policy,
-        status: "created",
-        phase: "drafting",
-        revision: 0,
-        nextTurnSequence: 1,
-        version: 1,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-    });
+    const run: CoordinationRun = {
+      id: this.dependencies.ids.runId(),
+      name: input.name.trim(),
+      objective: input.objective.trim(),
+      requiredSections,
+      participants,
+      policy,
+      status: "created",
+      phase: "drafting",
+      revision: 0,
+      nextTurnSequence: 1,
+      version: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    this.assertContextFits(run, timestamp);
+
+    return this.dependencies.repository.createRun({ run });
+  }
+
+  /**
+   * Refuses a run whose objective and required sections cannot fit the context
+   * cap on their own (overview Section 11.6). The real builder performs the
+   * check, so creation cannot succeed for a run whose very first prompt would be
+   * impossible to build.
+   */
+  private assertContextFits(run: CoordinationRun, timestamp: string): void {
+    const planner = run.participants.find((participant) => participant.role === "planner");
+    if (!planner) {
+      throw new CoordinationError(
+        500,
+        "INTERNAL_ERROR",
+        "Coordination run is missing a required participant",
+      );
+    }
+
+    try {
+      this.dependencies.contextBuilder.build({
+        run,
+        turn: {
+          id: `${run.id}-context-probe`,
+          runId: run.id,
+          sequence: 1,
+          role: "planner",
+          agentId: planner.agentId,
+          kind: "initial_proposal",
+          status: "scheduled",
+          attemptCount: 0,
+          inputArtifactIds: [],
+          lastValidationErrors: [],
+          createdAt: timestamp,
+        },
+        artifacts: [],
+        retryValidationErrors: [],
+      });
+    } catch (error) {
+      if (error instanceof CoordinationError) {
+        throw new CoordinationError(
+          400,
+          "VALIDATION_FAILED",
+          "Objective and required sections do not fit the coordination context limit",
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Normalises required section keys to the frozen slug format (overview
+   * Sections 7.1 and 25.1) before duplicates are rejected, so keys that differ
+   * only by case or surrounding whitespace cannot both be accepted.
+   */
+  private normalizeRequiredSections(sections: RequiredSection[]): RequiredSection[] {
+    return sections.map((section) => ({
+      key: section.key.trim().toLowerCase(),
+      title: section.title.trim(),
+    }));
   }
 
   async startRun(id: CoordinationRunId): Promise<CoordinationRun> {
@@ -441,7 +502,10 @@ export class CoordinationService implements CoordinationServiceContract {
     return result === "finished";
   }
 
-  private validateCreateInput(input: CreateCoordinationRunRequest): void {
+  private validateCreateInput(
+    input: CreateCoordinationRunRequest,
+    requiredSections: RequiredSection[],
+  ): void {
     const agents = Object.values(input.agents);
     if (agents.some((agentId) => agentId.trim().length === 0)) {
       throw new CoordinationError(400, "VALIDATION_FAILED", "Each role requires an Agent");
@@ -453,7 +517,7 @@ export class CoordinationService implements CoordinationServiceContract {
         "Planner, Critic, and Finalizer must be different Agents",
       );
     }
-    const keys = input.requiredSections.map((section) => section.key.trim());
+    const keys = requiredSections.map((section) => section.key);
     if (new Set(keys).size !== keys.length) {
       throw new CoordinationError(
         400,
@@ -461,11 +525,25 @@ export class CoordinationService implements CoordinationServiceContract {
         "Required section keys must be unique",
       );
     }
-    if (!input.name.trim() || !input.objective.trim() || input.requiredSections.length === 0) {
+    if (!input.name.trim() || !input.objective.trim() || requiredSections.length === 0) {
       throw new CoordinationError(
         400,
         "VALIDATION_FAILED",
         "Name, objective, and at least one required section are required",
+      );
+    }
+    const invalidSection = requiredSections.find(
+      (section) =>
+        !SECTION_KEY_PATTERN.test(section.key) ||
+        section.key.length > ARTIFACT_SCHEMA_LIMITS.keyChars ||
+        section.title.length === 0 ||
+        section.title.length > ARTIFACT_SCHEMA_LIMITS.titleChars,
+    );
+    if (invalidSection) {
+      throw new CoordinationError(
+        400,
+        "VALIDATION_FAILED",
+        "Each required section needs a lower-case slug key and a bounded title",
       );
     }
   }
