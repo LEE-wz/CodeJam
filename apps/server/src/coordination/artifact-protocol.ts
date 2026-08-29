@@ -20,6 +20,8 @@ import type {
   CoordinationRun,
   CoordinationTurn,
   CoordinationTurnKind,
+  ProposalPayload,
+  ReviewPayload,
 } from "./types.js";
 
 export type {
@@ -101,14 +103,98 @@ const parsePayload = (
 /**
  * Step 6 of the frozen parsing order (overview Section 11.4): deterministic
  * cross-field and coverage rules, applied only after the payload satisfies its
- * schema. P1-06 fixes this step's position in the order; the rules themselves
- * (required section coverage and uniqueness, reject/approve issue consistency,
- * non-empty final content) are P1-07.
+ * bounded schema.
+ *
+ * Rules are taken verbatim from the frozen artifact contract (overview Section
+ * 7.1). Non-empty final title/content and non-empty review feedback are already
+ * guaranteed by the trimmed, bounded schemas, so they are asserted by test
+ * rather than re-checked here.
+ *
+ * Every value echoed into a message is backend-owned (a required section key)
+ * or already schema-bounded (a parsed section key), so retry feedback stays
+ * bounded and safe.
  */
 const applyCrossFieldRules = (
-  _run: CoordinationRun,
-  _payload: ArtifactPayload,
-): ArtifactValidationError[] => [];
+  run: CoordinationRun,
+  payload: ArtifactPayload,
+): ArtifactValidationError[] => {
+  if (payload.type === "proposal") {
+    return proposalCoverageErrors(run, payload);
+  }
+  if (payload.type === "review") {
+    return reviewConsistencyErrors(payload);
+  }
+  return [];
+};
+
+/**
+ * Every required section key appears exactly once. Unknown keys are allowed,
+ * duplicates never are, and the section `key` -- not its display title -- is the
+ * stable coverage identifier.
+ */
+const proposalCoverageErrors = (
+  run: CoordinationRun,
+  payload: ProposalPayload,
+): ArtifactValidationError[] => {
+  const errors: ArtifactValidationError[] = [];
+  const present = new Set<string>();
+  const duplicates: ArtifactValidationError[] = [];
+
+  payload.sections.forEach((section, index) => {
+    if (present.has(section.key)) {
+      duplicates.push({
+        path: `sections[${index}].key`,
+        code: "duplicate_section_key",
+        message: `Section key "${section.key}" appears more than once`,
+      });
+      return;
+    }
+    present.add(section.key);
+  });
+
+  for (const required of run.requiredSections) {
+    if (!present.has(required.key)) {
+      errors.push({
+        path: "sections",
+        code: "missing_required_section",
+        message: `Proposal is missing required section "${required.key}"`,
+      });
+    }
+  }
+
+  return [...errors, ...duplicates];
+};
+
+/**
+ * A rejecting review carries at least one blocking issue; an approving review
+ * carries none, and keeps any non-blocking remarks in `feedback`.
+ */
+const reviewConsistencyErrors = (
+  payload: ReviewPayload,
+): ArtifactValidationError[] => {
+  if (payload.decision === "reject" && payload.issues.length === 0) {
+    return [
+      {
+        path: "issues",
+        code: "missing_review_issues",
+        message: "A rejecting review must list at least one blocking issue",
+      },
+    ];
+  }
+
+  if (payload.decision === "approve" && payload.issues.length > 0) {
+    return [
+      {
+        path: "issues",
+        code: "unexpected_review_issues",
+        message:
+          "An approving review must not list blocking issues; put non-blocking remarks in feedback",
+      },
+    ];
+  }
+
+  return [];
+};
 
 export interface ArtifactProtocolDependencies {
   clock: Clock;

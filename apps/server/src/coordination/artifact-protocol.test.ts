@@ -373,3 +373,176 @@ describe("artifact protocol: accepted artifact", () => {
     });
   });
 });
+
+const section = (key: string, title = `Title for ${key}`, content = "Body.") => ({
+  key,
+  title,
+  content,
+});
+
+const proposalWith = (sections: ReturnType<typeof section>[]): string =>
+  JSON.stringify({ ...VALID_PROPOSAL_PAYLOAD, sections });
+
+const reviewWith = (
+  decision: "approve" | "reject",
+  issues: Array<{ code: string; sectionKey?: string; message: string }>,
+  feedback = "Reviewed against the objective.",
+): string =>
+  JSON.stringify({ schemaVersion: 1, type: "review", decision, issues, feedback });
+
+const ALL_REQUIRED = REQUIRED_SECTIONS.map((required) => section(required.key));
+
+describe("artifact protocol: proposal coverage rules", () => {
+  it("accepts a proposal covering every required key exactly once", () => {
+    expect(expectAccepted(validate("initial_proposal", proposalWith(ALL_REQUIRED))).type).toBe(
+      "proposal",
+    );
+  });
+
+  it("allows unknown section keys alongside full required coverage", () => {
+    const withExtras = proposalWith([
+      ...ALL_REQUIRED,
+      section("timeline"),
+      section("open-questions"),
+    ]);
+
+    expect(expectAccepted(validate("initial_proposal", withExtras)).type).toBe("proposal");
+  });
+
+  it("identifies coverage by section key, not by display title", () => {
+    const sameTitles = proposalWith(
+      REQUIRED_SECTIONS.map((required) => section(required.key, "Section")),
+    );
+
+    expect(expectAccepted(validate("initial_proposal", sameTitles)).type).toBe("proposal");
+    expect(
+      codesAndPaths(
+        validate(
+          "initial_proposal",
+          proposalWith([
+            section("users", "Target Users"),
+            section("users", "Who We Serve"),
+            section("workflow"),
+            section("risks"),
+          ]),
+        ),
+      ),
+    ).toEqual(["sections[1].key/duplicate_section_key"]);
+  });
+
+  it("names every missing required section in required-section order", () => {
+    expect(codesAndPaths(validate("initial_proposal", proposalWith([section("users")])))).toEqual([
+      "sections/missing_required_section",
+      "sections/missing_required_section",
+    ]);
+
+    const messages = expectRejected(
+      validate("initial_proposal", proposalWith([section("users")])),
+    ).errors.map((error) => error.message);
+    expect(messages).toEqual([
+      'Proposal is missing required section "workflow"',
+      'Proposal is missing required section "risks"',
+    ]);
+  });
+
+  it("rejects duplicate section keys, including duplicated unknown keys", () => {
+    expect(
+      codesAndPaths(
+        validate("initial_proposal", proposalWith([...ALL_REQUIRED, section("timeline"), section("timeline")])),
+      ),
+    ).toEqual(["sections[4].key/duplicate_section_key"]);
+  });
+
+  it("reports missing coverage before duplicates, deterministically", () => {
+    const result = expectRejected(
+      validate(
+        "initial_proposal",
+        proposalWith([section("users"), section("users"), section("workflow")]),
+      ),
+    );
+
+    expect(result.errors.map((error) => error.code)).toEqual([
+      "missing_required_section",
+      "duplicate_section_key",
+    ]);
+    expect(result.errors[0]?.message).toBe('Proposal is missing required section "risks"');
+    expect(result.errors[1]?.path).toBe("sections[1].key");
+  });
+
+  it("applies the bounded schema before any coverage rule", () => {
+    const schemaAndCoverageFailure = proposalWith([section("Not A Slug")]);
+
+    expect(codesAndPaths(validate("initial_proposal", schemaAndCoverageFailure))).toEqual([
+      "sections[0].key/invalid_format",
+    ]);
+  });
+
+  it("applies coverage rules to a revision turn as well as an initial proposal", () => {
+    expect(
+      codesAndPaths(validate("proposal_revision", proposalWith([section("users")]))),
+    ).toEqual(["sections/missing_required_section", "sections/missing_required_section"]);
+  });
+});
+
+describe("artifact protocol: review consistency rules", () => {
+  const issue = { code: "RISK_DETAIL_MISSING", sectionKey: "risks", message: "Add detail." };
+
+  it("accepts a rejecting review that lists at least one blocking issue", () => {
+    expect(expectAccepted(validate("proposal_review", reviewWith("reject", [issue]))).type).toBe(
+      "review",
+    );
+  });
+
+  it("rejects a rejecting review with no blocking issues", () => {
+    expect(codesAndPaths(validate("proposal_review", reviewWith("reject", [])))).toEqual([
+      "issues/missing_review_issues",
+    ]);
+  });
+
+  it("accepts an approving review with no blocking issues", () => {
+    expect(expectAccepted(validate("proposal_review", reviewWith("approve", []))).type).toBe(
+      "review",
+    );
+  });
+
+  it("rejects an approving review that still lists blocking issues", () => {
+    expect(codesAndPaths(validate("proposal_review", reviewWith("approve", [issue])))).toEqual([
+      "issues/unexpected_review_issues",
+    ]);
+  });
+
+  it("requires non-empty feedback on both decisions", () => {
+    expect(codesAndPaths(validate("proposal_review", reviewWith("reject", [issue], "   ")))).toEqual(
+      ["feedback/too_small"],
+    );
+    expect(codesAndPaths(validate("proposal_review", reviewWith("approve", [], "")))).toEqual([
+      "feedback/too_small",
+    ]);
+  });
+});
+
+describe("artifact protocol: final artifact rules", () => {
+  it("requires non-empty final title and content through the whole protocol", () => {
+    const blankContent = JSON.stringify({
+      schemaVersion: 1,
+      type: "final",
+      title: "Launch Plan",
+      content: "   ",
+    });
+    const blankTitle = JSON.stringify({
+      schemaVersion: 1,
+      type: "final",
+      title: "",
+      content: "A complete plan.",
+    });
+
+    expect(codesAndPaths(validate("finalization", blankContent))).toEqual([
+      "content/too_small",
+    ]);
+    expect(codesAndPaths(validate("finalization", blankTitle))).toEqual(["title/too_small"]);
+  });
+
+  it("applies no coverage rule to a final artifact", () => {
+    expect(expectAccepted(validate("finalization", VALID_FINAL_OUTPUT)).type).toBe("final");
+  });
+});
