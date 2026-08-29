@@ -68,18 +68,128 @@ const committedSequence = (
       turn.outputArtifactId === artifact.id,
   )?.sequence;
 
+const invalidState = (message: string): WorkflowDecision => ({
+  kind: "fail",
+  code: "INVALID_STATE",
+  message,
+});
+
+const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
+  if (view.run.status !== "running") {
+    return invalidState("Workflow decisions require a running coordination run");
+  }
+  if (view.run.activeTurnId) {
+    return invalidState("Workflow cannot schedule while a turn is active");
+  }
+  if (!Number.isInteger(view.run.nextTurnSequence) || view.run.nextTurnSequence < 1) {
+    return invalidState("Run has an invalid next turn sequence");
+  }
+
+  const turns = view.turns.filter((turn) => turn.runId === view.run.id);
+  const artifacts = view.artifacts.filter((artifact) => artifact.runId === view.run.id);
+  const turnIds = new Set<string>();
+  const sequences = new Set<number>();
+  for (const turn of turns) {
+    if (
+      turnIds.has(turn.id) ||
+      !Number.isInteger(turn.sequence) ||
+      turn.sequence < 1 ||
+      sequences.has(turn.sequence)
+    ) {
+      return invalidState("Run has duplicate or invalid turn identity");
+    }
+    turnIds.add(turn.id);
+    sequences.add(turn.sequence);
+    if (turn.sequence >= view.run.nextTurnSequence) {
+      return invalidState("Run next turn sequence does not follow existing turns");
+    }
+  }
+
+  const artifactsById = new Map<string, CoordinationArtifact>();
+  for (const artifact of artifacts) {
+    if (artifactsById.has(artifact.id)) {
+      return invalidState("Run has duplicate artifact identity");
+    }
+    artifactsById.set(artifact.id, artifact);
+    const turn = turns.find((candidate) => candidate.id === artifact.turnId);
+    if (
+      !turn ||
+      turn.status !== "committed" ||
+      turn.outputArtifactId !== artifact.id
+    ) {
+      return invalidState("Artifact does not belong to its committed output turn");
+    }
+  }
+
+  const expectedOutput = {
+    initial_proposal: { role: "planner", type: "proposal" },
+    proposal_revision: { role: "planner", type: "proposal" },
+    proposal_review: { role: "critic", type: "review" },
+    finalization: { role: "finalizer", type: "final" },
+  } as const;
+  for (const turn of turns) {
+    if (turn.status !== "committed") continue;
+    const artifact = turn.outputArtifactId
+      ? artifactsById.get(turn.outputArtifactId)
+      : undefined;
+    const expected = expectedOutput[turn.kind];
+    if (
+      !artifact ||
+      artifact.turnId !== turn.id ||
+      turn.role !== expected.role ||
+      artifact.createdByRole !== expected.role ||
+      artifact.type !== expected.type
+    ) {
+      return invalidState("Committed turn has an invalid role or artifact output");
+    }
+  }
+
+  return undefined;
+};
+
 export class VerifiedHandoffWorkflowV1 implements VerifiedHandoffWorkflow {
   decideNext(view: WorkflowView): WorkflowDecision {
+    const invalid = validateView(view);
+    if (invalid) return invalid;
+
     const proposal = selectLatestCommittedProposal(view);
     const review = selectLatestCommittedReview(view);
     const finalArtifact = selectLatestCommittedFinal(view);
 
+    const proposalSequence = proposal ? committedSequence(view, proposal) : undefined;
+    const reviewSequence = review ? committedSequence(view, review) : undefined;
+    const finalSequence = finalArtifact
+      ? committedSequence(view, finalArtifact)
+      : undefined;
+
+    if (review && !proposal) {
+      return invalidState("A review exists without a proposal");
+    }
+
     if (finalArtifact) {
+      if (
+        !proposal ||
+        !review ||
+        review.payload.decision !== "approve" ||
+        proposalSequence! >= reviewSequence! ||
+        reviewSequence! >= finalSequence!
+      ) {
+        return invalidState("Final artifact does not follow an approving review");
+      }
       return { kind: "complete", finalArtifactId: finalArtifact.id };
     }
 
+    if (
+      proposal &&
+      review?.payload.decision === "approve" &&
+      proposalSequence! > reviewSequence!
+    ) {
+      return invalidState("A proposal cannot supersede an approving review");
+    }
+
+    let decision: Extract<WorkflowDecision, { kind: "schedule" }>;
     if (!proposal) {
-      return {
+      decision = {
         kind: "schedule",
         role: "planner",
         turnKind: "initial_proposal",
@@ -88,12 +198,8 @@ export class VerifiedHandoffWorkflowV1 implements VerifiedHandoffWorkflow {
         inputArtifactIds: [],
         expectedArtifactType: "proposal",
       };
-    }
-
-    const proposalSequence = committedSequence(view, proposal);
-    const reviewSequence = review ? committedSequence(view, review) : undefined;
-    if (!review || proposalSequence! > reviewSequence!) {
-      return {
+    } else if (!review || proposalSequence! > reviewSequence!) {
+      decision = {
         kind: "schedule",
         role: "critic",
         turnKind: "proposal_review",
@@ -102,10 +208,15 @@ export class VerifiedHandoffWorkflowV1 implements VerifiedHandoffWorkflow {
         inputArtifactIds: [proposal.id],
         expectedArtifactType: "review",
       };
-    }
-
-    if (review.payload.decision === "reject") {
-      return {
+    } else if (review.payload.decision === "reject") {
+      if (view.run.revision >= view.run.policy.maxRevisions) {
+        return {
+          kind: "fail",
+          code: "MAX_REVISIONS_EXCEEDED",
+          message: "Coordination run reached its revision limit",
+        };
+      }
+      decision = {
         kind: "schedule",
         role: "planner",
         turnKind: "proposal_revision",
@@ -114,16 +225,25 @@ export class VerifiedHandoffWorkflowV1 implements VerifiedHandoffWorkflow {
         inputArtifactIds: [proposal.id, review.id],
         expectedArtifactType: "proposal",
       };
+    } else {
+      decision = {
+        kind: "schedule",
+        role: "finalizer",
+        turnKind: "finalization",
+        phase: "finalizing",
+        revision: view.run.revision,
+        inputArtifactIds: [proposal.id, review.id],
+        expectedArtifactType: "final",
+      };
     }
 
-    return {
-      kind: "schedule",
-      role: "finalizer",
-      turnKind: "finalization",
-      phase: "finalizing",
-      revision: view.run.revision,
-      inputArtifactIds: [proposal.id, review.id],
-      expectedArtifactType: "final",
-    };
+    if (view.run.nextTurnSequence > view.run.policy.maxTurns) {
+      return {
+        kind: "fail",
+        code: "MAX_TURNS_EXCEEDED",
+        message: "Coordination run reached its turn limit",
+      };
+    }
+    return decision;
   }
 }
