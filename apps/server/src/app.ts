@@ -5,6 +5,9 @@ import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
+import type { CoordinationServiceContract } from "./coordination/contracts.js";
+import { CoordinationError } from "./coordination/errors.js";
+import { registerCoordinationRoutes } from "./coordination/routes.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
 
@@ -26,6 +29,7 @@ const messageBody = z.object({
 export async function createApp(
   config: AppConfig,
   service: AgentService,
+  coordination?: CoordinationServiceContract,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -128,6 +132,10 @@ export async function createApp(
     return { run: service.getRun(id) };
   });
 
+  if (coordination) {
+    await registerCoordinationRoutes(app, coordination);
+  }
+
   if (config.nodeEnv === "production") {
     const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
     await app.register(fastifyStatic, {
@@ -159,6 +167,15 @@ export async function createApp(
             : 500;
     if (statusCode >= 500) {
       request.log.error(appError);
+    }
+    if (error instanceof CoordinationError) {
+      return reply.code(statusCode).send({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+        },
+      });
     }
     return reply.code(statusCode).send({
       error: appError.message,
