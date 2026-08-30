@@ -63,17 +63,17 @@ session create, because P5-07's construction test requires them.
 
 ### Team approval and decisions
 
-- [ ] **P5-01** Read [`../overview-sessions.md`](../overview-sessions.md) together. Approve the mini-RFC or record amendments. Settle the open decisions in its Section 11 (defaults are listed). Record everything in [`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md).
-- [ ] **P5-02** Confirm the nine-phase plan and checkpoint numbering: Phase 5 → Checkpoint 5, ..., Phase 8 → Checkpoint 8, Phase 9 (release) → Checkpoint 9. Confirm this phase owns the `P5-xx` task prefix and the release phase now owns `P9-xx`.
+- [x] **P5-01** Read [`../overview-sessions.md`](../overview-sessions.md) together. Approve the mini-RFC or record amendments. Settle the open decisions in its Section 11 (defaults are listed). Record everything in [`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md).
+- [x] **P5-02** Confirm the nine-phase plan and checkpoint numbering: Phase 5 → Checkpoint 5, ..., Phase 8 → Checkpoint 8, Phase 9 (release) → Checkpoint 9. Confirm this phase owns the `P5-xx` task prefix and the release phase now owns `P9-xx`.
 
 ### Additive contract code
 
-- [ ] **P5-03** Add to `coordination/types.ts`: `"participant"` role, `"sessioning"` phase, `"session_turn"` turn kind, `"session_message"` artifact type, `CoordinationWorkflowKind`, `policy.workflow` as the workflow kind (keep `DEFAULT_COORDINATION_POLICY` set to `"verified_handoff_v1"`), `policy.sessionStartValue?` (countdown), `policy.sessionProtocol?` (`"countdown"` default, `"free_chat"`), `SessionMessagePayload` (content 1..500), and optional `run.sharedState`. Do not change any existing type member.
-- [ ] **P5-04** Add to `coordination/contracts.ts`: `CreateSessionRunRequest` (workflow `"shared_session_v1"`, ordered `agents: AgentId[]`, optional session policy), a widened `createRun` input union, a `SharedSessionWorkflow` contract reusing `WorkflowDecision`, and a workflow dispatch contract that maps `run.policy.workflow` to the decision source. Additive only; the `VerifiedHandoffWorkflow` contract is untouched.
-- [ ] **P5-05** Add session fixtures to `coordination/testing/**`: three or four participant Agent fixtures with ordered IDs and name snapshots; a committed 10-to-1 transcript fixture; valid `session_message` artifacts; wrong-number raw outputs (for example `"6"` when the expected number is 8); free-chat message fixtures; the expected event sequence for a normal countdown run and a normal free-chat run; a fixed `sessionStartValue`. Fixtures contain no random time, IDs, network calls, or secrets.
-- [ ] **P5-06** Confirm the existing deterministic clock, ID generator, and scripted runtime already cover session needs. Extend them additively only where a session-specific control is genuinely missing, and record the reason.
-- [ ] **P5-07** Add a construction/compile test: `CoordinationService` is constructed with both workflows registered in the dispatch; a session create produces a `created` run with `phase: "sessioning"` and `sharedState.nextExpectedNumber` initialized from `sessionStartValue`; verified-handoff fixtures and construction tests still pass unchanged.
-- [ ] **P5-08** Record the accepted session contract commit as an immutable commit reference (and an optional convenience tag) in `STATUS.md`, mirroring P0-11.
+- [x] **P5-03** Add to `coordination/types.ts`: `"participant"` role, `"sessioning"` phase, `"session_turn"` turn kind, `"session_message"` artifact type, `CoordinationWorkflowKind`, `policy.workflow` as the workflow kind (keep `DEFAULT_COORDINATION_POLICY` set to `"verified_handoff_v1"`), `policy.sessionStartValue?` (countdown), `policy.sessionProtocol?` (`"countdown"` default, `"free_chat"`), `SessionMessagePayload` (content 1..500), and optional `run.sharedState`. Do not change any existing type member.
+- [x] **P5-04** Add to `coordination/contracts.ts`: `CreateSessionRunRequest` (workflow `"shared_session_v1"`, ordered `agents: AgentId[]`, optional session policy), a widened `createRun` input union, a `SharedSessionWorkflow` contract reusing `WorkflowDecision`, and a workflow dispatch contract that maps `run.policy.workflow` to the decision source. Additive only; the `VerifiedHandoffWorkflow` contract is untouched.
+- [x] **P5-05** Add session fixtures to `coordination/testing/**`: three or four participant Agent fixtures with ordered IDs and name snapshots; a committed 10-to-1 transcript fixture; valid `session_message` artifacts; wrong-number raw outputs (for example `"6"` when the expected number is 8); free-chat message fixtures; the expected event sequence for a normal countdown run and a normal free-chat run; a fixed `sessionStartValue`. Fixtures contain no random time, IDs, network calls, or secrets.
+- [x] **P5-06** Confirm the existing deterministic clock, ID generator, and scripted runtime already cover session needs. Extend them additively only where a session-specific control is genuinely missing, and record the reason.
+- [x] **P5-07** Add a construction/compile test: `CoordinationService` is constructed with both workflows registered in the dispatch; a session create produces a `created` run with `phase: "sessioning"` and `sharedState.nextExpectedNumber` initialized from `sessionStartValue`; verified-handoff fixtures and construction tests still pass unchanged.
+- [x] **P5-08** Record the accepted session contract commit as an immutable commit reference (and an optional convenience tag) in `STATUS.md`, mirroring P0-11.
 
 ## Requirements and review rules
 
@@ -112,6 +112,17 @@ Phase 5 is complete only when:
 - every existing test passes unchanged;
 - no unresolved semantic question remains about countdown validation, retry on the same Agent, completion at 1, turn ceilings, participant limits, workflow defaulting, or shared-state visibility;
 - the final Docker Compose `npm run check` passes on the task branch.
+
+## Completion record
+
+Phase 5 is complete. Checkpoint 5 was verified on 2026-08-30 by the standard
+scoped Docker Compose `npm run check`: exit 0, server and web typechecks,
+23 server test files with 399 tests, 2 web test files with 12 tests, and both
+builds. 411 tests total — the 389-test baseline intact, plus 22 new. The run
+used a clean working tree, so the source it tarred is exactly the frozen commit.
+
+Frozen session contract commit: **`2fe14eb`**. No convenience tag was created;
+that remains an explicit team decision.
 
 ## Handoff to Phase 6
 
