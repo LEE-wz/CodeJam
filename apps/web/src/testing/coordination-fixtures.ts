@@ -1,11 +1,25 @@
 import type {
+  CoordinationArtifact,
   CoordinationAttempt,
+  CoordinationEvent,
   CoordinationEventType,
   CoordinationRunDetails,
   CoordinationRunStatus,
+  CoordinationTurn,
+  SessionProtocol,
 } from "../coordination-types";
 
 export type UiFixtureName = "completed" | "rejectionRevision" | "retry" | "timeout" | "stopped" | "failed" | "interrupted";
+export type UiSessionFixtureName =
+  | "countdownRunning"
+  | "countdownRetry"
+  | "freeChatPartial"
+  | "freeChatUnanimous"
+  | "freeChatWithdrawn"
+  | "sessionStopped"
+  | "sessionFailed"
+  | "sessionInterrupted"
+  | "sessionCompleted";
 
 const now = "2026-08-30T04:00:00.000Z";
 const participants = [
@@ -13,21 +27,26 @@ const participants = [
   { role: "critic" as const, agentId: "agent-critic", agentNameSnapshot: "Relay Critic" },
   { role: "finalizer" as const, agentId: "agent-finalizer", agentNameSnapshot: "Relay Finaliser" },
 ];
+const sessionParticipants = [
+  { role: "participant" as const, agentId: "agent-planner", agentNameSnapshot: "Relay Planner" },
+  { role: "participant" as const, agentId: "agent-critic", agentNameSnapshot: "Relay Critic" },
+  { role: "participant" as const, agentId: "agent-finalizer", agentNameSnapshot: "Relay Finaliser" },
+];
 
-const base = (
+const verifiedBase = (
   name: UiFixtureName,
   status: CoordinationRunStatus,
   eventTypes: CoordinationEventType[],
 ): CoordinationRunDetails => {
   const runId = `run-${name}`;
-  const turn = {
+  const turn: CoordinationTurn = {
     id: `turn-${name}`,
     runId,
     sequence: 1,
-    role: "planner" as const,
-    agentId: participants[0].agentId,
-    kind: "initial_proposal" as const,
-    status: status === "completed" ? "committed" as const : status === "running" ? "running" as const : "failed" as const,
+    role: "planner",
+    agentId: participants[0]!.agentId,
+    kind: "initial_proposal",
+    status: status === "completed" ? "committed" : status === "running" ? "running" : "failed",
     attemptCount: name === "retry" || name === "timeout" || name === "failed" ? 2 : 1,
     inputArtifactIds: [],
     lastValidationErrors: [],
@@ -43,6 +62,30 @@ const base = (
     id: `attempt-${name}-2`, runId, turnId: turn.id, number: 2,
     agentId: turn.agentId, status: status === "completed" ? "succeeded" : "failed", createdAt: now,
   });
+  const artifacts: CoordinationArtifact[] = [];
+  if (status === "completed") {
+    artifacts.push(name === "rejectionRevision" ? {
+      id: `artifact-${name}`,
+      runId,
+      turnId: turn.id,
+      createdByRole: "critic",
+      createdByAgentId: participants[1]!.agentId,
+      sizeChars: 120,
+      createdAt: now,
+      type: "review",
+      payload: { schemaVersion: 1, type: "review", decision: "reject", issues: [{ code: "NEEDS_DETAIL", message: "Add measurable safeguards." }], feedback: "Revise the risks." },
+    } : {
+      id: `artifact-${name}`,
+      runId,
+      turnId: turn.id,
+      createdByRole: "planner",
+      createdByAgentId: participants[0]!.agentId,
+      sizeChars: 120,
+      createdAt: now,
+      type: "proposal",
+      payload: { schemaVersion: 1, type: "proposal", summary: "A measured launch.", sections: [{ key: "summary", title: "Summary", content: "Launch with a focused cohort." }] },
+    });
+  }
   const isTerminalFailure = status === "failed" || status === "stopped";
   return {
     run: {
@@ -66,19 +109,7 @@ const base = (
     },
     turns: [turn],
     attempts,
-    artifacts: status === "completed" ? [{
-      id: `artifact-${name}`,
-      runId,
-      turnId: turn.id,
-      createdByRole: name === "rejectionRevision" ? "critic" : "planner",
-      createdByAgentId: name === "rejectionRevision" ? participants[1].agentId : participants[0].agentId,
-      sizeChars: 120,
-      createdAt: now,
-      type: name === "rejectionRevision" ? "review" : "proposal",
-      payload: name === "rejectionRevision"
-        ? { schemaVersion: 1, type: "review", decision: "reject", issues: [{ code: "NEEDS_DETAIL", message: "Add measurable safeguards." }], feedback: "Revise the risks." }
-        : { schemaVersion: 1, type: "proposal", summary: "A measured launch.", sections: [{ key: "summary", title: "Summary", content: "Launch with a focused cohort." }] },
-    }] : [],
+    artifacts,
     events: eventTypes.map((type, index) => ({
       id: `event-${name}-${index + 1}`,
       runId,
@@ -93,12 +124,200 @@ const base = (
   };
 };
 
+interface SessionMessageFixture {
+  agent: number;
+  content: string;
+  done?: boolean;
+  rejectedContent?: string;
+}
+
+const sessionBase = (
+  name: UiSessionFixtureName,
+  protocol: SessionProtocol,
+  status: CoordinationRunStatus,
+  messages: SessionMessageFixture[],
+): CoordinationRunDetails => {
+  const runId = `run-${name}`;
+  const turns: CoordinationTurn[] = [];
+  const attempts: CoordinationAttempt[] = [];
+  const artifacts: CoordinationArtifact[] = [];
+  const events: CoordinationEvent[] = [{
+    id: `event-${name}-1`, runId, sequence: 1, type: "run.created", actor: { type: "user" },
+    message: "Shared session created", details: { workflow: "shared_session_v1" }, createdAt: now,
+  }];
+
+  messages.forEach((message, index) => {
+    const turnId = `turn-${name}-${index + 1}`;
+    const artifactId = `artifact-${name}-${index + 1}`;
+    const validationError = message.rejectedContent
+      ? `Expected the next number ${message.content}, received ${message.rejectedContent}`
+      : undefined;
+    turns.push({
+      id: turnId,
+      runId,
+      sequence: index + 1,
+      role: "participant",
+      agentId: sessionParticipants[message.agent]!.agentId,
+      kind: "session_turn",
+      status: "committed",
+      attemptCount: validationError ? 2 : 1,
+      inputArtifactIds: artifacts.map(({ id }) => id),
+      outputArtifactId: artifactId,
+      lastValidationErrors: validationError ? [validationError] : [],
+      createdAt: now,
+      completedAt: now,
+    });
+    if (validationError) {
+      attempts.push({
+        id: `attempt-${name}-${index + 1}-1`, runId, turnId, number: 1,
+        agentId: sessionParticipants[message.agent]!.agentId, status: "invalid_output",
+        errorCode: "INVALID_AGENT_OUTPUT", errorMessage: validationError, createdAt: now, finishedAt: now,
+      });
+      events.push({
+        id: `event-${name}-${events.length + 1}`, runId, sequence: events.length + 1,
+        type: "attempt.invalid_output", actor: { type: "agent", agentId: sessionParticipants[message.agent]!.agentId, role: "participant" },
+        turnId, message: validationError, details: { attemptNumber: 1 }, createdAt: now,
+      });
+    }
+    attempts.push({
+      id: `attempt-${name}-${index + 1}-${validationError ? 2 : 1}`, runId, turnId,
+      number: validationError ? 2 : 1, agentId: sessionParticipants[message.agent]!.agentId,
+      status: "succeeded", createdAt: now, finishedAt: now,
+    });
+    artifacts.push({
+      id: artifactId,
+      runId,
+      turnId,
+      createdByRole: "participant",
+      createdByAgentId: sessionParticipants[message.agent]!.agentId,
+      sizeChars: message.content.length,
+      createdAt: now,
+      type: "session_message",
+      payload: {
+        schemaVersion: 1,
+        type: "session_message",
+        content: message.content,
+        ...(message.done === undefined ? {} : { done: message.done }),
+      },
+    });
+    events.push({
+      id: `event-${name}-${events.length + 1}`, runId, sequence: events.length + 1,
+      type: "turn.committed", actor: { type: "agent", agentId: sessionParticipants[message.agent]!.agentId, role: "participant" },
+      turnId, artifactId, message: `${sessionParticipants[message.agent]!.agentNameSnapshot} committed a session message`,
+      details: { turnSequence: index + 1 }, createdAt: now,
+    });
+  });
+
+  if (status === "failed" || status === "stopped") {
+    const terminalTurnId = `turn-${name}-terminal`;
+    const terminalAttemptStatus = name === "sessionFailed" ? "failed" : "cancelled";
+    turns.push({
+      id: terminalTurnId, runId, sequence: turns.length + 1, role: "participant",
+      agentId: sessionParticipants[turns.length % sessionParticipants.length]!.agentId,
+      kind: "session_turn", status: name === "sessionFailed" ? "failed" : "cancelled",
+      attemptCount: 1, inputArtifactIds: artifacts.map(({ id }) => id), lastValidationErrors: [], createdAt: now,
+    });
+    attempts.push({
+      id: `attempt-${name}-terminal`, runId, turnId: terminalTurnId, number: 1,
+      agentId: sessionParticipants[turns.length % sessionParticipants.length]!.agentId,
+      status: terminalAttemptStatus, errorMessage: name === "sessionFailed" ? "Agent execution failed" : "Attempt cancelled",
+      createdAt: now, finishedAt: now,
+    });
+  }
+
+  if (status === "completed") {
+    events.push({ id: `event-${name}-complete`, runId, sequence: events.length + 1, type: "run.completed", actor: { type: "system" }, message: "Shared session completed", details: {}, createdAt: now });
+  } else if (status === "stopped") {
+    events.push({ id: `event-${name}-stop`, runId, sequence: events.length + 1, type: "run.stopped", actor: { type: "system" }, message: "Shared session stopped", details: {}, createdAt: now });
+  } else if (status === "failed") {
+    events.push({ id: `event-${name}-fail`, runId, sequence: events.length + 1, type: name === "sessionInterrupted" ? "run.interrupted" : "run.failed", actor: { type: "system" }, message: name === "sessionInterrupted" ? "Server restart interrupted the session" : "Shared session failed", details: {}, createdAt: now });
+  }
+
+  const latestCountdown = protocol === "countdown" && messages.length > 0
+    ? Number(messages[messages.length - 1]!.content) - 1
+    : undefined;
+  return {
+    run: {
+      id: runId,
+      name: `${name} session`,
+      objective: protocol === "countdown" ? "Count down together in exact round-robin order." : "Agree a concise launch checklist together.",
+      requiredSections: [],
+      participants: sessionParticipants,
+      policy: {
+        workflow: "shared_session_v1",
+        maxRevisions: 0,
+        maxTurns: protocol === "countdown" ? Math.max(3, messages.length + 2) : 9,
+        maxAttemptsPerTurn: 2,
+        perAttemptTimeoutMs: 120_000,
+        contextMaxChars: 12_000,
+        outputMaxChars: 20_000,
+        sessionProtocol: protocol,
+        ...(protocol === "countdown" ? { sessionStartValue: Number(messages[0]?.content ?? 10) } : {}),
+      },
+      status,
+      phase: status === "completed" ? "done" : "sessioning",
+      revision: 0,
+      nextTurnSequence: turns.length + 1,
+      ...(latestCountdown === undefined ? {} : { sharedState: { nextExpectedNumber: latestCountdown } }),
+      version: events.length,
+      ...(status === "stopped" ? { errorCode: "STOPPED_BY_USER", errorMessage: "The run was stopped by the user." } : {}),
+      ...(status === "failed" ? {
+        errorCode: name === "sessionInterrupted" ? "SERVER_RESTARTED" : "MAX_ATTEMPTS_EXCEEDED",
+        errorMessage: name === "sessionInterrupted" ? "The run was interrupted by a server restart." : "The turn exhausted its retry limit.",
+      } : {}),
+      createdAt: now,
+      updatedAt: now,
+    },
+    turns,
+    attempts,
+    artifacts,
+    events,
+  };
+};
+
 export const UI_COORDINATION_FIXTURES: Record<UiFixtureName, CoordinationRunDetails> = {
-  completed: base("completed", "completed", ["run.created", "turn.committed", "run.completed"]),
-  rejectionRevision: base("rejectionRevision", "completed", ["run.created", "review.rejected", "review.approved", "run.completed"]),
-  retry: base("retry", "completed", ["run.created", "attempt.invalid_output", "turn.committed", "run.completed"]),
-  timeout: base("timeout", "completed", ["run.created", "attempt.timed_out", "turn.committed", "run.completed"]),
-  stopped: base("stopped", "stopped", ["run.created", "run.stop_requested", "attempt.cancelled", "run.stopped"]),
-  failed: base("failed", "failed", ["run.created", "attempt.failed", "run.failed"]),
-  interrupted: base("interrupted", "failed", ["run.created", "attempt.cancelled", "run.interrupted", "run.failed"]),
+  completed: verifiedBase("completed", "completed", ["run.created", "turn.committed", "run.completed"]),
+  rejectionRevision: verifiedBase("rejectionRevision", "completed", ["run.created", "review.rejected", "review.approved", "run.completed"]),
+  retry: verifiedBase("retry", "completed", ["run.created", "attempt.invalid_output", "turn.committed", "run.completed"]),
+  timeout: verifiedBase("timeout", "completed", ["run.created", "attempt.timed_out", "turn.committed", "run.completed"]),
+  stopped: verifiedBase("stopped", "stopped", ["run.created", "run.stop_requested", "attempt.cancelled", "run.stopped"]),
+  failed: verifiedBase("failed", "failed", ["run.created", "attempt.failed", "run.failed"]),
+  interrupted: verifiedBase("interrupted", "failed", ["run.created", "attempt.cancelled", "run.interrupted", "run.failed"]),
+};
+
+export const UI_SESSION_FIXTURES: Record<UiSessionFixtureName, CoordinationRunDetails> = {
+  countdownRunning: sessionBase("countdownRunning", "countdown", "running", [
+    { agent: 0, content: "10" }, { agent: 1, content: "9" }, { agent: 2, content: "8" },
+  ]),
+  countdownRetry: sessionBase("countdownRetry", "countdown", "running", [
+    { agent: 0, content: "10" }, { agent: 1, content: "9", rejectedContent: "8" },
+  ]),
+  freeChatPartial: sessionBase("freeChatPartial", "free_chat", "running", [
+    { agent: 0, content: "Start with a small invited cohort.", done: true },
+    { agent: 1, content: "Add a support escalation path." },
+    { agent: 2, content: "I will refine the launch metrics next." },
+  ]),
+  freeChatUnanimous: sessionBase("freeChatUnanimous", "free_chat", "completed", [
+    { agent: 0, content: "The cohort plan is ready.", done: true },
+    { agent: 1, content: "The support path is ready.", done: true },
+    { agent: 2, content: "The metrics are ready.", done: true },
+  ]),
+  freeChatWithdrawn: sessionBase("freeChatWithdrawn", "free_chat", "running", [
+    { agent: 0, content: "Initial plan is ready.", done: true },
+    { agent: 1, content: "Support plan is ready.", done: true },
+    { agent: 2, content: "One risk still needs work." },
+    { agent: 0, content: "I am revising the cohort plan." },
+  ]),
+  sessionStopped: sessionBase("sessionStopped", "free_chat", "stopped", [
+    { agent: 0, content: "Drafting the cohort plan." },
+  ]),
+  sessionFailed: sessionBase("sessionFailed", "countdown", "failed", [
+    { agent: 0, content: "10" },
+  ]),
+  sessionInterrupted: sessionBase("sessionInterrupted", "free_chat", "failed", [
+    { agent: 0, content: "Drafting the cohort plan." },
+  ]),
+  sessionCompleted: sessionBase("sessionCompleted", "countdown", "completed", [
+    { agent: 0, content: "3" }, { agent: 1, content: "2" }, { agent: 2, content: "1" },
+  ]),
 };

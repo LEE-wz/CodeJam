@@ -26,29 +26,29 @@ If an API envelope, UI state, polling rule, accessibility expectation, or file b
 
 ### Client contracts and form
 
-- [ ] **P8-01** Mirror the session subset in `apps/web/src/coordination-types.ts`, aligned with response envelopes and without importing server internals.
-- [ ] **P8-02** Add session create/start/detail/stop handling to `coordination-api.ts` using the existing bearer/auth and error conventions.
-- [ ] **P8-03** Add a mode toggle to the create form: verified handoff (existing, unchanged) and shared session (new). Existing fields and behavior in verified mode stay exactly as they are.
-- [ ] **P8-04** Build session fields: protocol selector (countdown or free chat), ordered participant picker (2..6 ready Agents; selection order is the turn order), `sessionStartValue` (2..12, default 10, countdown only), name, objective, `maxTurns` (free-chat default 6), and timeout.
-- [ ] **P8-05** Validate client-side: participant count and distinctness, readiness, protocol choice, countdown start-value range and `maxTurns >= sessionStartValue`, free-chat `maxTurns` range, while retaining server authority. Preserve input on errors and keep create then start as two visible operations.
+- [x] **P8-01** Mirror the session subset in `apps/web/src/coordination-types.ts`, aligned with response envelopes and without importing server internals.
+- [x] **P8-02** Add session create/start/detail/stop handling to `coordination-api.ts` using the existing bearer/auth and error conventions.
+- [x] **P8-03** Add a mode toggle to the create form: verified handoff (existing, unchanged) and shared session (new). Existing fields and behavior in verified mode stay exactly as they are.
+- [x] **P8-04** Build session fields: protocol selector (countdown or free chat), ordered participant picker (2..6 ready Agents; selection order is the turn order), `sessionStartValue` (2..12, default 10, countdown only), name, objective, `maxTurns` (free-chat default 6), and timeout.
+- [x] **P8-05** Validate client-side: participant count and distinctness, readiness, protocol choice, countdown start-value range and `maxTurns >= sessionStartValue`, free-chat `maxTurns` range, while retaining server authority. Preserve input on errors and keep create then start as two visible operations.
 
 ### Transcript and evidence
 
-- [ ] **P8-06** Render the session transcript: a chronological list where each committed message shows the Agent name, content, and attempt badges. Display `sharedState.nextExpectedNumber` as the shared-state evidence for countdown runs; free-chat runs show no expected number, but show each participant's latest `done` signal (for example a small badge) so the consensus forming is visible.
-- [ ] **P8-07** Render session turns in the existing timeline with participant labels, and surface protocol validation errors (for countdown, the retry-safe `Expected the next number <N>, received <X>` message) so a rejection is understandable without logs.
-- [ ] **P8-08** Escape all artifact text (no raw HTML), provide safe empty/loading/error/long-content states, and add session-specific status labels consistent with the existing design.
+- [x] **P8-06** Render the session transcript: a chronological list where each committed message shows the Agent name, content, and attempt badges. Display `sharedState.nextExpectedNumber` as the shared-state evidence for countdown runs; free-chat runs show no expected number, but show each participant's latest `done` signal (for example a small badge) so the consensus forming is visible.
+- [x] **P8-07** Render session turns in the existing timeline with participant labels, and surface protocol validation errors (for countdown, the retry-safe `Expected the next number <N>, received <X>` message) so a rejection is understandable without logs.
+- [x] **P8-08** Escape all artifact text (no raw HTML), provide safe empty/loading/error/long-content states, and add session-specific status labels consistent with the existing design.
 
 ### Polling, integration, and accessibility
 
-- [ ] **P8-09** Reuse the single 1.5-second polling chain; prove it cleans up on session terminal states, selection change, and unmount, and that stop reconciles without multiplying requests.
-- [ ] **P8-10** Integrate through the single `App.tsx` owner and preserve all current Agent/Playground features.
-- [ ] **P8-11** Add fixture tests for session states (normal transcript, wrong-number retry, free-chat transcript, free-chat done-consensus states: partial, unanimous, withdrawn, stopped, failed, interrupted, completed) plus keyboard, labels, error focus, and responsive checks.
+- [x] **P8-09** Reuse the single 1.5-second polling chain; prove it cleans up on session terminal states, selection change, and unmount, and that stop reconciles without multiplying requests.
+- [x] **P8-10** Integrate through the single `App.tsx` owner and preserve all current Agent/Playground features.
+- [x] **P8-11** Add fixture tests for session states (normal transcript, wrong-number retry, free-chat transcript, free-chat done-consensus states: partial, unanimous, withdrawn, stopped, failed, interrupted, completed) plus keyboard, labels, error focus, and responsive checks.
 
 ### Real rehearsal
 
-- [ ] **P8-12** Complete one real 10-to-1 session run and one short free-chat run (bounded `maxTurns` or a unanimous `done` round) in the browser using fresh demo Agents on the fastest available model endpoint, then run one verified-workflow regression.
-- [ ] **P8-13** Demonstrate the live wrong-number failure: one demo Agent is created with a base instruction that occasionally subtracts two instead of one. The middleware rejects the wrong number, retries, and the run recovers or fails with clear evidence. The Agent genuinely misbehaved; the middleware genuinely caught it. Never simulate middleware behaviour.
-- [ ] **P8-14** Measure per-turn and total timings; record redacted evidence and the latency conclusion in `STATUS.md`; confirm the Phase 9 demo-budget mitigations from overview-sessions.md Section 10.
+- [x] **P8-12** Complete one real 10-to-1 session run and one short free-chat run (bounded `maxTurns` or a unanimous `done` round) in the browser using fresh demo Agents on the fastest available model endpoint, then run one verified-workflow regression.
+- [x] **P8-13** Demonstrate the live wrong-number failure: one demo Agent is created with a base instruction that occasionally subtracts two instead of one. The middleware rejects the wrong number, retries, and the run recovers or fails with clear evidence. The Agent genuinely misbehaved; the middleware genuinely caught it. Never simulate middleware behaviour.
+- [x] **P8-14** Measure per-turn and total timings; record redacted evidence and the latency conclusion in `STATUS.md`; confirm the Phase 9 demo-budget mitigations from overview-sessions.md Section 10.
 
 ## Requirements and boundaries
 
@@ -74,6 +74,14 @@ docker compose run --rm --no-deps --user root \
 ```
 
 Run available web tests through Docker Compose, then require the full Docker Compose `npm run check` above before marking each implementation task complete. Use the session fixture matrix and a browser against the Compose deployment. Capture a screenshot only after layout stabilizes and only if useful for README/demo evidence.
+
+### Checkpoint 8 evidence
+
+- The full Docker Compose gate passed on `phase-8`: 474 server tests, 27 web tests, both typechecks, and both production builds (501 tests total).
+- The Compose browser deployment completed a real 10-to-1 countdown in 11.880 seconds, a three-turn unanimous free-chat session in 5.321 seconds, and a verified handoff regression in 11.335 seconds.
+- The live failure rehearsal rejected a genuine wrong first answer (`Expected the next number 5, received 3`), retried the same participant, and completed 5-to-1 in 10.084 seconds.
+- A live shared-session stop settled as `STOPPED_BY_USER` and cancelled the active attempt. Desktop 1440×900 and mobile 390×844 checks had no document overflow, semantic labels remained available, and the browser reported no warnings or errors.
+- The completed countdown state now renders as `Complete` rather than exposing the backend's post-completion sentinel value `0` as a misleading next action.
 
 ## Completion gate
 

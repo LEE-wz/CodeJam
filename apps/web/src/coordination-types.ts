@@ -1,9 +1,40 @@
-export type CoordinationRole = "planner" | "critic" | "finalizer";
-export type CoordinationPhase = "drafting" | "reviewing" | "revising" | "finalizing" | "done";
-export type CoordinationRunStatus = "created" | "running" | "stop_requested" | "completed" | "failed" | "stopped";
-export type CoordinationTurnKind = "initial_proposal" | "proposal_revision" | "proposal_review" | "finalization";
-export type CoordinationTurnStatus = "scheduled" | "running" | "committed" | "failed" | "cancelled";
-export type CoordinationAttemptStatus = "running" | "succeeded" | "invalid_output" | "timed_out" | "failed" | "cancelled" | "stale_ignored";
+export type CoordinationRole = "planner" | "critic" | "finalizer" | "participant";
+export type CoordinationPhase =
+  | "drafting"
+  | "reviewing"
+  | "revising"
+  | "finalizing"
+  | "sessioning"
+  | "done";
+export type CoordinationRunStatus =
+  | "created"
+  | "running"
+  | "stop_requested"
+  | "completed"
+  | "failed"
+  | "stopped";
+export type CoordinationTurnKind =
+  | "initial_proposal"
+  | "proposal_revision"
+  | "proposal_review"
+  | "finalization"
+  | "session_turn";
+export type CoordinationTurnStatus =
+  | "scheduled"
+  | "running"
+  | "committed"
+  | "failed"
+  | "cancelled";
+export type CoordinationAttemptStatus =
+  | "running"
+  | "succeeded"
+  | "invalid_output"
+  | "timed_out"
+  | "failed"
+  | "cancelled"
+  | "stale_ignored";
+export type CoordinationWorkflowKind = "verified_handoff_v1" | "shared_session_v1";
+export type SessionProtocol = "countdown" | "free_chat";
 export type CoordinationEventType =
   | "run.created" | "run.started" | "turn.scheduled" | "attempt.started"
   | "attempt.invalid_output" | "attempt.timed_out" | "attempt.failed"
@@ -11,19 +42,32 @@ export type CoordinationEventType =
   | "review.approved" | "review.rejected" | "run.stop_requested"
   | "run.stopped" | "run.completed" | "run.failed" | "run.interrupted";
 
+export const SESSION_LIMITS = {
+  minParticipants: 2,
+  maxParticipants: 6,
+  minStartValue: 2,
+  maxStartValue: 12,
+  defaultStartValue: 10,
+  minFreeChatTurns: 3,
+  maxFreeChatTurns: 12,
+  defaultFreeChatTurns: 6,
+} as const;
+
 export interface RequiredSection {
   key: string;
   title: string;
 }
 
 export interface CoordinationPolicy {
-  workflow: "verified_handoff_v1";
+  workflow: CoordinationWorkflowKind;
   maxRevisions: number;
   maxTurns: number;
   maxAttemptsPerTurn: number;
   perAttemptTimeoutMs: number;
   contextMaxChars: number;
   outputMaxChars: number;
+  sessionProtocol?: SessionProtocol;
+  sessionStartValue?: number;
 }
 
 export interface CoordinationParticipant {
@@ -47,6 +91,7 @@ export interface CoordinationRun {
   latestProposalArtifactId?: string;
   latestReviewArtifactId?: string;
   finalArtifactId?: string;
+  sharedState?: { nextExpectedNumber: number };
   version: number;
   errorCode?: string;
   errorMessage?: string;
@@ -114,7 +159,14 @@ export interface FinalPayload {
   content: string;
 }
 
-export interface CoordinationArtifact {
+export interface SessionMessagePayload {
+  schemaVersion: 1;
+  type: "session_message";
+  content: string;
+  done?: boolean;
+}
+
+interface CoordinationArtifactBase {
   id: string;
   runId: string;
   turnId: string;
@@ -122,9 +174,13 @@ export interface CoordinationArtifact {
   createdByAgentId: string;
   sizeChars: number;
   createdAt: string;
-  type: "proposal" | "review" | "final";
-  payload: ProposalPayload | ReviewPayload | FinalPayload;
 }
+
+export type CoordinationArtifact =
+  | (CoordinationArtifactBase & { type: "proposal"; payload: ProposalPayload })
+  | (CoordinationArtifactBase & { type: "review"; payload: ReviewPayload })
+  | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload })
+  | (CoordinationArtifactBase & { type: "session_message"; payload: SessionMessagePayload });
 
 export interface CoordinationEvent {
   id: string;
@@ -149,6 +205,7 @@ export interface CoordinationRunDetails {
 }
 
 export interface CreateCoordinationRunRequest {
+  workflow?: "verified_handoff_v1";
   name: string;
   objective: string;
   requiredSections: RequiredSection[];
@@ -163,3 +220,18 @@ export interface CreateCoordinationRunRequest {
     perAttemptTimeoutMs?: number;
   };
 }
+
+export interface CreateSessionRunRequest {
+  workflow: "shared_session_v1";
+  name: string;
+  objective: string;
+  agents: string[];
+  policy?: {
+    sessionProtocol?: SessionProtocol;
+    sessionStartValue?: number;
+    maxTurns?: number;
+    perAttemptTimeoutMs?: number;
+  };
+}
+
+export type CreateRunRequest = CreateCoordinationRunRequest | CreateSessionRunRequest;
