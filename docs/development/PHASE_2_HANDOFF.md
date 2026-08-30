@@ -167,6 +167,6 @@ top-level catch preserves that structured code rather than flattening it to
 
 | Risk | Detail |
 |---|---|
-| Dependency audit | `npm ci` reports 1 moderate and 5 high findings, deferred to release review (P5-16). Do not apply breaking upgrades mid-phase. |
+| Dependency audit | `npm ci` reports 1 moderate and 5 high findings, deferred to release review (P9-16). Do not apply breaking upgrades mid-phase. |
 | Agent-ID-keyed cancellation | Current cancellation can target unrelated later work. Fixed by run-scoped cancellation in P3-04, after Phase 2 gates. |
 | Single-process store | `JsonStore` serialises mutations for one process only. This is an accepted MVP limitation, not a defect to solve in Phase 2. |

@@ -1915,6 +1915,8 @@ This checkpoint validates the product semantics before persistence or model late
 
 ### Checkpoint 5 — Submission candidate
 
+> **Note (2026-08-30):** with the session extension, the repository's runbook checkpoints are renumbered. This original verified-workflow release checkpoint is now **Checkpoint 9** in [`README.md`](./README.md) and [`phases/09-release.md`](./phases/09-release.md); the runbook's Checkpoints 5–8 belong to the session phases. The release requirements below are unchanged and apply to both workflows.
+
 - Repository-wide `npm run check` passes from a clean checkout.
 - Normal real run is rehearsed multiple times.
 - Rejection or timeout evidence is available.

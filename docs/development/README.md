@@ -47,7 +47,7 @@ Do not advance a phase because code exists. Advance only when every required gat
 
 When documents appear to disagree, use this order:
 
-1. Sections 4 and 6–11 of [`overview.md`](./overview.md) for frozen scope, decisions, types, APIs, interfaces, persistence, and workflow semantics.
+1. Sections 4 and 6–11 of [`overview.md`](./overview.md) for frozen verified-handoff scope, decisions, types, APIs, interfaces, persistence, and workflow semantics. For the shared-session workflow (Phases 5–9), [`overview-sessions.md`](./overview-sessions.md) is the contract authority; where it is silent, overview.md governs the shared engine semantics.
 2. An approved ADR or mini-RFC recorded in [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md).
 3. The applicable phase sheet for execution order and required evidence.
 4. [`STATUS.md`](./STATUS.md) for current repository state, not product semantics.
@@ -63,9 +63,15 @@ Do not silently edit frozen contracts to fit an implementation. Record a mini-RF
 | 2 | [`phases/02-durable-backend.md`](./phases/02-durable-backend.md) | Atomic persistence, leases, events, and HTTP lifecycle | Checkpoint 2: durable backend with fake runtime |
 | 3 | [`phases/03-real-runtime.md`](./phases/03-real-runtime.md) | Real Agent execution, cancellation, reservations, and timing | Checkpoint 3: real Agent execution |
 | 4 | [`phases/04-ui-evidence.md`](./phases/04-ui-evidence.md) | Usable configuration, polling, evidence timeline, and artifacts | Checkpoint 4: end-to-end UI |
-| 5 | [`phases/05-release.md`](./phases/05-release.md) | Clean, documented, rehearsed submission candidate | Checkpoint 5: release candidate |
+| 5 | [`phases/05-session-contracts.md`](./phases/05-session-contracts.md) | Approved session mini-RFC, additive contracts, fixtures | Checkpoint 5: session contracts compile |
+| 6 | [`phases/06-session-core.md`](./phases/06-session-core.md) | Session workflow, countdown and free-chat protocols, transcript context, in-memory skeleton | Checkpoint 6: in-memory session skeleton |
+| 7 | [`phases/07-session-durable.md`](./phases/07-session-durable.md) | Durable session commits, API union, races | Checkpoint 7: durable session backend |
+| 8 | [`phases/08-session-ui.md`](./phases/08-session-ui.md) | Session form, transcript view, real 10-to-1 rehearsal | Checkpoint 8: session UI and real run |
+| 9 | [`phases/09-release.md`](./phases/09-release.md) | Clean, documented, rehearsed submission candidate for both workflows | Checkpoint 9: release candidate |
 
-The gates are sequential even when implementation is parallel. Phase 2 must not connect real Agents until lease/race tests pass. Phase 3 must not expand features if real execution is unstable.
+The full implementation plan consists of these nine phases. Phases 0–4 build and verify the verified-handoff workflow; Phases 5–8 add the shared-session workflow on the same engine; Phase 9 releases both. Phase 9 was formerly Phase 5, and its task IDs moved from P5-xx to P9-xx when the session extension was adopted.
+
+The gates are sequential even when implementation is parallel. Phase 2 must not connect real Agents until lease/race tests pass. Phase 3 must not expand features if real execution is unstable. Phase 6 must stay in memory until the Phase 7 race gates pass. Phase 8 must not expand the UI beyond the session transcript and form.
 
 ## Task and status conventions
 

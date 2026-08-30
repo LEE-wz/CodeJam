@@ -1,9 +1,9 @@
 # Relay Assumptions and Resolved Questions
 
 **Last audited:** 2026-08-30  
-**Current implementation base:** `e899b52`; Phase 4 branch `phase-4`
+**Current implementation base:** `139019b` (`main` after the Phase 4 merge; tag `phase-4-complete`)
 **Accepted contract commit:** immutable reference `ea469b2` (optional `relay/contracts-v1` tag is absent)
-**Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
+**Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md) for the verified workflow; [`overview-sessions.md`](./overview-sessions.md) for the shared-session workflow (Phases 5–9)
 
 This file closes questions that can be answered from the checked-out code and isolates the few items that require measurement or a team contract change.
 
@@ -264,3 +264,65 @@ The supplied ChatGPT share URL was inaccessible during this audit: the page read
 - All testing and verification runs through Docker Compose. Host Node/npm results are not accepted as completion evidence.
 - Every completed development or implementation ends with a passing Docker Compose execution of `npm run check`; focused tests do not replace it.
 - When any contract, phase instruction, file boundary, behavior, or acceptance criterion is unclear, work pauses for clarification. The answer is recorded before implementation resumes; assumptions are not silently substituted.
+
+## Session extension plan (Phases 5–9)
+
+### Nine-phase numbering decision
+
+**Status:** Adopted by the team on 2026-08-30. The plan documentation was
+authored on branch `session-phase-sheets`.
+
+The team's Relay Sessions extension plan becomes the session mini-RFC. Its
+repository-local authority is [`overview-sessions.md`](./overview-sessions.md),
+authored during the same planning pass.
+
+| Element | Decision |
+|---|---|
+| Phase numbering | Session build takes Phases 5–8; the former Phase 5 release phase becomes Phase 9 |
+| Task IDs | Release tasks renumber from `P5-01..P5-18` to `P9-01..P9-20`; `P5-xx`, `P6-xx`, `P7-xx`, `P8-xx` belong to the new session phases |
+| Checkpoints | Phase number equals checkpoint number; release is Checkpoint 9 |
+| Release sheet | `phases/05-release.md` renamed to `phases/09-release.md`; historical STATUS references to P5-16 updated to P9-16 for zero dangling IDs |
+| Sheet files | `phases/05-session-contracts.md`, `06-session-core.md`, `07-session-durable.md`, `08-session-ui.md`, `09-release.md` |
+
+### Phase placement clarifications
+
+The extension plan's phase rows were refined to mirror the original Phase 0 and
+Phase 1 split, and the discrepancy is recorded rather than silently coded:
+
+| Item | Decision |
+|---|---|
+| Additive contract code (types, contracts, fixtures, construction test) | Lands in **Phase 5**, matching Phase 0. The Phase 5 gate "contracts compile" requires it there. |
+| Session behavior (workflow, countdown protocol, transcript context) | Lands in **Phase 6**, matching Phase 1. |
+| Service create branch and workflow dispatch | Lands in **Phase 6** (walking skeleton requires it), matching original P1-14. |
+| Repository commit case, routes union, composition root | Land in **Phase 7**, matching Phase 2. |
+| Docs and rehearsal (the old standalone S4) | Folded into **Phase 9** release, which now covers both workflows. |
+
+### Session semantics settled for the build
+
+| Item | Decision |
+|---|---|
+| Expected-number authority | The session prompt never states the expected number. Agents read the transcript and derive it; the countdown validator is the sole authority. |
+| Wrong-number recovery | Retry the same Agent once with validation errors; a second failure ends the run with `MAX_ATTEMPTS_EXCEEDED`. Reassignment is cut. |
+| Session creation | `workflow` defaults to `"verified_handoff_v1"`; session variant requires 2–6 ordered distinct Agents and `sessionProtocol` (`"countdown"` default, `"free_chat"`). Countdown: `sessionStartValue` 2–12 (default 10), `maxTurns >= sessionStartValue`. Free chat: no start value, `maxTurns` 3–12 (default 6). No required sections, no max revisions. |
+| Shared state | `run.sharedState.nextExpectedNumber` is public read-model evidence for countdown runs; free-chat runs have no shared state. Leases stay hidden. |
+| Second session protocol | `free_chat` is in scope on the same `shared_session_v1` workflow: bounded non-empty messages (1..500), completion at `maxTurns` (default 6, range 3..12) or user stop, no `sessionStartValue`, no `nextExpectedNumber`, and no substance judgement by the middleware. |
+| Failure demo | One demo Agent is instructed to occasionally subtract 2 instead of 1. The Agent genuinely misbehaves; middleware behaviour is never simulated. |
+| Latency | Live 10-turn runs can exceed the 3-minute demo budget. Mitigations: fast demo endpoint, pre-executed full run, live shorter run narrated over polling. |
+
+### Session open decisions (settle at P5-01)
+
+| Question | Recommended default |
+|---|---|
+| `sessionStartValue` default and range | 10; range 2..12 (countdown only) |
+| Participant ordering UX | Selection order is the turn order; drag reordering is stretch |
+| Free-chat default `maxTurns` | 6; range 3..12 |
+| Misleading countdown run in local data | Delete before judging evidence (P9-19) |
+
+### Session invariants that may not be weakened
+
+- Round-robin selection derives from committed session turns only; retries never advance the position.
+- A countdown session commit updates `nextExpectedNumber` in the same atomic mutation as turn and attempt settlement; free-chat commits update no shared state.
+- Free-chat completion is turn-bound or user-stopped; the middleware never judges message substance.
+- Only the active lease may commit; late results stay visible but ignored.
+- Countdown prompts never contain the expected number; free-chat prompts contain no hidden state. Prompts never contain lease tokens, events, or another Agent's raw history beyond the bounded transcript.
+- All existing verified-handoff and single-Agent behaviors, tests, and stored shapes remain unchanged.

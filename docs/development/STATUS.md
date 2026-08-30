@@ -1,11 +1,28 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 05:18 UTC
-**Audited base:** `e899b52` (the `pre-phase4-cleanup` tip)
-**Implementation branch:** `phase-4` (base `e899b52`)
-**Current phase:** Phase 4 — complete
-**Current gate:** Checkpoint 4 verified
-**Overall state:** Phases 0–4 `complete`; Phase 5 not started
+**Last audit:** 2026-08-30 (session phase sheets authored on `session-phase-sheets`)
+**Audited base:** `139019b` (`main` after the Phase 4 merge; tag `phase-4-complete`)
+**Implementation branch:** `session-phase-sheets` (documentation planning only)
+**Current phase:** Phase 5 — planned, not started
+**Current gate:** Checkpoint 4 verified (unchanged; no code was changed)
+**Overall state:** Phases 0–4 `complete`; Phases 5–8 planned with instruction sheets; Phase 9 (release) renumbered, not started
+
+## Nine-phase plan
+
+| Phase | Content | Status |
+|---|---|---|
+| 0 | Baseline and contract freeze | `complete` |
+| 1 | In-memory walking skeleton (verified workflow) | `complete` |
+| 2 | Durable backend and evidence ledger | `complete` |
+| 3 | Real Agent runtime and recovery | `complete` |
+| 4 | End-to-end UI and evidence experience | `complete` |
+| 5 | Session contracts and freeze | `not_started` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
+| 6 | Session core in memory | `not_started` (sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
+| 7 | Durable session backend and API | `not_started` (sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
+| 8 | Session UI and real rehearsal | `not_started` (sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
+| 9 | Documentation, demo, release candidate (both workflows) | `not_started` (sheet: [`phases/09-release.md`](phases/09-release.md)) |
+
+The session extension was adopted from the team's Relay Sessions plan. Its repository-local contract authority is [`overview-sessions.md`](overview-sessions.md). Phase 9 was formerly Phase 5; its task IDs moved from P5-xx to P9-xx.
 
 ## Resume here
 
@@ -13,6 +30,16 @@
 the existing web app: users can configure three distinct ready Agents, create
 and explicitly start a run, observe ordered evidence and artifacts, stop active
 runs, and understand terminal outcomes without reading server logs.
+
+The session extension (Phases 5–8) is fully planned and its instruction sheets
+are drafted on the `session-phase-sheets` branch. The next actions are:
+
+1. Team review of `overview-sessions.md` and the four new phase sheets on
+   `session-phase-sheets`.
+2. Approve the session mini-RFC and settle the open decisions in
+   `overview-sessions.md` Section 11 (this is Phase 5 task `P5-01`).
+3. Merge `session-phase-sheets` into `main` after review.
+4. Start Phase 5 on a new task branch from `main`.
 
 | Phase 4 gate condition | Evidence |
 |---|---|
@@ -23,11 +50,11 @@ runs, and understand terminal outcomes without reading server logs.
 | Real browser evidence | Disposable Compose completed one real three-role run and one real stop flow; completion reached 15 events and the stop flow displayed cancellation and stale-result evidence |
 | Full regression gate | Docker Compose `npm run check` passed: 21 server files / 377 tests, 2 web files / 12 tests, and both builds (389 tests total) |
 
-`P5-01` is the next task ID. Phase 5 should freeze the demo scope, prepare the
-documentation and templates, rehearse the submission flow and fallback, then
-perform the dependency/security and clean-release checks. The optional
-`relay/contracts-v1` convenience tag remains a release-time decision; immutable
-commit `ea469b2` already satisfies P0-11.
+`P5-01` (team approval of the session mini-RFC) is the next task ID, on the
+Phase 5 sheet. Phase 9 release tasks (`P9-01` onwards) cover documentation,
+demo, dependency/security, and clean-release checks for both workflows. The
+optional `relay/contracts-v1` convenience tag remains a release-time decision;
+immutable commit `ea469b2` already satisfies P0-11.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
@@ -42,7 +69,10 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 
 | Item | Status | Deadline |
 |---|---|---|
-| Dependency audit findings | Open: `npm ci` reports 1 moderate and 5 high findings. | P5-16 security/release review; do not apply breaking upgrades mid-phase. |
+| Dependency audit findings | Open: `npm ci` reports 1 moderate and 5 high findings. | P9-17 security/release review; do not apply breaking upgrades mid-phase. |
+| Session mini-RFC approval | The session extension plan and `overview-sessions.md` are drafted but not yet team-approved. | Phase 5 `P5-01`, before any session code lands. |
+| Session open decisions | `sessionStartValue` default 10 (2..12, countdown only), `workflow` field defaults to `verified_handoff_v1`, selection order is turn order, wrong numbers retry the same Agent then fail, free-chat sessions in scope (`sessionProtocol: "free_chat"`, default `maxTurns` 6). | Settle at `P5-01`; defaults recorded in `overview-sessions.md` Section 11. |
+| Misleading countdown run in local data | The "Test Relay" run (objective "Count down from 10 to 0") contains a final artifact claiming a countdown was executed when nothing was. | `P9-19`: delete from local demo data before judging evidence. |
 | Optional contract tag is absent | The accepted contract is immutably recorded as `ea469b2`, but neither the local nor remote repository has `relay/contracts-v1`. | Decide before release whether to create/push the convenience tag; no tag was created during cleanup. |
 
 ## Last checkpoint
@@ -201,20 +231,35 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 5
 
-- Not started. `P5-01` is next: product documentation set, README integration,
-  Agent/demo templates, rehearsal/fallback, clean release verification,
-  security inspection, and submission commit.
+- Not started. Instruction sheet is [`phases/05-session-contracts.md`](phases/05-session-contracts.md). `P5-01` is the team approval of the session mini-RFC and the settlement of the open decisions in `overview-sessions.md` Section 11.
+
+### Phase 6
+
+- Not started. Instruction sheet is [`phases/06-session-core.md`](phases/06-session-core.md). Pure session workflow, countdown and free-chat protocols, transcript context, and the in-memory walking skeleton.
+
+### Phase 7
+
+- Not started. Instruction sheet is [`phases/07-session-durable.md`](phases/07-session-durable.md). Durable session commits, the API create union, and race tests.
+
+### Phase 8
+
+- Not started. Instruction sheet is [`phases/08-session-ui.md`](phases/08-session-ui.md). Session form mode, transcript view, and the real 10-to-1 rehearsal.
+
+### Phase 9
+
+- Not started (renumbered from the original Phase 5; task IDs are now `P9-xx`). Instruction sheet is [`phases/09-release.md`](phases/09-release.md). `P9-01` is next: product documentation set for both workflows, README integration, Agent/demo templates, rehearsal/fallback, clean release verification, security inspection, and submission commit.
 
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
-| 2026-08-30 05:18 UTC | `phase-4` working tree | Phase 4 final Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, 2 web test files with 12 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
+| 2026-08-30 | `session-phase-sheets` (uncommitted) | Session phase sheets and nine-phase renumbering | Documentation-only change: added `overview-sessions.md`, phases 05–08 instruction sheets, renamed `05-release.md` to `09-release.md` with P9-xx task IDs, and updated the runbook, FILESYSTEM_MAP, and this file. No code changed, so no Compose gate was run or required; the Phase 4 gate evidence below remains the authoritative code status. |
+| 2026-08-30 05:18 UTC | `phase-4` working tree | Phase 4 final Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, 2 web test files with 12 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P9-16. |
 | 2026-08-30 05:05–05:16 UTC | `phase-4` working tree | Phase 4 real browser completion, stop, accessibility, and responsive evidence | **Passed:** a disposable Compose deployment completed a real Planner → Critic → Finaliser run while the UI advanced automatically to 15 events and all three artifacts. A second run stopped as `STOPPED_BY_USER` with request/cancel/stopped/stale evidence. Layout passed at 1440×900 and 390×844; the narrow audit found no horizontal overflow or unlabeled inputs. The initial live flow exposed a post-start polling reset defect; an explicit polling epoch fixed it and a regression test now proves detail polling resumes after start. |
-| 2026-08-30 04:51 UTC | `pre-phase4-cleanup` working tree | Phase 4 preflight Docker Compose image build and full `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, web build, and server build. The new three-test fixture suite covers all seven required UI scenarios, gapless evidence, consistent run IDs, and forbidden capability/secret strings. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
+| 2026-08-30 04:51 UTC | `pre-phase4-cleanup` working tree | Phase 4 preflight Docker Compose image build and full `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, web build, and server build. The new three-test fixture suite covers all seven required UI scenarios, gapless evidence, consistent run IDs, and forbidden capability/secret strings. `npm ci` continues to report 1 moderate and 5 high findings deferred to P9-16. |
 | 2026-08-30 03:36 UTC | `phase3-p3-01-real-runtime` working tree | Initial P3-01–P3-13 focused Compose suites | **Failed:** 84/85 tests passed; the scoped-cancellation test attempted to resolve the second deferred runner before it had started. The deterministic test waited for runner admission before resolving it; no product assertion was weakened. |
 | 2026-08-30 03:38 UTC | `phase3-p3-01-real-runtime` working tree | P3-01–P3-13 focused Compose typecheck and tests | **Passed:** server typecheck plus 15 tests — eight AgentService regressions, six runtime gateway race/cleanup tests, and one complete three-role real-boundary integration test. |
-| 2026-08-30 03:39 UTC | `phase3-p3-01-real-runtime` working tree | Phase 3 full Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 20 server test files with 373 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
+| 2026-08-30 03:39 UTC | `phase3-p3-01-real-runtime` working tree | Phase 3 full Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 20 server test files with 373 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P9-16. |
 | 2026-08-30 03:40–03:46 UTC | `phase3-p3-01-real-runtime` working tree | P3-14–P3-18 real-provider disposable Compose smoke | **Passed:** one direct gateway execution (4.789s), then three fresh Planner → Critic → Finaliser workflows (56.905–108.157s total; 12.919–59.585s per turn), each with three first-attempt commits. Agent records/messages/threads/correlations remained visible, active Playground conflicts returned `409 AGENT_RESERVED`, detail leases were absent, and no real repository runtime directories were mounted. |
 | 2026-08-29 | `3d24d1b` | `npm run check` | **Blocked before typecheck:** `tsc: not found`; dependencies are not installed. Environment reports Node `18.19.1`, below repository requirement Node 22+. No test/build result may be inferred. |
 | 2026-08-29 | `3d24d1b` | Static repository audit | Coordination files/routes/tests are present; `index.ts` does not construct/pass a coordination service; `JsonStore` is v1-only; `AgentService` exposes no completion handle. |
@@ -248,7 +293,7 @@ no task was promoted on a host-only or focused run.
 | 2026-08-30 02:17 UTC | `phase2-p2-05-events-redaction` | P2-05–P2-07 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 16 server test files with 285 tests, web build, and server build. Sole completion evidence for P2-05–P2-07. |
 | 2026-08-30 02:22 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 focused Docker Compose typecheck and `repository.test.ts` | **Passed:** server typecheck plus 51 repository tests. |
 | 2026-08-30 02:24 UTC | `phase2-p2-08-durable-repository` | Race suite repeated ten times through Docker Compose | **Passed 10/10, no flakes.** Required by the phase sheet before the lease/race gate can be considered met. Races are driven by `Promise.all` over the store's serialised mutation queue and by explicit state sequencing — no sleeps anywhere in the suite. |
-| 2026-08-30 02:25 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 final scoped Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 17 server test files with 336 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings held for release review (P5-16). Sole completion evidence for these tasks. |
+| 2026-08-30 02:25 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 final scoped Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 17 server test files with 336 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings held for release review (P9-16). Sole completion evidence for these tasks. |
 | 2026-08-30 02:29 UTC | `phase2-p2-15-api-composition` | P2-15/P2-16/P2-22 focused Docker Compose typecheck and `api.test.ts` | **Passed:** 25 tests over the real durable stack. Two initial failures were test defects, not product defects: the service correctly returns the frozen `DUPLICATE_AGENT` code where the test expected `VALIDATION_FAILED`, and a temp-directory cleanup raced a still-running background loop. Both were corrected without weakening an assertion. |
 | 2026-08-30 02:31 UTC | `phase2-p2-15-api-composition` | Race and API suites repeated eight times through Docker Compose | **Passed 8/8, no flakes.** |
 | 2026-08-30 02:32 UTC | `phase2-p2-15-api-composition` | **P2-17 live composition-root boot** in a disposable container | **Passed:** the built server started, `/api/health` returned `200`, authenticated `/api/coordination-runs` returned `200 {"runs":[]}`, an unknown run returned `404` in the frozen envelope, the removed `/events` route returned `404`, and the new database was written at `"version": 2` with all five coordination collections. Run against container-local temporary data directories; real `data/`, `workspaces/`, and `codex-home/` were never mounted or touched. |
@@ -327,6 +372,11 @@ no task was promoted on a host-only or focused run.
 - Approved Phase 2 follow-up mini-RFCs remove redundant `PromptEnvelope.includedArtifactIds` and exclude `leaseToken` only from the public attempt read model, leaving durable lease enforcement unchanged.
 - Phase 4 uses fixture-driven automated component tests for all required UI states, with browser verification for the real normal and stop flows; both gates passed and details are recorded in `ASSUMPTIONS_AND_DECISIONS.md`.
 - Active detail polling uses a monotonic epoch to restart after the explicit start transition, avoiding dependence on React batching when the selected run ID is unchanged.
+- The implementation plan now has nine phases. Phases 5–8 build the shared-session workflow (session contracts, session core, session durable, session UI); the former Phase 5 release phase becomes Phase 9 with its task IDs renumbered from P5-xx to P9-xx. Phase 9 releases both workflows.
+- The session extension is governed by `overview-sessions.md` (repository-local authority, adapted from the team's extension plan); `overview.md` remains the authority for the verified workflow and the shared engine semantics.
+- Session contract code (additive types, contracts, fixtures) lands in Phase 5; session behavior (workflow, protocol, context, service create branch, walking skeleton) lands in Phase 6, mirroring the original Phase 0 and Phase 1 split.
+- The session prompt never states the expected number; Agents derive it from the transcript and the countdown validator is the sole authority. Wrong numbers retry the same Agent and a second failure ends the run with `MAX_ATTEMPTS_EXCEEDED`.
+- The session extension includes a second protocol, `free_chat`, on the same `shared_session_v1` workflow: bounded non-empty messages, completion at `maxTurns` (default 6) or user stop, no start value and no next-expected state. The middleware guarantees mechanics and never judges message substance.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

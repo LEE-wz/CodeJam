@@ -99,4 +99,4 @@ Phase 4 is complete only when:
 
 ## Handoff to Phase 5
 
-Freeze UI scope, select stable demo fixtures/assets, and set `P5-01` as the next action. From here, prefer documentation, tests, rehearsal, and release blockers over new features.
+The session extension (Phases 5–8) now follows Phase 4. Set `P5-01` as the next action: team approval of the session mini-RFC in [`../overview-sessions.md`](../overview-sessions.md). UI scope freezes during Phase 9 release work; until then, prefer the session instruction sheets, tests, rehearsal, and release blockers over new features.

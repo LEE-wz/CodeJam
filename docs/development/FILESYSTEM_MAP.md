@@ -20,6 +20,7 @@ Reading a direct dependency is allowed only far enough to understand the contrac
 | `docs/development/README.md` | Mandatory development procedure | Start and end of every task |
 | `docs/development/STATUS.md` | Current phase, checkpoint, evidence, next action | Start and end of every task |
 | `docs/development/overview.md` | Product plan and frozen contracts | Contract or phase behavior must be confirmed |
+| `docs/development/overview-sessions.md` | Shared-session workflow contract authority | Session phase contract or behavior must be confirmed |
 | `docs/development/ASSUMPTIONS_AND_DECISIONS.md` | Resolved questions and deviations | A prior decision or ambiguity is relevant |
 | `docs/development/PHASE_2_HANDOFF.md` | Decisions and constraints carried out of Phase 1 | Start of Phase 2, and before any mini-RFC affecting `DatabaseV2` |
 | `docs/development/phases/<current-phase>.md` | Current instruction sheet | Every task; do not open later phases without a need |
@@ -127,13 +128,89 @@ Only inspect provider/runtime files when a direct `AgentService` or `AgentRunner
 
 Do not inspect repository/store internals, runtime providers, deployment files, or real persisted run data for UI implementation. Use redacted fixtures or the documented API.
 
-## Phase 5 — Documentation and release
+## Phase 5 — Session contracts
+
+**Primary paths**
+
+- `docs/development/overview-sessions.md`
+- `docs/development/**`
+- `apps/server/src/coordination/types.ts`
+- `apps/server/src/coordination/contracts.ts`
+- `apps/server/src/coordination/testing/**`
+- new empty/minimal session modules directly named by the Phase 5 guide
+
+**Conditional paths**
+
+- `apps/server/src/types.ts` and `apps/server/src/store.ts` to confirm existing v1/v2 types only
+- `apps/server/src/agent-service.ts` to confirm the execution boundary only
+- existing coordination tests for contract compatibility
+
+Do not implement session behavior in this phase. Contracts and fixtures only. Do not inspect web UI, deployment, runtime-provider implementations, workspaces, or generated data.
+
+## Phase 6 — Session workflow, protocol, context (in memory)
+
+**Primary paths**
+
+- `apps/server/src/coordination/session-workflow.ts` (new)
+- `apps/server/src/coordination/workflow.ts` (dispatch only)
+- `apps/server/src/coordination/schemas.ts`
+- `apps/server/src/coordination/artifact-protocol.ts`
+- `apps/server/src/coordination/context-builder.ts`
+- `apps/server/src/coordination/service.ts`
+- `apps/server/src/coordination/testing/**`
+- matching `*.test.ts` files
+- frozen coordination types/contracts as read-only references
+
+**Conditional paths**
+
+- `apps/server/tsconfig.json`, root TypeScript config, and package files when compilation requires them
+- `apps/server/src/coordination/errors.ts` for safe error mapping
+
+Do not access the real store, runtime providers, `AgentService`, web app, deployment folders, or user runtime data in this phase.
+
+## Phase 7 — Session persistence, API, and composition
+
+**Primary paths**
+
+- `apps/server/src/coordination/repository.ts`
+- `apps/server/src/coordination/routes.ts`
+- `apps/server/src/coordination/service.ts`
+- `apps/server/src/app.ts`, `apps/server/src/index.ts`
+- `apps/server/src/coordination/events.ts` only where a session event detail requires an allowlisted addition
+- matching test fixtures and `*.test.ts` files
+
+**Conditional paths**
+
+- `apps/server/src/store.ts`, `apps/server/src/types.ts` only to confirm the existing v2 shape
+- `apps/server/src/agent-service.ts` only for the reservation interface boundary; no execution seam changes
+
+Use temporary test directories for persistence tests. Do not open or mutate real `data/`, `.local/`, `workspaces/`, or `codex-home/` content.
+
+## Phase 8 — Session UI and real rehearsal
+
+**Primary paths**
+
+- `apps/web/src/coordination-types.ts`
+- `apps/web/src/coordination-api.ts`
+- coordination UI components/tests under `apps/web/src/`
+- `apps/web/src/App.tsx`, `api.ts`, `types.ts`, and `styles.css`
+- redacted coordination API fixtures, including session fixtures
+
+**Conditional paths**
+
+- server coordination types/routes as read-only API references
+- `apps/web/package.json`, TypeScript/Vite configuration
+- `docs/assets/` only when capturing approved final assets
+
+Do not inspect repository/store internals, runtime providers, deployment files, or real persisted run data for UI implementation. Use redacted fixtures or the documented API.
+
+## Phase 9 — Documentation and release
 
 **Primary paths**
 
 - `README.md`
 - `docs/development/**`
-- Relay documentation files named by the Phase 5 guide
+- Relay documentation files named by the Phase 9 guide
 - `docs/assets/` for finalized approved screenshots
 - package/Compose/Docker files needed to verify documented commands
 
