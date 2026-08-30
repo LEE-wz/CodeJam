@@ -3,6 +3,7 @@
 **Last audit:** 2026-08-30 (Checkpoint 7 verified)
 **Audited base:** `cc6f43c` (verified Phase 6 checkpoint record)
 **Implementation branch:** `codex/phase7-durable-session-backend` (base `cc6f43c`)
+**Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Phase 7 — Durable Session Backend and API
 **Current gate:** Checkpoint 7 verified by the full Docker Compose check
 **Overall state:** Phases 0–7 `complete`; Phases 8–9 not started
