@@ -7,6 +7,7 @@ import type {
   CoordinationRuntime,
   CoordinationServiceContract,
   IdGenerator,
+  SharedSessionWorkflow,
   VerifiedHandoffWorkflow,
   WorkflowDecision,
 } from "./contracts.js";
@@ -21,7 +22,11 @@ import {
   type CoordinationRunDetails,
   type CoordinationRunId,
   type CoordinationTurn,
+  SESSION_LIMITS,
+  type CoordinationParticipant,
   type CreateCoordinationRunRequest,
+  type CreateRunRequest,
+  type CreateSessionRunRequest,
   type RequiredSection,
 } from "./types.js";
 
@@ -91,6 +96,12 @@ interface CoordinationServiceDependencies {
   agentDirectory: CoordinationAgentDirectory;
   repository: CoordinationRepository;
   workflow: VerifiedHandoffWorkflow;
+  /**
+   * Registered when the shared-session workflow is available. Optional so every
+   * existing composition and test that only runs verified handoffs keeps
+   * working unchanged.
+   */
+  sessionWorkflow?: SharedSessionWorkflow | undefined;
   contextBuilder: ContextBuilder;
   artifactProtocol: ArtifactProtocol;
   runtime: CoordinationRuntime;
@@ -121,7 +132,120 @@ export class CoordinationService implements CoordinationServiceContract {
     return this.dependencies.repository.getRunDetails(id);
   }
 
-  async createRun(input: CreateCoordinationRunRequest): Promise<CoordinationRun> {
+  /**
+   * Selects the decision source for a run from its durable policy. An Agent
+   * cannot reach this: the workflow is fixed at create time and read from the
+   * stored run, never from model output.
+   */
+  private workflowFor(run: CoordinationRun): {
+    decideNext(view: Parameters<VerifiedHandoffWorkflow["decideNext"]>[0]): WorkflowDecision;
+  } {
+    if (run.policy.workflow === "shared_session_v1") {
+      const sessionWorkflow = this.dependencies.sessionWorkflow;
+      if (!sessionWorkflow) {
+        throw new CoordinationError(
+          500,
+          "INTERNAL_ERROR",
+          "Shared session workflow is not registered",
+        );
+      }
+      return sessionWorkflow;
+    }
+    return this.dependencies.workflow;
+  }
+
+  async createRun(input: CreateRunRequest): Promise<CoordinationRun> {
+    return input.workflow === "shared_session_v1"
+      ? this.createSessionRun(input)
+      : this.createVerifiedRun(input);
+  }
+
+  /**
+   * Minimal shared-session create (P5-07). Enough to prove the contracts hold
+   * and the dispatch resolves; P6-10 owns full create validation, the policy
+   * range checks, and the create-time context probe with a session turn shape.
+   */
+  private async createSessionRun(
+    input: CreateSessionRunRequest,
+  ): Promise<CoordinationRun> {
+    const agentIds = input.agents;
+    if (
+      agentIds.length < SESSION_LIMITS.minParticipants ||
+      agentIds.length > SESSION_LIMITS.maxParticipants
+    ) {
+      throw new CoordinationError(
+        400,
+        "VALIDATION_FAILED",
+        `A session needs between ${SESSION_LIMITS.minParticipants} and ${SESSION_LIMITS.maxParticipants} Agents`,
+      );
+    }
+    if (new Set(agentIds).size !== agentIds.length) {
+      throw new CoordinationError(400, "DUPLICATE_AGENT", "Each participant must be distinct");
+    }
+
+    const agents = await this.dependencies.agentDirectory.getAgentsByIds(agentIds);
+    const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
+    if (agentIds.some((id) => !agentsById.has(id))) {
+      throw new CoordinationError(404, "NOT_FOUND", "Selected Agent was not found");
+    }
+
+    const protocol = input.policy?.sessionProtocol ?? "countdown";
+    const startValue =
+      protocol === "countdown"
+        ? (input.policy?.sessionStartValue ?? SESSION_LIMITS.defaultStartValue)
+        : undefined;
+    const maxTurns =
+      input.policy?.maxTurns ??
+      (protocol === "countdown"
+        ? (startValue ?? SESSION_LIMITS.defaultStartValue)
+        : SESSION_LIMITS.defaultFreeChatTurns);
+
+    const policy = {
+      ...DEFAULT_COORDINATION_POLICY,
+      workflow: "shared_session_v1" as const,
+      // A session turn produces one bounded message, never a revised document.
+      maxRevisions: 0,
+      maxTurns,
+      sessionProtocol: protocol,
+      ...(startValue !== undefined ? { sessionStartValue: startValue } : {}),
+      ...(input.policy?.perAttemptTimeoutMs !== undefined
+        ? { perAttemptTimeoutMs: input.policy.perAttemptTimeoutMs }
+        : {}),
+    };
+
+    // Selection order is the turn order (overview-sessions.md Section 7).
+    const participants: CoordinationParticipant[] = agentIds.map((agentId) => {
+      const agent = agentsById.get(agentId);
+      if (!agent) {
+        throw new CoordinationError(404, "NOT_FOUND", "Selected Agent was not found");
+      }
+      return { role: "participant" as const, agentId, agentNameSnapshot: agent.name };
+    });
+
+    const timestamp = this.dependencies.clock.nowIso();
+    const run: CoordinationRun = {
+      id: this.dependencies.ids.runId(),
+      name: input.name.trim(),
+      objective: input.objective.trim(),
+      requiredSections: [],
+      participants,
+      policy,
+      status: "created",
+      phase: "sessioning",
+      revision: 0,
+      nextTurnSequence: 1,
+      ...(startValue !== undefined ? { sharedState: { nextExpectedNumber: startValue } } : {}),
+      version: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    return this.dependencies.repository.createRun({ run });
+  }
+
+  private async createVerifiedRun(
+    input: CreateCoordinationRunRequest,
+  ): Promise<CoordinationRun> {
     const requiredSections = this.normalizeRequiredSections(input.requiredSections);
     this.validateCreateInput(input, requiredSections);
     const agentIds = [
@@ -334,7 +458,7 @@ export class CoordinationService implements CoordinationServiceContract {
         return;
       }
 
-      const decision = this.dependencies.workflow.decideNext({
+      const decision = this.workflowFor(details.run).decideNext({
         run: details.run,
         turns: details.turns,
         artifacts: details.artifacts,

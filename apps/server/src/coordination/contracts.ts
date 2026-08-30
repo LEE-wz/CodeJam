@@ -14,6 +14,7 @@ import type {
   CoordinationTurn,
   CoordinationTurnId,
   CreateCoordinationRunRequest,
+  CreateRunRequest,
 } from "./types.js";
 
 export interface Clock {
@@ -33,7 +34,7 @@ export interface CoordinationServiceContract {
   initialize(): Promise<void>;
   listRuns(): Promise<CoordinationRun[]>;
   getRun(id: CoordinationRunId): Promise<CoordinationRunDetails | undefined>;
-  createRun(input: CreateCoordinationRunRequest): Promise<CoordinationRun>;
+  createRun(input: CreateRunRequest): Promise<CoordinationRun>;
   startRun(id: CoordinationRunId): Promise<CoordinationRun>;
   stopRun(id: CoordinationRunId): Promise<CoordinationRun>;
 }
@@ -69,6 +70,32 @@ export interface WorkflowView {
 
 export interface VerifiedHandoffWorkflow {
   decideNext(view: WorkflowView): WorkflowDecision;
+}
+
+/**
+ * The shared-session decision source. Deliberately the same shape as
+ * `VerifiedHandoffWorkflow`: both are pure functions of committed durable state
+ * and both return the frozen `WorkflowDecision`, so the orchestration loop in
+ * `CoordinationService` needs no branch of its own.
+ *
+ * Round-robin position derives from committed session turns only, so a retry
+ * never advances it (overview-sessions.md Section 5).
+ */
+export interface SharedSessionWorkflow {
+  decideNext(view: WorkflowView): WorkflowDecision;
+}
+
+/**
+ * Selects the decision source for a run from `run.policy.workflow`.
+ *
+ * The dispatch is backend-owned and reads only durable state. An Agent cannot
+ * reach it, so no Agent can move its run onto a different workflow. A run's
+ * workflow is fixed at create time and never changes.
+ */
+export interface CoordinationWorkflowDispatch {
+  forRun(run: CoordinationRun): {
+    decideNext(view: WorkflowView): WorkflowDecision;
+  };
 }
 
 export interface PromptEnvelope {
