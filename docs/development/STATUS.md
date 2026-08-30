@@ -39,7 +39,8 @@ Before they write routing:
    `ASSUMPTIONS_AND_DECISIONS.md`.
 2. Read the **Phase 6 handoff notes** in full. Items 2 and 3 describe defects
    the compiler will not surface.
-3. Create a Phase 6 task branch from the recorded frozen commit.
+3. Create a Phase 6 task branch from the current `main` tip (frozen contract
+   `2fe14eb` plus the consolidation pass).
 
 Nine loud placeholders mark the work: every one throws with the task ID that
 replaces it, so `grep -rn "lands in P6-" apps/server/src/coordination/` lists

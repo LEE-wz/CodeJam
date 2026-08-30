@@ -16,7 +16,7 @@ If atomicity, event data, reservation semantics, API validation, or allowed file
 ## Required outputs
 
 - Repository commit case for `session_message` that decrements `sharedState.nextExpectedNumber` in the same atomic mutation.
-- `expectedArtifactTypeForTurn` coverage for `session_turn`, plus a sweep of every exhaustive switch touched by the new enum members.
+- An exhaustive typed `expectedArtifactTypeForTurn` map (no `default` branch) with the `session_turn → "session_message"` case, plus a sweep of every remaining exhaustive switch touched by the new enum members.
 - Session create-body union in the routes with the validation rules from overview-sessions.md Section 7.
 - Composition-root wiring of the session workflow and dispatch.
 - Race, restart, API, and evidence-timeline tests for session runs.
@@ -34,7 +34,7 @@ If atomicity, event data, reservation semantics, API validation, or allowed file
 - [ ] **P7-04** Implement the create-body union in `coordination/routes.ts`: `workflow` optional and defaulting to `"verified_handoff_v1"`; the session variant validates an ordered `agents` array of 2..6 distinct IDs, `sessionProtocol` (`"countdown"` default, `"free_chat"`), countdown `sessionStartValue` 2..12 with `maxTurns >= sessionStartValue`, free-chat `maxTurns` 3..12 with `sessionStartValue` forbidden, absent or empty `requiredSections`, and rejection of `maxRevisions`. The verified body shape is accepted unchanged.
 - [ ] **P7-05** Mirror every session rule in the service create path so HTTP validation is never the only enforcement.
 - [ ] **P7-06** Add Fastify injection tests for the session surface: create `201`, start `202`, detail with `sharedState` and without leases; every session and protocol validation `400`; `404` unknown Agent; `409` `AGENT_NOT_READY` and `AGENT_RESERVED`; `413` oversized body; auth required; safe `500`.
-- [ ] **P7-07** Wire the composition root: construct `SharedSessionWorkflowV1`, register the workflow dispatch in `index.ts`, and initialize coordination exactly as today. No new dependencies are added.
+- [ ] **P7-07** Wire the composition root in `index.ts`: construct `SharedSessionWorkflowV1` and pass it to `CoordinationService` as the `sessionWorkflow` dependency (the dispatch contract adopted in P6-02 then resolves session runs to it), and initialize coordination exactly as today. No new dependencies are added.
 - [ ] **P7-08** Add evidence-timeline fixture tests: the detail response for normal countdown, wrong-number retry, free-chat completion (at `maxTurns` and on a unanimous `done` round), stopped, and interrupted session fixtures is ordered and coherent, with every event type in the frozen set.
 - [ ] **P7-09** Verify reservation inheritance with tests: a session run reserves all of its participants through the existing derived reservation; reservations release on terminal settlement; two runs with overlapping participants cannot both start; verified-path reservation tests remain green.
 
