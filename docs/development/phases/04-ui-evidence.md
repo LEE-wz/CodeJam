@@ -5,6 +5,13 @@
 
 ## Entry criteria
 
+Preflight status on `codex/phase4-preflight-cleanup`: the Phase 3 checkpoint is
+stable, API strings are frozen, and the reusable lease-free fixture matrix is
+in `apps/server/src/coordination/testing/phase4-response-fixtures.ts`. The
+automated/web-browser test split is recorded in
+[`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md). These are
+preconditions only; no `P4-*` task is complete yet.
+
 - A Phase 4 task branch has been created from the completed real-runtime checkpoint.
 - The Phase 4 paths in [`../FILESYSTEM_MAP.md`](../FILESYSTEM_MAP.md) have been reviewed and server internals remain out of scope except as read-only API references.
 - Phase 3 real runtime is stable.

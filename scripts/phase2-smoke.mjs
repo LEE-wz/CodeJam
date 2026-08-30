@@ -82,11 +82,8 @@ if (mode === "first") {
   }
   console.log("9. turns/attempts persisted:", details.turns.length, "turn(s),", details.attempts.length, "attempt(s)");
   console.log("10. events carry no lease token:", !JSON.stringify(details.events).includes("leaseToken"));
+  console.log("    public attempts carry no lease token:", details.attempts.every((attempt) => !("leaseToken" in attempt)));
   console.log("    events carry no prompt/objective text:", !JSON.stringify(details.events).includes("student marketplace"));
-  console.log("    NOTE: attempts[] do expose leaseToken - it is a required field of the",
-    "\n          frozen CoordinationAttempt type, so the frozen detail response carries it.",
-    "\n          No route consumes a lease token, so it is not exploitable, but Phase 4",
-    "\n          would ship it to the browser. Needs a decision before the UI lands.");
 
   await (await import("node:fs/promises")).writeFile("/workspace/run-id", runId);
 } else {

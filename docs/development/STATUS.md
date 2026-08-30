@@ -1,11 +1,11 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 03:47 UTC
-**Audited base:** `257f933` on `main`; current implementation is the uncommitted working tree on `phase3-p3-01-real-runtime`
-**Implementation branch:** `phase3-p3-01-real-runtime` (base `257f933`)
-**Current phase:** Phase 3 — Real Agent Runtime and Recovery (complete)
+**Last audit:** 2026-08-30 (Phase 4 preflight cleanup)
+**Audited base:** `12d4612` on `main`
+**Implementation branch:** `codex/phase4-preflight-cleanup` (base `12d4612`)
+**Current phase:** Phase 4 preflight — cleanup only; implementation not started
 **Current gate:** Checkpoint 3 verified
-**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 `complete`; Phase 3 `complete`; Phase 4 not started and not authorised
+**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 `complete`; Phase 3 `complete`; Phase 4 preflight complete, implementation not started or authorised
 
 ## Resume here
 
@@ -23,15 +23,22 @@ real-provider rehearsals.
 | Reservation conflict and release | Live competing Playground sends returned structured `409 AGENT_RESERVED`; automated tests prove terminal release across mutable Agent operations |
 | Default timeout is feasible | Per-turn range 12.919–59.585 seconds; default remains 120 seconds with no timeout mini-RFC |
 | Scoped cancellation cannot stop later work | Regression test cancels one Agent Run by ID, starts a later run, and proves the stale run ID cannot target it |
-| Full regression gate | Docker Compose `npm run check` passed: 20 files / 373 tests, both builds |
+| Full regression gate | Docker Compose `npm run check` passed on the Phase 3 checkpoint: 20 files / 374 tests, both builds |
 
 Phase 2 follow-up is also closed: unexpected `500` values are no longer logged
 or returned, public detail attempts exclude `leaseToken`, the additive
 `truncated`/`outputDigest` inputs are approved, and the redundant
 `PromptEnvelope.includedArtifactIds` field is removed by mini-RFC.
 
-`P4-01` is the next task ID. Phase 4 remains unauthorised until the user signs
-off UI/evidence work.
+The preflight cleanup now provides a redacted response-fixture matrix for
+completed, rejection/revision, retry, timeout, stopped, failed, and interrupted
+runs; its validation test rejects internal capabilities and secret-bearing
+content. The web testing strategy is recorded below, and the stale Phase 2 smoke
+message about public lease exposure is corrected.
+
+`P4-01` is the next task ID. Before implementation, explicitly authorise Phase
+4 and decide whether the missing optional `relay/contracts-v1` Git tag should be
+created. The immutable contract reference `ea469b2` already satisfies P0-11.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
@@ -47,6 +54,7 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 | Item | Status | Deadline |
 |---|---|---|
 | Dependency audit findings | Open: `npm ci` reports 1 moderate and 5 high findings. | P5-16 security/release review; do not apply breaking upgrades mid-phase. |
+| Optional contract tag is absent | The accepted contract is immutably recorded as `ea469b2`, but neither the local nor remote repository has `relay/contracts-v1`. | Decide before release whether to create/push the convenience tag; no tag was created during cleanup. |
 
 ## Last checkpoint
 
@@ -66,8 +74,9 @@ call in any automated test. The full Docker Compose `npm run check` passed on th
 Phase 1 tip: server and web typechecks, 14 server test files with 237 tests, web
 build, and server build.
 
-Checkpoint 0 remains as recorded: commit `ea469b2`, tagged `relay/contracts-v1`,
-froze the overview-aligned types and interfaces.
+Checkpoint 0 remains as recorded: immutable commit `ea469b2` froze the
+overview-aligned types and interfaces. Documentation previously claimed an
+additional `relay/contracts-v1` tag, but the tag is absent locally and remotely.
 
 ## Phase 1 handoff to Phase 2
 
@@ -95,7 +104,7 @@ will depend on it.
 | P0-01–P0-03 | `complete` | Compose reports Node `22.23.2`, npm `10.9.8`; clean lockfile install and full check pass. |
 | P0-04–P0-05 | `complete` | User-performed authenticated checks passed for the full temporary-Agent lifecycle, one Playground turn, three fresh Agents, one ordinary turn each, readiness, persistence, and isolation. |
 | P0-06–P0-10 | `complete` | Scope/ADRs reviewed; contracts corrected; extra endpoint removed; terminal stop semantics frozen with tests. |
-| P0-11 | `complete` | Immutable commit `ea469b2`, tag `relay/contracts-v1`. |
+| P0-11 | `complete` | Immutable commit reference `ea469b2`; the optional convenience tag `relay/contracts-v1` is not present. |
 | P0-12–P0-17 | `complete` | Module shells, deterministic kit, shared fixtures/fakes, scripted runtime, and construction test pass. |
 
 ## Phase 1 task ledger
@@ -143,7 +152,7 @@ no task was promoted on a host-only or focused run.
 
 | Area | Evidence | Status | Notes |
 |---|---|---|---|
-| Domain model/default policy | `apps/server/src/coordination/types.ts` | `complete` | Frozen against overview Sections 7–8 at `relay/contracts-v1`. |
+| Domain model/default policy | `apps/server/src/coordination/types.ts` | `complete` | Frozen against overview Sections 7–8 at immutable contract commit `ea469b2`. |
 | Component contracts | `apps/server/src/coordination/contracts.ts` | `complete` | Frozen overview boundaries include repository/runtime/workflow/context/protocol/redaction/execution control. |
 | Coordination error envelope | `coordination/errors.ts`, `app.ts` | `complete` | `CoordinationError` receives structured API envelope. |
 | Service create/list/detail | `coordination/service.ts` | `complete` | P1-14 adds slug normalisation of required sections, frozen title/key limits, and a create-time context-cap probe that builds a real probe prompt. |
@@ -181,6 +190,7 @@ no task was promoted on a host-only or focused run.
 ### Phase 4
 
 - Web types/API, create form, run detail/timeline/artifacts, polling/stop, accessibility/responsiveness, and real browser verification.
+- Preflight cleanup is complete: response fixtures and their safety/consistency tests exist, the test strategy is recorded, and checkpoint metadata is reconciled. No `P4-*` implementation task has been marked complete.
 
 ### Phase 5
 
@@ -190,6 +200,7 @@ no task was promoted on a host-only or focused run.
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-30 04:51 UTC | `codex/phase4-preflight-cleanup` working tree | Phase 4 preflight Docker Compose image build and full `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, web build, and server build. The new three-test fixture suite covers all seven required UI scenarios, gapless evidence, consistent run IDs, and forbidden capability/secret strings. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
 | 2026-08-30 03:36 UTC | `phase3-p3-01-real-runtime` working tree | Initial P3-01–P3-13 focused Compose suites | **Failed:** 84/85 tests passed; the scoped-cancellation test attempted to resolve the second deferred runner before it had started. The deterministic test waited for runner admission before resolving it; no product assertion was weakened. |
 | 2026-08-30 03:38 UTC | `phase3-p3-01-real-runtime` working tree | P3-01–P3-13 focused Compose typecheck and tests | **Passed:** server typecheck plus 15 tests — eight AgentService regressions, six runtime gateway race/cleanup tests, and one complete three-role real-boundary integration test. |
 | 2026-08-30 03:39 UTC | `phase3-p3-01-real-runtime` working tree | Phase 3 full Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 20 server test files with 373 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
@@ -283,6 +294,7 @@ no task was promoted on a host-only or focused run.
 | ~~Docker unreachable from the environment used for P1-07–P1-17~~ | Resolved. The gate was run on a host with Docker and passed; the tasks were promoted on that evidence. | Closed 2026-08-29. Any future assistant-run work must route the gate to a host with a container engine rather than substituting a host runner. |
 | ~~Phase 1 implementation decisions not yet confirmed~~ | Resolved. All nine were confirmed unchanged on 2026-08-30 before P2-01, together with the four Phase 2 handoff decisions. | Closed 2026-08-30. |
 | `stale_ignored` attempt status has no producer | By the confirmed §2.1 decision, evidence lives in the `attempt.stale_ignored` event, so the `CoordinationAttemptStatus` member stays unwritten. Phase 4 must read it from the event stream, not the attempt row. | Accepted. Revisit only if the Phase 4 timeline cannot render it from events. |
+| Optional `relay/contracts-v1` tag is absent | Older status text incorrectly implied the convenience tag existed. The immutable commit remains sufficient for the contract gate. | Recorded during Phase 4 preflight. Create/push a tag only after an explicit decision. |
 
 ## Decision log summary
 
@@ -293,7 +305,7 @@ no task was promoted on a host-only or focused run.
 - Three real rehearsals measured 12.919–59.585 seconds per turn; the 120-second default attempt timeout remains unchanged.
 - Terminal stop is frozen as idempotent `202` with explicit completed/failed/stopped route tests.
 - The detail route is the only event retrieval contract; the accidental `/events` endpoint was removed.
-- Frozen contract commit is `ea469b2`, tagged `relay/contracts-v1`.
+- Frozen contract commit is the immutable reference `ea469b2`; the optional `relay/contracts-v1` convenience tag is absent.
 - Approved P1-01 mini-RFC adds committed turns to `WorkflowView`; selectors order by `turn.sequence`, never artifact array position or timestamps.
 - Approved P1-05 mini-RFC freezes numeric artifact field/array limits while retaining the separate raw-output cap for P1-06.
 - Nine Phase 1 implementation decisions are recorded in `ASSUMPTIONS_AND_DECISIONS.md`; they change no frozen type, route, or persisted shape, and were confirmed unchanged on 2026-08-30.
@@ -302,6 +314,7 @@ no task was promoted on a host-only or focused run.
 - `app.ts` must register `setErrorHandler` before the production static/not-found block; the reverse order silently breaks the frozen error envelope in production only.
 - The approved additive mini-RFC adds `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`, the only route by which the confirmed §1.2 and §1.3 decisions can reach the repository.
 - Approved Phase 2 follow-up mini-RFCs remove redundant `PromptEnvelope.includedArtifactIds` and exclude `leaseToken` only from the public attempt read model, leaving durable lease enforcement unchanged.
+- Phase 4 uses fixture-driven automated component tests for all required UI states, with browser verification reserved for the real normal and stop flows; details are recorded in `ASSUMPTIONS_AND_DECISIONS.md`.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

@@ -1,8 +1,8 @@
 # Relay Assumptions and Resolved Questions
 
 **Last audited:** 2026-08-30  
-**Current implementation base:** `257f933`; Phase 3 working branch `phase3-p3-01-real-runtime`
-**Accepted contract commit:** `ea469b2` (`relay/contracts-v1`)
+**Current implementation base:** `12d4612`; Phase 4 preflight branch `codex/phase4-preflight-cleanup`
+**Accepted contract commit:** immutable reference `ea469b2` (optional `relay/contracts-v1` tag is absent)
 **Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
 
 This file closes questions that can be answered from the checked-out code and isolates the few items that require measurement or a team contract change.
@@ -12,8 +12,8 @@ This file closes questions that can be answered from the checked-out code and is
 | Question | Answer | Consequence |
 |---|---|---|
 | Does `AgentService` expose completion as a promise? | At the Sprint 0 baseline, no. Phase 3 now exposes internal `startExecution()` returning `AgentExecutionHandle`; public `sendMessage()` remains the compatibility wrapper. | Relay uses the handle and `cancelRun(agentRunId)` without bypassing AgentService. |
-| Does `JsonStore` have a migration hook? | No. `initialize()` parses directly as `Database` and rejects any version other than `1`. | Phase 2 must add explicit v1 parsing and additive v1→v2 migration before changing the empty database to v2. A future/invalid version must be rejected without overwriting the file. |
-| Where are route modules registered? | `createApp(config, service, coordination?)` conditionally calls `registerCoordinationRoutes(...)` after existing Agent routes and before static-file setup. | Preserve this seam. Phase 2 must construct the real coordination dependencies in `index.ts`, initialize them after `AgentService`, and pass the service into `createApp`. |
+| Does `JsonStore` have a migration hook? | The Sprint 0 baseline did not. Phase 2 added explicit `DatabaseV1` parsing and additive v1→v2 migration; new databases are v2 and future/invalid versions are rejected before writes. | Preserve the additive migration and unknown-field retention behavior. |
+| Where are route modules registered? | `createApp(config, service, coordination?)` conditionally registers Relay routes. `index.ts` now constructs the durable repository, workflow, protocol, context builder, AgentService runtime, and coordination service after `AgentService` initialization. | Preserve this composition seam and keep server internals out of the Phase 4 web client. |
 | Which spelling is canonical? | Code and API values use `finalizer`. | Use “Finaliser” in user-facing copy to match the product narrative, but never use it as a stored enum or API value. Tests should assert `finalizer` in code. |
 | How should stopping a terminal run behave? | The service returns the terminal run and the route returns `202` with `accepted: true`. | Stop is idempotent for MVP. Route tests cover completed, failed, and stopped runs; changing this now requires a mini-RFC. |
 
@@ -206,6 +206,32 @@ The same contract freeze restored the API response envelopes, `Redactor`, and th
 
 The domain types, interfaces, service, and routes were present before the contract gate. Commit `ea469b2` adds the missing shared deterministic artifacts, controls, fakes, module shells, construction test, and explicit contract corrections. Checkpoint 0 still requires the manual baseline and three-Agent checks.
 
+### Contract tag discrepancy
+
+P0-11 allowed either a Git tag or an immutable commit reference. The immutable
+reference is `ea469b2`, so the contract gate remains satisfied. Earlier status
+text also claimed that `relay/contracts-v1` existed, but a Phase 4 preflight
+check found no such local or remote tag. Cleanup corrects the record and does
+not create or push a tag; that optional repository-level action requires an
+explicit decision before release.
+
+### Phase 4 web testing strategy
+
+**Status:** Recorded during the 2026-08-30 Phase 4 preflight cleanup.
+
+Phase 4 will add Vitest plus React Testing Library with a jsdom environment to
+the web workspace when the first UI behavior is implemented. Automated tests
+will render the redacted fixture matrix and cover completed,
+rejection/revision, retry, timeout, stopped, failed, and interrupted states.
+Polling tests will use controlled timers and requests to prove one request chain
+and cleanup on terminal state, selection change, and unmount. The web test
+script will join the root `npm run check` gate when introduced.
+
+Browser verification remains required for one real create/start/poll/complete
+flow and one stop flow (P4-16), plus keyboard, responsive, and legibility checks.
+Fixture tests supplement that evidence; they do not replace the real browser
+gate. No web test dependency is added during preflight cleanup.
+
 ### Shared conversation availability
 
 The supplied ChatGPT share URL was inaccessible during this audit: the page reader could not fetch it, direct HTTP was stopped by a Cloudflare challenge, and the available browser runner requires Node 20 while the environment currently has Node 18. The implementation plan was therefore treated as authoritative, per the user request. If the shared conversation contains decisions absent from `overview.md`, copy those decisions into this file before freezing Checkpoint 0.
@@ -215,7 +241,7 @@ The supplied ChatGPT share URL was inaccessible during this audit: the page read
 - The project is TypeScript with ECMAScript modules.
 - Fastify and Zod are the server route/validation pattern; React is the client.
 - `AgentService.initialize()` marks queued/running Agent runs cancelled and busy Agents ready after restart.
-- The JSON database is version 1 and `JsonStore` serializes mutations for a single process.
+- The JSON database is version 2; `JsonStore` migrates v1 additively and serializes mutations for a single process.
 - The web client uses the existing API wrapper/polling style.
 - Node.js 22+ and npm 10+ are repository prerequisites.
 
