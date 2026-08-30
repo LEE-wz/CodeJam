@@ -1,12 +1,12 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 (Checkpoint 7 verified)
-**Audited base:** `cc6f43c` (verified Phase 6 checkpoint record)
-**Implementation branch:** `codex/phase7-durable-session-backend` (base `cc6f43c`)
+**Last audit:** 2026-08-30 (Checkpoint 8 verified and merged to `main`)
+**Audited checkpoint:** Phase 8 implementation `e93ffb5`, merged from `phase-8`
+**Implementation branch:** `phase-8` (base `9e82e50`, merged)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 7 — Durable Session Backend and API
-**Current gate:** Checkpoint 7 verified by the full Docker Compose check
-**Overall state:** Phases 0–7 `complete`; Phases 8–9 not started
+**Current phase:** Phase 9 - Documentation, Demo, and Release Candidate
+**Current gate:** Checkpoint 8 passed and merged to `main`; Checkpoint 9 not started
+**Overall state:** Phases 0-8 `complete`; Phase 9 `not_started`
 
 ## Nine-phase plan
 
@@ -20,24 +20,52 @@
 | 5 | Session contracts and freeze | `complete` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
 | 6 | Session core in memory | `complete` (Checkpoint 6: `82f5c85`; sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
 | 7 | Durable session backend and API | `complete` (Checkpoint 7 verified; sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
-| 8 | Session UI and real rehearsal | `not_started` (sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
+| 8 | Session UI and real rehearsal | `complete` (Checkpoint 8 verified; sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `not_started` (sheet: [`phases/09-release.md`](phases/09-release.md)) |
 
 The session extension was adopted from the team's Relay Sessions plan. Its repository-local contract authority is [`overview-sessions.md`](overview-sessions.md). Phase 9 was formerly Phase 5; its task IDs moved from P5-xx to P9-xx.
 
 ## Resume here
 
-**Phase 7 is complete on `codex/phase7-durable-session-backend`.** The branch
-adds atomic countdown-state commits to `DurableCoordinationRepository`, exhaustive
-turn-kind output maps, a session/verified create-body union, composition wiring
-for both workflows and both artifact protocols, and durable repository/API
-timeline coverage. The next implementation phase is P8-01 (session UI and real
-rehearsal); no Phase 8 code has been started.
+**Checkpoint 8 is complete and merged to `main`.** The verified Phase 8
+implementation remains at `e93ffb5` on `phase-8`; `main` contains it through a
+non-fast-forward merge. The pre-merge clean-copy Docker Compose gate passed 474
+server tests, 27 web tests, both typechecks, and both production builds (501
+tests total). When Phase 9 starts, create its task branch from this updated
+`main`; `P9-01` is next: freeze the product documentation set for both workflows,
+then prepare the three-minute demo and release-candidate evidence.
 
-Docker is available through the `docker-compose` compatibility binary rather
-than the absent `docker compose` subcommand. Validation used
-`LAUNCHPAD_ENV_FILE=/dev/null` solely to avoid loading the repository's absent
-local `.env`; no host npm result or secret-bearing environment was used.
+Docker Compose is available as `docker compose`. Baseline validation used
+`LAUNCHPAD_ENV_FILE=/dev/null` so the disposable verification service did not
+load repository-local secrets or runtime state.
+
+## Phase 8 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P8-01 | `complete` | Web-owned coordination types mirror the workflow union, participant/session turn kinds, session policy/shared state, typed session artifacts, and public attempt response without importing server internals. |
+| P8-02 | `complete` | The existing authenticated request path accepts the discriminated create union; list/detail/start/stop continue through the same bearer and structured-error conventions. |
+| P8-03 | `complete` | The create form has an explicit verified-handoff/shared-session workflow choice; verified fields and three-role behavior remain available. |
+| P8-04 | `complete` | Session form includes countdown/free-chat protocol, ordered 2..6 ready-Agent picker, start value, name/objective, turn ceiling, and timeout. |
+| P8-05 | `complete` | Client validation covers count/distinctness/readiness and protocol ranges, focuses the first invalid region, preserves the form on rejection, and keeps create/start separate. |
+| P8-06 | `complete` | Chronological transcript shows participant names, content, turn/attempt evidence, countdown shared state, and latest free-chat `done` state. Completed countdowns say `Complete` instead of presenting sentinel `0` as a next action. |
+| P8-07 | `complete` | Session turns use participant labels in the existing timeline; retry-safe protocol validation messages render without logs. |
+| P8-08 | `complete` | React text rendering escapes artifacts; empty/loading/error/long-content and terminal states are bounded and readable. |
+| P8-09 | `complete` | One 1.5-second timeout chain is proved across terminal state, selection change, unmount, start reconciliation, and single-request stop behavior. |
+| P8-10 | `complete` | Relay remains integrated through the existing `App.tsx` owner; Agent and Playground ownership was unchanged, and the verified workflow passed live regression. |
+| P8-11 | `complete` | Nine session fixtures plus seven verified fixtures cover running/retry/consensus/withdrawal/stopped/failed/interrupted/completed views; interaction tests cover labels, focus, safe text, polling, and stop. Desktop and mobile browser checks cover responsiveness. |
+| P8-12 | `complete` | Fresh demo Agents on `deepseek-v4-flash` completed real 10-to-1, unanimous free-chat, and verified-handoff runs in the Compose browser deployment. |
+| P8-13 | `complete` | A purpose-built participant genuinely returned `3` when the expected number was `5`; middleware emitted `attempt.invalid_output`, retried the same turn, accepted `5`, and the run completed. |
+| P8-14 | `complete` | Timings and the demo-budget conclusion are recorded below; Section 10 fallbacks remain confirmed for Phase 9 even though this provider was comfortably faster than the earlier measurements. |
+
+### Checkpoint 8 browser and timing evidence
+
+- **10-to-1 countdown:** completed all ten messages in exact order and round-robin assignment. Start-to-completion was **11.880s**; committed attempt durations averaged **1.181s**, with a **0.917-1.637s** range. All ten succeeded on attempt 1.
+- **Free chat:** three fresh participants reached unanimous latest `done: true` in three turns. Start-to-completion was **5.321s**.
+- **Wrong-number recovery:** the first participant genuinely answered `3` while the backend expected `5`. Attempt 1 was rejected with `Expected the next number 5, received 3`; attempt 2 succeeded, and the complete 5-to-1 run took **10.084s**.
+- **Verified regression:** Planner, Critic, and Finaliser completed proposal, approval, and finalization in three first-attempt turns and **11.335s**.
+- **Stop and layout:** a running free-chat session settled as `STOPPED_BY_USER` **0.462s** after start, cancelling its active attempt. The UI passed 1440×900 and 390×844 checks with no document-level horizontal overflow; semantic labels and error focus were present, and the browser console had no warnings or errors.
+- **Latency conclusion:** the real 10-turn path fits the three-minute budget on the measured fastest endpoint. Phase 9 must still retain the Section 10 mitigations: keep the populated 10-to-1 run, narrate a shorter 5-to-1 live run when provider latency rises, and preserve the stored wrong-number evidence. No credentials, lease capabilities, or raw prompts are included in this evidence.
 
 ## Phase 7 task ledger
 
@@ -173,20 +201,28 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 | Item | Status | Deadline |
 |---|---|---|
 | Dependency audit findings | Open: `npm ci` reports 1 moderate and 5 high findings. | P9-17 security/release review; do not apply breaking upgrades mid-phase. |
-| Session mini-RFC approval | The session extension plan and `overview-sessions.md` are drafted but not yet team-approved. | Phase 5 `P5-01`, before any session code lands. |
-| Session open decisions | `sessionStartValue` default 10 (2..12, countdown only), `workflow` field defaults to `verified_handoff_v1`, selection order is turn order, wrong numbers retry the same Agent then fail, free-chat sessions in scope (`sessionProtocol: "free_chat"`, default `maxTurns` 6). | Settle at `P5-01`; defaults recorded in `overview-sessions.md` Section 11. |
 | Misleading countdown run in local data | The "Test Relay" run (objective "Count down from 10 to 0") contains a final artifact claiming a countdown was executed when nothing was. | `P9-19`: delete from local demo data before judging evidence. |
 | Optional contract tag is absent | The accepted contract is immutably recorded as `ea469b2`, but neither the local nor remote repository has `relay/contracts-v1`. | Decide before release whether to create/push the convenience tag; no tag was created during cleanup. |
 
-## Last checkpoint
+## Checkpoint history
 
-Checkpoint 5 is complete. The additive session contract compiles, the session
+Checkpoint 8 is complete and merged to `main` from `phase-8`. The public web contract, shared-session
+create form, transcript, shared/consensus state, participant-labelled evidence,
+polling cleanup, and stop path are implemented. Real browser countdown,
+free-chat, wrong-number recovery, verified regression, responsive, and console
+checks passed. The final Docker Compose gate passed 501 tests and both builds.
+
+Checkpoint 7 is complete and merged to `main` at `9e82e50`; Checkpoint 6 is
+frozen at `82f5c85`. Their detailed evidence remains in the ledgers above.
+
+At Checkpoint 5, the additive session contract compiled, the session
 fixtures and the shell workflow are in place, and `CoordinationService`
 constructs with both workflows registered and initialises a session run's
-durable shape. No session behaviour exists: routing, countdown validation,
-transcript context and the free-chat completion rule are all Phase 6, and nine
-loud placeholders throw with the task ID that replaces each. Every existing
-verified-handoff test passes unchanged. Frozen at commit `2fe14eb`; no
+durable shape. At that checkpoint no session behaviour existed: routing,
+countdown validation, transcript context and the free-chat completion rule were
+all deferred to Phase 6, and nine loud placeholders threw with the task ID that
+would replace each. Every existing verified-handoff test passed unchanged.
+Frozen at commit `2fe14eb`; no
 convenience tag was created.
 
 Checkpoint 4 is complete. The existing application owns a single Relay
@@ -347,18 +383,15 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 6
 
-- Not started; **deferred to teammates by the team decision recorded at P5-01**. Instruction sheet is [`phases/06-session-core.md`](phases/06-session-core.md). Pure session workflow, countdown and free-chat protocols, transcript context, and the in-memory walking skeleton.
-- Branch from the frozen session contract commit `2fe14eb`.
-- Read **Open questions carried into Phase 6** above before starting. Every Phase 5 placeholder throws with the task ID that replaces it, so `grep -rn "lands in P6-" apps/server/src/coordination/` lists all nine of them.
-- The Phase 5 fixtures, the shell workflow, and the session contract surface are frozen for Phase 6 and 7 tests. Extend them additively; changing existing behaviour needs a recorded decision.
+- Complete. Checkpoint 6 is frozen at `82f5c85`; the pure session workflow, protocols, transcript context, and in-memory walking skeleton are implemented and verified. See [`phases/06-session-core.md`](phases/06-session-core.md).
 
 ### Phase 7
 
-- Not started. Instruction sheet is [`phases/07-session-durable.md`](phases/07-session-durable.md). Durable session commits, the API create union, and race tests.
+- Complete. Checkpoint 7 is merged to `main` at `9e82e50`; durable session commits, the API create union, composition wiring, and race/restart evidence are verified. See [`phases/07-session-durable.md`](phases/07-session-durable.md).
 
 ### Phase 8
 
-- Not started. Instruction sheet is [`phases/08-session-ui.md`](phases/08-session-ui.md). Session form mode, transcript view, and the real 10-to-1 rehearsal.
+- Complete and merged to `main` from `phase-8`. The session form, transcript/evidence view, polling and stop behavior, live 10-to-1/free-chat/wrong-number rehearsals, verified regression, responsive browser checks, and final 501-test Compose gate all passed. See [`phases/08-session-ui.md`](phases/08-session-ui.md).
 
 ### Phase 9
 
@@ -368,6 +401,10 @@ no task was promoted on a host-only or focused run.
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-30 13:16 UTC | `e93ffb5` | Pre-merge Checkpoint 8 Docker Compose rerun | **Passed (exit 0):** the exact pushed Phase 8 commit again passed 27 server files / 474 tests, 2 web files / 27 tests, both typechecks, and both builds (501 tests total). `main` and `origin/main` were identical before the non-fast-forward merge. |
+| 2026-08-30 12:13 UTC | `phase-8` working tree | **Checkpoint 8 gate** — final scoped Docker Compose build and `npm run check` | **Passed (exit 0):** 27 server test files / 474 tests, 2 web test files / 27 tests, both typechecks, and both production builds (501 tests total). The build used the repository Dockerfile and the check used the required clean, read-only source copy. `npm ci` still reports 1 moderate and 5 high audit findings deferred to the Phase 9 security task. **This is the completion gate for P8-01-P8-14.** |
+| 2026-08-30 12:05-12:10 UTC | `phase-8` working tree | Checkpoint 8 real Compose browser rehearsal | **Passed:** real 10-to-1 countdown (11.880s), unanimous three-turn free chat (5.321s), honest wrong-number rejection/retry/recovery (10.084s), verified handoff regression (11.335s), and a shared-session stop/cancellation flow. Desktop and mobile layout passed with no page overflow; console warnings/errors were empty. |
+| 2026-08-30 | `phase-8` working tree | Phase 8 focused Compose web iterations | Initial focused runs exposed only new test/scaffolding defects: a discriminated-union fixture typing error, one transcript selector mismatch, and a fake-timer test using an async finder. Each was corrected without weakening product assertions. Final focused result: web typecheck plus 2 files / 27 tests passed. |
 | 2026-08-30 08:32 UTC | `2fe14eb` | **Checkpoint 5 gate** — final scoped Docker Compose `npm run check` | **Passed (exit 0):** server and web typechecks, 23 server test files with 399 tests, 2 web test files with 12 tests, web build, and server build. 411 tests total; the 389-test baseline is intact and Phase 5 adds 22. Run in the Compose container (`/workspace`) against a clean working tree, so the tarred source is exactly commit `2fe14eb`. Web bundle hashes matched the pre-check byte for byte. `npm ci` continues to report 1 moderate and 5 high audit findings held for P9-16. **This is the sole completion evidence for P5-01–P5-08.** |
 | 2026-08-30 | `phase5-p5-01-session-contracts` | Earlier state: gate not runnable | No container engine was reachable from the environment the work was done in — `docker`, `podman`, `nerdctl`, `colima` and `lima` all absent, no daemon. Phase 5 was held at `implemented_unverified` rather than promoted on a host run. **Superseded by the passing gate recorded above.** |
 | 2026-08-30 | `phase5-p5-01-session-contracts` | Non-authoritative pre-check | Full `npm run check` passed (exit 0) from a clean `npm ci --include=dev` over the same source snapshot the Compose command copies, **run outside the checkout** on Node 22.22.2 / npm 10.9.7: server and web typechecks, 23 server test files with 399 tests, 2 web test files with 12 tests, web build, and server build. The 389-test baseline is intact (377 server + 12 web); Phase 5 adds 22 server tests. `npm ci` continues to report 1 moderate and 5 high audit findings held for P9-16. **Recorded only to predict the Compose result. This is not completion evidence and satisfies no gate.** Its prediction was exact: the Compose gate returned the same 399/12 counts and the same web bundle hashes. |
@@ -495,13 +532,14 @@ no task was promoted on a host-only or focused run.
 - The implementation plan now has nine phases. Phases 5–8 build the shared-session workflow (session contracts, session core, session durable, session UI); the former Phase 5 release phase becomes Phase 9 with its task IDs renumbered from P5-xx to P9-xx. Phase 9 releases both workflows.
 - The frozen session contract is the immutable commit `2fe14eb`, verified by the Checkpoint 5 Compose gate. No convenience tag was created; whether to add one is an open team decision, deliberately not assumed after the Phase 0 `relay/contracts-v1` discrepancy.
 - Phase 5 was granted an exhaustiveness scope amendment: it may add loud throwing placeholders to `Readonly<Record<...>>` tables outside its filesystem map, for that purpose only. Placeholders are getters, not IIFEs — an IIFE in an object literal evaluates at module load and would throw on import.
-- `repository.ts` `expectedArtifactTypeForTurn` and `context-builder.ts` `capPayload` accept the session enum members with no compile error and were deliberately left unfixed; they belong to P7-02 and Phase 6. No build or test will surface them.
-- Free-chat runs complete on unanimous `done` across one round, or `maxTurns`, or user stop. The signal is advisory and evaluated by backend code, so no Agent ends a run. The unanimity rule is proposed, not team-chosen, and must be confirmed before P6-01.
+- The Phase 5 exhaustiveness audit identified `repository.ts` `expectedArtifactTypeForTurn` and `context-builder.ts` `capPayload`; P7-02 and Phase 6 replaced both silent paths with explicit session handling and exhaustive coverage.
+- Free-chat runs complete on unanimous latest `done` signals, at `maxTurns`, or on user stop. The signal is advisory and evaluated by backend code, so no Agent ends a run. The team confirmed this rule before P6-01 and Phase 8 demonstrated it live.
 - The session extension is governed by `overview-sessions.md` (repository-local authority, adapted from the team's extension plan); `overview.md` remains the authority for the verified workflow and the shared engine semantics.
 - Session contract code (additive types, contracts, fixtures) lands in Phase 5; session behavior (workflow, protocol, context, service create branch, walking skeleton) lands in Phase 6, mirroring the original Phase 0 and Phase 1 split.
 - The session prompt never states the expected number; Agents derive it from the transcript and the countdown validator is the sole authority. Wrong numbers retry the same Agent and a second failure ends the run with `MAX_ATTEMPTS_EXCEEDED`.
 - The session extension includes a second protocol, `free_chat`, on the same `shared_session_v1` workflow: bounded non-empty messages, completion on a unanimous `done` round, at `maxTurns` (default 6), or on user stop, no start value and no next-expected state. The middleware guarantees mechanics and never judges message substance.
 - 2026-08-30 consolidation pass: the free-chat completion signal (unanimous `done`) and the final-artifact-pointer rule (last committed session message) were confirmed by the whole team. No new `CoordinationEventType` for `done`; it rides on committed artifacts. The Phase 6–9 sheets, `FILESYSTEM_MAP.md`, and the README source-of-truth order were synced so the docs match the frozen contract.
+- Checkpoint 8 keeps the existing Relay visual language and one `App.tsx` owner, adds only the session-specific form/evidence surfaces, and proves that the same public API and polling chain support both workflows. Live timings invalidate the earlier worst-case latency assumption for the measured endpoint but do not remove Phase 9 fallbacks.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 
