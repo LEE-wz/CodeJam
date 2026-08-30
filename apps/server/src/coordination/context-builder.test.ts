@@ -258,7 +258,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([]);
     expect(artifactsBlock(envelope.prompt)).toContain("(none for this turn)");
   });
 
@@ -268,7 +267,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([]);
     expect(envelope.prompt).not.toContain(VALID_PROPOSAL_PAYLOAD.summary);
   });
 
@@ -278,7 +276,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
     expect(envelope.prompt).toContain(VALID_PROPOSAL_PAYLOAD.summary);
     expect(envelope.prompt).not.toContain(REJECTING_REVIEW_PAYLOAD.feedback);
   });
@@ -289,10 +286,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, REJECTING_REVIEW_ARTIFACT.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([
-      VALID_PROPOSAL_ARTIFACT.id,
-      REJECTING_REVIEW_ARTIFACT.id,
-    ]);
     expect(envelope.prompt).toContain(VALID_PROPOSAL_PAYLOAD.summary);
     expect(envelope.prompt).toContain(REJECTING_REVIEW_PAYLOAD.feedback);
     expect(envelope.prompt).toContain(REJECTING_REVIEW_PAYLOAD.issues[0]!.message);
@@ -304,10 +297,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, APPROVING_REVIEW_ARTIFACT.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([
-      VALID_PROPOSAL_ARTIFACT.id,
-      APPROVING_REVIEW_ARTIFACT.id,
-    ]);
     expect(envelope.prompt).toContain(APPROVING_REVIEW_PAYLOAD.feedback);
     expect(envelope.prompt).not.toContain(REJECTING_REVIEW_PAYLOAD.feedback);
   });
@@ -318,7 +307,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
     expect(envelope.prompt).not.toContain(VALID_FINAL_PAYLOAD.content);
     expect(envelope.prompt).not.toContain(APPROVING_REVIEW_PAYLOAD.feedback);
   });
@@ -334,7 +322,6 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [foreign.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([]);
     expect(artifactsBlock(envelope.prompt)).toContain("(none for this turn)");
   });
 
@@ -345,10 +332,6 @@ describe("context builder: role visibility matrix", () => {
     });
     const block = artifactsBlock(envelope.prompt);
 
-    expect(envelope.includedArtifactIds).toEqual([
-      VALID_PROPOSAL_ARTIFACT.id,
-      REJECTING_REVIEW_ARTIFACT.id,
-    ]);
     expect(block.indexOf("proposal:")).toBeLessThan(block.indexOf("review:"));
   });
 
@@ -362,7 +345,7 @@ describe("context builder: role visibility matrix", () => {
       inputArtifactIds: [VALID_PROPOSAL_ARTIFACT.id, supersededProposal.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
+    expect(envelope.prompt).toContain(VALID_PROPOSAL_PAYLOAD.summary);
   });
 
   it("never writes an artifact identifier into the prompt", () => {
@@ -375,7 +358,6 @@ describe("context builder: role visibility matrix", () => {
       expect(envelope.prompt).not.toContain(artifact.id);
       expect(envelope.prompt).not.toContain(artifact.turnId);
     }
-    expect(envelope.includedArtifactIds).toHaveLength(2);
   });
 });
 
@@ -569,7 +551,6 @@ describe("context builder: retry feedback", () => {
     });
 
     expect(envelope.truncated).toBe(true);
-    expect(envelope.includedArtifactIds).toEqual([VALID_PROPOSAL_ARTIFACT.id]);
     expect(envelope.prompt.length).toBeLessThanOrEqual(
       DEFAULT_COORDINATION_POLICY.contextMaxChars,
     );
@@ -621,10 +602,6 @@ describe("context builder: superseded history is excluded", () => {
       inputArtifactIds: [currentProposal.id, REJECTING_REVIEW_ARTIFACT.id],
     });
 
-    expect(envelope.includedArtifactIds).toEqual([
-      currentProposal.id,
-      REJECTING_REVIEW_ARTIFACT.id,
-    ]);
     expect(envelope.prompt).not.toContain("FIRST-DRAFT-SUMMARY");
     expect(envelope.prompt).not.toContain("FIRST-DRAFT-CONTENT");
     expect(envelope.prompt).not.toContain("FIRST-ROUND-FEEDBACK");
@@ -650,7 +627,6 @@ describe("context builder: superseded history is excluded", () => {
       });
 
       expect(envelope.prompt).not.toContain(VALID_FINAL_PAYLOAD.content);
-      expect(envelope.includedArtifactIds).not.toContain(VALID_FINAL_ARTIFACT.id);
     }
   });
 });

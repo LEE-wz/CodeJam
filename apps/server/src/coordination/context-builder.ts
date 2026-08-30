@@ -206,7 +206,7 @@ const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[
  * Renders only the payloads of the visible artifacts. Artifact identifiers are
  * deliberately withheld from the prompt: the Agent is told never to emit IDs,
  * so it is never shown one it could echo back as forged provenance. Evidence
- * still records what was shown through `includedArtifactIds`.
+ * still records the authoritative input set on the turn.
  */
 const buildArtifactSection = (
   visible: CoordinationArtifact[],
@@ -283,7 +283,6 @@ export class RoleScopedContextBuilder implements ContextBuilder {
         return {
           prompt,
           promptDigest: digestPrompt(prompt),
-          includedArtifactIds: visible.map((artifact) => artifact.id),
           truncated: Number.isFinite(fieldCap),
         };
       }

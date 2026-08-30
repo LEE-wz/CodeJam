@@ -1,41 +1,37 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 02:34 UTC
-**Audited commit:** `d81635a` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
-**Implementation branch:** `phase2-p2-15-api-composition` (chained from `phase2-p2-08-durable-repository`, base `d81635a` on `main`)
-**Current phase:** Phase 2 — Durable Backend and Evidence Ledger (complete)
-**Current gate:** Checkpoint 2 verified
-**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 `complete`; Phase 3 not started and not authorised
+**Last audit:** 2026-08-30 03:47 UTC
+**Audited base:** `257f933` on `main`; current implementation is the uncommitted working tree on `phase3-p3-01-real-runtime`
+**Implementation branch:** `phase3-p3-01-real-runtime` (base `257f933`)
+**Current phase:** Phase 3 — Real Agent Runtime and Recovery (complete)
+**Current gate:** Checkpoint 3 verified
+**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 `complete`; Phase 3 `complete`; Phase 4 not started and not authorised
 
 ## Resume here
 
-**Phase 2 is complete and Checkpoint 2 is verified.** Every gate condition in
-[`phases/02-durable-backend.md`](./phases/02-durable-backend.md) has evidence:
+**Phase 3 is complete and Checkpoint 3 is verified.** The real
+`AgentServiceCoordinationRuntime` is now the composition-root runtime. The
+Playground compatibility wrapper, correlations, run-scoped cancellation,
+reservations, timeout recovery, and cleanup are covered by automated tests and
+real-provider rehearsals.
 
-| Gate condition | Evidence |
+| Phase 3 gate condition | Evidence |
 |---|---|
-| Migration, lease, concurrent-start, stop/commit, restart, and terminal-immutability tests pass | 11 store tests and 51 repository tests; the race suite passed 10 consecutive runs, then 8 more alongside the API suite, with no flakes |
-| Create/start/detail/stop work over HTTP against the real repository | 26 Fastify-injection tests over the real durable stack |
-| Detail response contains ordered turns, attempts, artifacts, and redacted events | P2-22 timeline assertions across six fixtures |
-| Composition root can start with a scripted runtime | The built server was booted in a disposable container and answered health, list, detail, and the removed `/events` route correctly |
-| Full existing server regression suite passes | Compose `npm run check`, exit code 0: 18 files / 362 tests, both builds |
-| No real Agent connected prematurely | The runtime is still `ScriptedCoordinationRuntime`; `AgentService` is untouched |
+| Existing AgentService/Playground behavior passes | Eight AgentService tests cover normal send, failure recovery, concurrency, compatibility, correlations, cancellation, and reservations |
+| Runtime success/failure/timeout/cancel/late cleanup passes | Six gateway tests with fake execution control; active maps and timers settle to zero |
+| Real full workflow and valid artifacts | Three fresh real Planner → Critic → Finaliser workflows completed, each with three first-attempt commits |
+| Reservation conflict and release | Live competing Playground sends returned structured `409 AGENT_RESERVED`; automated tests prove terminal release across mutable Agent operations |
+| Default timeout is feasible | Per-turn range 12.919–59.585 seconds; default remains 120 seconds with no timeout mini-RFC |
+| Scoped cancellation cannot stop later work | Regression test cancels one Agent Run by ID, starts a later run, and proves the stale run ID cannot target it |
+| Full regression gate | Docker Compose `npm run check` passed: 20 files / 373 tests, both builds |
 
-Three things need your attention before Phase 3 begins:
+Phase 2 follow-up is also closed: unexpected `500` values are no longer logged
+or returned, public detail attempts exclude `leaseToken`, the additive
+`truncated`/`outputDigest` inputs are approved, and the redundant
+`PromptEnvelope.includedArtifactIds` field is removed by mini-RFC.
 
-1. **Confirm the additive mini-RFC** in `ASSUMPTIONS_AND_DECISIONS.md` that adds
-   `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`.
-   Both are the only route by which the handoff decisions §1.2 and §1.3 you
-   already confirmed can reach the repository, and both are optional, so no
-   existing caller or Phase 1 fixture changed.
-2. **Note the production defect found and fixed** during P2-16 — see
-   **Defects found in Phase 2** below. It was invisible in test mode.
-3. **Decide handoff §2.2** (`PromptEnvelope.includedArtifactIds`): still unused
-   by the service. It affects no persisted shape, so it can also be settled in
-   Phase 3. See **Outstanding decisions**.
-
-Then sign off Phase 3. `P3-01` is the next task ID, and Phase 3 is the point at
-which real Agents may finally be connected.
+`P4-01` is the next task ID. Phase 4 remains unauthorised until the user signs
+off UI/evidence work.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
@@ -44,20 +40,24 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 | Defect | How it was found | Resolution |
 |---|---|---|
 | Production 404s bypassed the frozen `ApiErrorResponse` envelope | Booting the real composition root (P2-17) returned `{"statusCode":404,"code":"NOT_FOUND","error":"Not Found",...}` where the injection tests returned `{"error":{"code":"NOT_FOUND",...}}`. Fastify's not-found context captures whichever error handler is installed when `setNotFoundHandler` runs, and `app.ts` registered the not-found handler **before** `setErrorHandler`. Only `NODE_ENV=production` registers a not-found handler, so no test-mode check could ever have caught it. | `setErrorHandler` now runs before the production static/not-found block, with a comment recording why the order matters. A regression test builds the app in production mode and asserts the frozen envelope; it provides a minimal web bundle when the real one has not been built yet and removes only what it created. |
+| Unexpected `500` leaked arbitrary exception messages to responses and logs | Phase 2 review injected a credential-bearing connection string; the test checked only for stack/path leakage and therefore passed while the message remained exposed. | The handler logs only error classification and returns a fixed `INTERNAL_ERROR` message. Tests assert credential material is absent; runtime redaction also covers credential-bearing connection URLs. |
 
 ## Outstanding decisions
 
 | Item | Status | Deadline |
 |---|---|---|
-| `leaseToken` is exposed by the detail response | Open. `CoordinationAttempt.leaseToken` is a required field of the frozen type, `CoordinationRunDetails.attempts` is `CoordinationAttempt[]`, and `GetCoordinationRunResponse extends CoordinationRunDetails`, so `GET /api/coordination-runs/:id` returns lease tokens to any authenticated client. **Not exploitable today**: no route accepts a lease token as input, so it is information exposure rather than privilege escalation, and events and logs remain clean. Found by the manual Phase 2 smoke run, not by any automated test. Options: strip `leaseToken` in the detail read model by mini-RFC, or accept it and document it. | **Before Phase 4 renders the detail response**, since the UI would ship lease tokens to the browser |
-| Additive mini-RFC for `truncated` / `outputDigest` inputs | Implemented, awaiting confirmation | Before Phase 3 sign-off |
-| Handoff §2.2 `PromptEnvelope.includedArtifactIds` | Open. The context builder returns it and the service still drops it; `turn.inputArtifactIds` carries nearly the same evidence. Either surface it in an event detail or remove it by mini-RFC. | No persisted-shape impact, so it may be settled in Phase 3 |
+| Dependency audit findings | Open: `npm ci` reports 1 moderate and 5 high findings. | P5-16 security/release review; do not apply breaking upgrades mid-phase. |
 
 ## Last checkpoint
 
-Checkpoint 2 is complete. The real JSON store, durable repository, event ledger,
-and HTTP surface carry the full asynchronous lifecycle with only the runtime
-scripted. The composition root was booted for real, not merely typechecked.
+Checkpoint 3 is complete. The production composition root calls real Agents
+through `AgentService`, while the service retains ownership of ordinary Agent
+state, messages, workspaces, threads, cancellation, and correlations. All real
+smoke data used disposable Compose storage; repository `data/`, `workspaces/`,
+and `codex-home/` were not mounted or touched.
+
+Checkpoint 2 remains complete with its API/security follow-up applied and
+verified by the Phase 3 full gate.
 
 Checkpoint 1 is complete. The real workflow, artifact protocol, and role-scoped
 context builder drive the real `CoordinationService` against an in-memory
@@ -129,6 +129,16 @@ no task was promoted on a host-only or focused run.
 | P2-19 | `complete` (verify-only) | Confirmed as the handoff predicted, in two places: `routes.test.ts` asserts `404`, and the live boot probe returned `404` for `/events`. |
 | P2-22 | `complete` | The detail response is exercised as an evidence timeline over the real stack for six fixtures — normal, reject/revise/approve, invalid-then-retry, failed, stopped, and restart-interrupted — asserting ordered turns, per-turn attempt ordering, artifact order, the exact event-type sequence, gapless per-run event numbering, and `outputDigest` on every committed attempt. |
 
+## Phase 3 task ledger
+
+| Tasks | Status | Evidence |
+|---|---|---|
+| P3-01–P3-07 | `complete` | `AgentService.startExecution()` returns the persisted Agent Run/message IDs and a completion promise; `sendMessage()` remains its compatibility wrapper. Runs store source plus coordination run/turn/attempt correlations. Cancellation is keyed and guarded by Agent Run ID, and reservations reject Playground send/edit/delete/start/stop while allowing only the matching internal coordination run. Eight regression tests cover compatibility, concurrent admission, failure recovery, correlation visibility, scoped cancellation, conflict, and terminal release. |
+| P3-08–P3-13 | `complete` | `AgentServiceCoordinationRuntime` maps real execution into the frozen runtime contract, persists the Agent Run ID before awaiting completion, owns an attempt→Agent-run map, applies the unchanged attempt timeout, requests correlated cancellation, waits a bounded 2-second settlement grace, fails safely when settlement is unconfirmed, redacts safe messages including connection-URL credentials, and cleans timers/maps in `finally`. Six fake-control tests cover success, failure, timeout win, late success, user cancellation, unconfirmed settlement, targeted cancellation, and cleanup. |
+| P3-14, P3-15 | `complete` | Disposable Compose one-Agent probe invoked the configured real provider through the real gateway. It succeeded in 4.789 seconds; its correlated Agent Run and user/assistant messages were visible, and its thread ID persisted. No identifiers, prompts, output, credentials, or lease values were recorded. |
+| P3-16, P3-17 | `complete` | Three fresh real Planner → Critic → Finaliser runs completed with valid proposal/review/final artifacts and one attempt per role. During every active run, a competing Critic Playground send returned structured `409 AGENT_RESERVED`; automated coverage proves the same reservation releases after terminal settlement. |
+| P3-18 | `complete` | Three successful disposable-Compose rehearsals used the configured local-process runtime profile. Redacted run fingerprints: `9b487919`, `6191748d`, `f753a107`. Total times: 87.549s, 108.157s, 56.905s (range 56.905–108.157s). Per-turn times: 26.273/14.760/46.428s; 59.585/24.617/23.461s; 22.809/12.919/20.860s (range 12.919–59.585s). Every attempt completed below the unchanged 120s timeout, so the default is feasible. |
+
 ## Implemented inventory
 
 | Area | Evidence | Status | Notes |
@@ -157,26 +167,16 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 1
 
-- Complete. No Phase 1 tasks remain. Four contract behaviours are carried into
-  Phase 2; see **Phase 1 handoff to Phase 2** above.
+- Complete. No Phase 1 tasks remain.
 
 ### Phase 2
 
-- Database v2 and explicit v1 migration are **done** (P2-01–P2-04). P2-19 is
-  verified as already satisfied.
-- Event factories and redaction are **done** (P2-05–P2-07).
-- The durable atomic repository, its race suite, restart settlement, and the
-  reservation helper are **done** (P2-08–P2-14, P2-20, P2-21).
-- Remaining: API validation and Fastify-injection tests (P2-15/P2-16),
-  composition wiring and structured logging (P2-17/P2-18), and the
-  evidence-timeline confirmation (P2-22).
+- Complete. No Phase 2 implementation or decision tasks remain.
 
 ### Phase 3
 
-- Not authorised yet. `AgentService` now has a reservation source to consume
-  (`listReservedAgentIds`/`isAgentReserved`), and `index.ts` has one clearly
-  marked seam to replace: the `ScriptedCoordinationRuntime` placeholder.
-- Backward-compatible Agent execution handle, correlated run cancellation, reservation enforcement, real runtime gateway, timeout settlement, real smoke flow, and timing evidence.
+- Complete. No Phase 3 tasks remain. `P4-01` is next after explicit Phase 4
+  authorisation.
 
 ### Phase 4
 
@@ -190,6 +190,10 @@ no task was promoted on a host-only or focused run.
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-30 03:36 UTC | `phase3-p3-01-real-runtime` working tree | Initial P3-01–P3-13 focused Compose suites | **Failed:** 84/85 tests passed; the scoped-cancellation test attempted to resolve the second deferred runner before it had started. The deterministic test waited for runner admission before resolving it; no product assertion was weakened. |
+| 2026-08-30 03:38 UTC | `phase3-p3-01-real-runtime` working tree | P3-01–P3-13 focused Compose typecheck and tests | **Passed:** server typecheck plus 15 tests — eight AgentService regressions, six runtime gateway race/cleanup tests, and one complete three-role real-boundary integration test. |
+| 2026-08-30 03:39 UTC | `phase3-p3-01-real-runtime` working tree | Phase 3 full Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 20 server test files with 373 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
+| 2026-08-30 03:40–03:46 UTC | `phase3-p3-01-real-runtime` working tree | P3-14–P3-18 real-provider disposable Compose smoke | **Passed:** one direct gateway execution (4.789s), then three fresh Planner → Critic → Finaliser workflows (56.905–108.157s total; 12.919–59.585s per turn), each with three first-attempt commits. Agent records/messages/threads/correlations remained visible, active Playground conflicts returned `409 AGENT_RESERVED`, detail leases were absent, and no real repository runtime directories were mounted. |
 | 2026-08-29 | `3d24d1b` | `npm run check` | **Blocked before typecheck:** `tsc: not found`; dependencies are not installed. Environment reports Node `18.19.1`, below repository requirement Node 22+. No test/build result may be inferred. |
 | 2026-08-29 | `3d24d1b` | Static repository audit | Coordination files/routes/tests are present; `index.ts` does not construct/pass a coordination service; `JsonStore` is v1-only; `AgentService` exposes no completion handle. |
 | 2026-08-29 | `docs/development-workflow-rules` | Workflow-rule documentation | Branch rule, filesystem access map, Docker Compose-only verification, mandatory final `npm run check`, and clarify-before-assuming rules added and verified. |
@@ -274,8 +278,8 @@ no task was promoted on a host-only or focused run.
 | Shared ChatGPT context inaccessible in this environment | Possible decisions outside `overview.md` were not audited. | Copy any missing decisions into `ASSUMPTIONS_AND_DECISIONS.md`; overview remains current authority. |
 | Code ahead of gates | Merged code can create false confidence about completion. | Retain `implemented_unverified` until required phase evidence passes. |
 | Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
-| Detail response exposes lease tokens | The frozen `CoordinationAttempt` carries `leaseToken`, so the detail route returns it. No input path consumes a lease token, so nothing is forgeable today, but Phase 4 would place it in browser-visible state. | Decide before P4 renders attempts; see **Outstanding decisions**. |
-| Current Agent cancellation is keyed by Agent ID | Could cancel unrelated later work after races. | Implement run-scoped cancellation in Phase 3 only after Phase 2 correctness gates. |
+| ~~Detail response exposes lease tokens~~ | Resolved by a public attempt read model that omits the internal capability. | Closed 2026-08-30; API and live smoke assert absence. |
+| ~~Current Agent cancellation is keyed by Agent ID~~ | Resolved by `cancelRun(agentRunId)` plus an active-run ownership guard; the provider's Agent-keyed primitive is invoked only while that exact run still owns the Agent. | Closed 2026-08-30; stale-run regression passes. |
 | ~~Docker unreachable from the environment used for P1-07–P1-17~~ | Resolved. The gate was run on a host with Docker and passed; the tasks were promoted on that evidence. | Closed 2026-08-29. Any future assistant-run work must route the gate to a host with a container engine rather than substituting a host runner. |
 | ~~Phase 1 implementation decisions not yet confirmed~~ | Resolved. All nine were confirmed unchanged on 2026-08-30 before P2-01, together with the four Phase 2 handoff decisions. | Closed 2026-08-30. |
 | `stale_ignored` attempt status has no producer | By the confirmed §2.1 decision, evidence lives in the `attempt.stale_ignored` event, so the `CoordinationAttemptStatus` member stays unwritten. Phase 4 must read it from the event stream, not the attempt row. | Accepted. Revisit only if the Phase 4 timeline cannot render it from events. |
@@ -283,10 +287,10 @@ no task was promoted on a host-only or focused run.
 ## Decision log summary
 
 - Code enum/API spelling is `finalizer`; user-facing label is “Finaliser.”
-- `AgentService` requires a new completion-handle seam; `sendMessage()` remains compatible.
+- `AgentService.startExecution()` owns the completion-handle seam; `sendMessage()` remains its compatible wrapper.
 - `JsonStore` requires explicit additive migration; there is no existing hook.
-- Routes register through optional `createApp(..., coordination)`; real composition in `index.ts` is outstanding.
-- Real latency/schema reliability are measured Phase 3 gates, not assumptions.
+- Routes register through optional `createApp(..., coordination)`; `index.ts` composes the real repository and AgentService-backed runtime.
+- Three real rehearsals measured 12.919–59.585 seconds per turn; the 120-second default attempt timeout remains unchanged.
 - Terminal stop is frozen as idempotent `202` with explicit completed/failed/stopped route tests.
 - The detail route is the only event retrieval contract; the accidental `/events` endpoint was removed.
 - Frozen contract commit is `ea469b2`, tagged `relay/contracts-v1`.
@@ -296,7 +300,8 @@ no task was promoted on a host-only or focused run.
 - Four Phase 2 handoff decisions settled on 2026-08-30: `sizeChars` stays the raw-output length; `truncated` is an `attempt.started` event detail only; `outputDigest` is populated at commit; `attempt.stale_ignored` is emitted as an event without extending the `finishAttempt` status union. None is a mini-RFC.
 - `DatabaseV2` migration is additive by spread, so unknown fields in an existing v1 file are preserved rather than dropped.
 - `app.ts` must register `setErrorHandler` before the production static/not-found block; the reverse order silently breaks the frozen error envelope in production only.
-- An additive mini-RFC adds `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`, the only route by which the confirmed §1.2 and §1.3 decisions can reach the repository. Both are optional; no frozen domain type, event type, route, or persisted shape changed. **Awaiting user confirmation.**
+- The approved additive mini-RFC adds `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`, the only route by which the confirmed §1.2 and §1.3 decisions can reach the repository.
+- Approved Phase 2 follow-up mini-RFCs remove redundant `PromptEnvelope.includedArtifactIds` and exclude `leaseToken` only from the public attempt read model, leaving durable lease enforcement unchanged.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

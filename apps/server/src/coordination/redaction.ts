@@ -62,6 +62,11 @@ const ALLOWED_KEY_SET: ReadonlySet<string> = new Set(ALLOWED_EVENT_DETAIL_KEYS);
  * before truncation, so a secret can never survive by sitting past the cap.
  */
 const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Credentials embedded in connection URLs.
+  [
+    /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi,
+    `$1${REDACTION_PLACEHOLDER}@`,
+  ],
   // `Authorization: Bearer <token>` and bare bearer tokens.
   [/\bbearer\s+[\w.~+/=-]+/gi, `Bearer ${REDACTION_PLACEHOLDER}`],
   // Any authorization/cookie/set-cookie header, colon or equals form.

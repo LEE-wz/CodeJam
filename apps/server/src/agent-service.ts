@@ -4,10 +4,17 @@ import { isArkConfigured } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
 import { JsonStore } from "./store.js";
 import type {
+  AgentExecutionControl,
+  AgentExecutionHandle,
+  CoordinationReservationSource,
+  StartAgentExecutionRequest,
+} from "./coordination/contracts.js";
+import type {
   Agent,
   AgentRun,
   AgentRunner,
   CreateAgentInput,
+  Database,
   Message,
   UpdateAgentInput,
 } from "./types.js";
@@ -16,7 +23,11 @@ import { WorkspaceManager } from "./workspace.js";
 const now = () => new Date().toISOString();
 
 export class AgentService {
-  private readonly activeExecutions = new Map<string, Promise<void>>();
+  private readonly activeExecutions = new Map<
+    string,
+    { agentId: string; completion: AgentExecutionHandle["completion"] }
+  >();
+  private readonly activeRunByAgent = new Map<string, string>();
   private readonly cancellationRequests = new Set<string>();
 
   constructor(
@@ -24,6 +35,7 @@ export class AgentService {
     private readonly store: JsonStore,
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
+    private readonly reservations?: CoordinationReservationSource,
   ) {}
 
   async initialize(): Promise<void> {
@@ -81,6 +93,7 @@ export class AgentService {
   }
 
   async updateAgent(id: string, input: UpdateAgentInput): Promise<Agent> {
+    await this.assertAgentNotReserved(id);
     const current = this.getAgent(id);
     if (current.status === "busy") {
       throw new HttpError(409, "Stop the active run before editing this Agent");
@@ -90,6 +103,7 @@ export class AgentService {
       if (!agent) {
         throw new HttpError(404, "Agent not found");
       }
+      this.assertDatabaseAgentNotReserved(database, id);
       if (agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before editing this Agent");
       }
@@ -105,10 +119,13 @@ export class AgentService {
   }
 
   async deleteAgent(id: string): Promise<{ archivedWorkspace: string }> {
+    await this.assertAgentNotReserved(id);
+    await this.store.mutate((database) => this.assertDatabaseAgentNotReserved(database, id));
     const agent = this.getAgent(id);
-    await this.cancelExecution(id);
+    await this.cancelAgentExecution(id);
     const archivedWorkspace = await this.workspaces.archive(agent);
     await this.store.mutate((database) => {
+      this.assertDatabaseAgentNotReserved(database, id);
       database.agents = database.agents.filter((item) => item.id !== id);
       database.messages = database.messages.filter((item) => item.agentId !== id);
       database.runs = database.runs.filter((item) => item.agentId !== id);
@@ -117,12 +134,14 @@ export class AgentService {
   }
 
   async startAgent(id: string): Promise<Agent> {
+    await this.assertAgentNotReserved(id);
     return this.setStatus(id, "ready");
   }
 
   async stopAgent(id: string): Promise<Agent> {
+    await this.assertAgentNotReserved(id);
     this.getAgent(id);
-    await this.cancelExecution(id);
+    await this.cancelAgentExecution(id);
     return this.setStatus(id, "stopped");
   }
 
@@ -154,6 +173,22 @@ export class AgentService {
     agentId: string,
     prompt: string,
   ): Promise<{ run: AgentRun; message: Message }> {
+    const handle = await this.startExecution({
+      agentId,
+      prompt,
+      source: "playground",
+    });
+    const run = this.getRun(handle.agentRunId);
+    const message = this.store
+      .snapshot()
+      .messages.find((candidate) => candidate.id === handle.messageId);
+    if (!message) {
+      throw new Error("Agent execution message was not persisted");
+    }
+    return { run, message };
+  }
+
+  async startExecution(input: StartAgentExecutionRequest): Promise<AgentExecutionHandle> {
     if (!isArkConfigured(this.config)) {
       throw new HttpError(
         503,
@@ -164,26 +199,34 @@ export class AgentService {
     const runId = randomUUID();
     const run: AgentRun = {
       id: runId,
-      agentId,
+      agentId: input.agentId,
       status: "queued",
-      prompt,
+      prompt: input.prompt,
       output: null,
       error: null,
       usage: null,
       startedAt: null,
       completedAt: null,
       createdAt: timestamp,
+      source: input.source,
+      ...(input.coordination
+        ? {
+            coordinationRunId: input.coordination.runId,
+            coordinationTurnId: input.coordination.turnId,
+            coordinationAttemptId: input.coordination.attemptId,
+          }
+        : {}),
     };
     const message: Message = {
       id: randomUUID(),
-      agentId,
+      agentId: input.agentId,
       runId,
       role: "user",
-      content: prompt,
+      content: input.prompt,
       createdAt: timestamp,
     };
     const agentAtStart = await this.store.mutate((database) => {
-      const storedAgent = database.agents.find((item) => item.id === agentId);
+      const storedAgent = database.agents.find((item) => item.id === input.agentId);
       if (!storedAgent) {
         throw new HttpError(404, "Agent not found");
       }
@@ -193,6 +236,27 @@ export class AgentService {
       if (storedAgent.status === "busy") {
         throw new HttpError(409, "This Agent is already running");
       }
+      const reservingRunId = database.coordinationRuns.find(
+        (coordinationRun) =>
+          (coordinationRun.status === "running" ||
+            coordinationRun.status === "stop_requested") &&
+          coordinationRun.participants.some(
+            (participant) => participant.agentId === input.agentId,
+          ),
+      )?.id;
+      if (input.source === "playground" && reservingRunId) {
+        throw new HttpError(409, "Agent is reserved by coordination", "AGENT_RESERVED");
+      }
+      if (
+        input.source === "coordination" &&
+        (!input.coordination || reservingRunId !== input.coordination.runId)
+      ) {
+        throw new HttpError(
+          409,
+          "Coordination reservation does not match",
+          "AGENT_RESERVED",
+        );
+      }
       database.runs.push(run);
       database.messages.push(message);
       const snapshot = structuredClone(storedAgent);
@@ -201,16 +265,35 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const execution = this.executeRun(agentAtStart, run);
-    this.activeExecutions.set(agentId, execution);
-    void execution
+    const completion = this.executeRun(agentAtStart, run);
+    this.activeExecutions.set(run.id, { agentId: input.agentId, completion });
+    this.activeRunByAgent.set(input.agentId, run.id);
+    void completion
       .finally(() => {
-        if (this.activeExecutions.get(agentId) === execution) {
-          this.activeExecutions.delete(agentId);
+        if (this.activeExecutions.get(run.id)?.completion === completion) {
+          this.activeExecutions.delete(run.id);
+        }
+        if (this.activeRunByAgent.get(input.agentId) === run.id) {
+          this.activeRunByAgent.delete(input.agentId);
         }
       })
       .catch(() => undefined);
-    return { run, message };
+    return { agentRunId: run.id, messageId: message.id, completion };
+  }
+
+  async cancelRun(agentRunId: string): Promise<boolean> {
+    const active = this.activeExecutions.get(agentRunId);
+    if (!active || this.activeRunByAgent.get(active.agentId) !== agentRunId) {
+      return false;
+    }
+    this.cancellationRequests.add(agentRunId);
+    try {
+      await this.runner.cancel(active.agentId);
+      await active.completion;
+      return true;
+    } finally {
+      this.cancellationRequests.delete(agentRunId);
+    }
   }
 
   async systemInfo(): Promise<Record<string, unknown>> {
@@ -232,7 +315,10 @@ export class AgentService {
     };
   }
 
-  private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
+  private async executeRun(
+    agentAtStart: Agent,
+    run: AgentRun,
+  ): AgentExecutionHandle["completion"] {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
       if (storedRun) {
@@ -241,7 +327,7 @@ export class AgentService {
       }
     });
     try {
-      if (this.cancellationRequests.has(agentAtStart.id)) {
+      if (this.cancellationRequests.has(run.id)) {
         throw new RunCancelledError();
       }
       const result = await this.runner.run({
@@ -250,6 +336,9 @@ export class AgentService {
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
       });
+      if (this.cancellationRequests.has(run.id)) {
+        throw new RunCancelledError();
+      }
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -272,6 +361,7 @@ export class AgentService {
         agent.lastError = null;
         agent.updatedAt = completedAt;
       });
+      return { status: "completed", output: result.output };
     } catch (error) {
       const completedAt = now();
       const cancelled = error instanceof RunCancelledError;
@@ -292,6 +382,10 @@ export class AgentService {
           agent.updatedAt = completedAt;
         }
       });
+      return {
+        status: cancelled ? "cancelled" : "failed",
+        ...(cancelled ? {} : { error: message }),
+      };
     }
   }
 
@@ -301,6 +395,7 @@ export class AgentService {
       if (!agent) {
         throw new HttpError(404, "Agent not found");
       }
+      this.assertDatabaseAgentNotReserved(database, id);
       if (status === "ready" && agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before starting this Agent");
       }
@@ -311,16 +406,25 @@ export class AgentService {
     });
   }
 
-  private async cancelExecution(agentId: string): Promise<void> {
-    this.cancellationRequests.add(agentId);
-    try {
-      await this.runner.cancel(agentId);
-      const execution = this.activeExecutions.get(agentId);
-      if (execution) {
-        await execution;
-      }
-    } finally {
-      this.cancellationRequests.delete(agentId);
+  private async assertAgentNotReserved(agentId: string): Promise<void> {
+    if (await this.reservations?.getReservingRunId(agentId)) {
+      throw new HttpError(409, "Agent is reserved by coordination", "AGENT_RESERVED");
     }
+  }
+
+  private assertDatabaseAgentNotReserved(database: Database, agentId: string): void {
+    const reserved = database.coordinationRuns.some(
+      (run) =>
+        (run.status === "running" || run.status === "stop_requested") &&
+        run.participants.some((participant) => participant.agentId === agentId),
+    );
+    if (reserved) {
+      throw new HttpError(409, "Agent is reserved by coordination", "AGENT_RESERVED");
+    }
+  }
+
+  private async cancelAgentExecution(agentId: string): Promise<void> {
+    const runId = this.activeRunByAgent.get(agentId);
+    if (runId) await this.cancelRun(runId);
   }
 }

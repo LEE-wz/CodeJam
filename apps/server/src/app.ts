@@ -152,7 +152,12 @@ export async function createApp(
             ? frameworkStatus
             : 500;
     if (statusCode >= 500) {
-      request.log.error(appError);
+      // Provider errors can carry prompts, credentials, paths, or raw output.
+      // Log only bounded classification, never the arbitrary exception value.
+      request.log.error(
+        { errorName: appError.name, statusCode },
+        "Unexpected request failure",
+      );
     }
     if (error instanceof CoordinationError) {
       return reply.code(statusCode).send({
@@ -163,8 +168,14 @@ export async function createApp(
         },
       });
     }
+    if (statusCode >= 500 && request.url.startsWith("/api/coordination-runs")) {
+      return reply.code(statusCode).send({
+        error: { code: "INTERNAL_ERROR", message: "Unexpected internal failure" },
+      });
+    }
     return reply.code(statusCode).send({
-      error: appError.message,
+      error: statusCode >= 500 ? "Unexpected internal failure" : appError.message,
+      ...(error instanceof HttpError && error.code ? { code: error.code } : {}),
       ...(validationError ? { details: error.issues } : {}),
     });
   });
@@ -181,6 +192,11 @@ export async function createApp(
     });
     app.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith("/api/")) {
+        if (request.url.startsWith("/api/coordination-runs")) {
+          return reply.code(404).send({
+            error: { code: "NOT_FOUND", message: "Coordination route not found" },
+          });
+        }
         return reply.code(404).send({ error: "API route not found" });
       }
       return reply.sendFile("index.html");

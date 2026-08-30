@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoordinationServiceContract } from "./contracts.js";
 import { CoordinationError } from "./errors.js";
+import type { GetCoordinationRunResponse } from "./types.js";
 
 const runIdParams = z.object({ id: z.string().uuid() });
 const requiredSectionSchema = z
@@ -76,7 +77,10 @@ export async function registerCoordinationRoutes(
     if (!details) {
       throw new CoordinationError(404, "NOT_FOUND", "Coordination run not found");
     }
-    return details;
+    const attempts: GetCoordinationRunResponse["attempts"] = details.attempts.map(
+      ({ leaseToken: _leaseToken, ...attempt }) => attempt,
+    );
+    return { ...details, attempts } satisfies GetCoordinationRunResponse;
   });
 
   app.post("/api/coordination-runs/:id/start", async (request, reply) => {

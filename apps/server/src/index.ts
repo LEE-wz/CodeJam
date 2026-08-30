@@ -12,9 +12,9 @@ import type {
   IdGenerator,
 } from "./coordination/contracts.js";
 import { DurableCoordinationRepository } from "./coordination/repository.js";
+import { AgentServiceCoordinationRuntime } from "./coordination/runtime-gateway.js";
 import { CoordinationService } from "./coordination/service.js";
 import type { CoordinationLogContext, CoordinationLogger } from "./coordination/service.js";
-import { ScriptedCoordinationRuntime } from "./coordination/testing/fakes.js";
 import { VerifiedHandoffWorkflowV1 } from "./coordination/workflow.js";
 import { createRunner } from "./runner-factory.js";
 import { JsonStore } from "./store.js";
@@ -26,9 +26,6 @@ await writeCodexConfig(config);
 const store = new JsonStore(path.join(config.dataDirectory, "launchpad.json"));
 const workspaces = new WorkspaceManager(config.workspaceRoot);
 const runner = createRunner(config);
-const service = new AgentService(config, store, workspaces, runner);
-await service.initialize();
-
 const clock: Clock = { nowIso: () => new Date().toISOString() };
 
 const ids: IdGenerator = {
@@ -41,6 +38,9 @@ const ids: IdGenerator = {
   // in an event.
   leaseToken: () => randomUUID(),
 };
+const repository = new DurableCoordinationRepository({ store, clock, ids });
+const service = new AgentService(config, store, workspaces, runner, repository);
+await service.initialize();
 
 /**
  * Relay reads Agents through `AgentService` rather than the store, so it can
@@ -75,14 +75,11 @@ const logger: CoordinationLogger = {
 
 const coordination = new CoordinationService({
   agentDirectory,
-  repository: new DurableCoordinationRepository({ store, clock, ids }),
+  repository,
   workflow: new VerifiedHandoffWorkflowV1(),
   contextBuilder: new RoleScopedContextBuilder(),
   artifactProtocol: new VerifiedHandoffArtifactProtocol({ clock, ids }),
-  // Phase 2 deliberately keeps execution disconnected: the durable backend is
-  // proven against a scripted runtime, and P3-01 replaces this with the real
-  // `AgentService`-backed gateway once the Phase 2 race gates have passed.
-  runtime: new ScriptedCoordinationRuntime(),
+  runtime: new AgentServiceCoordinationRuntime(service),
   clock,
   ids,
   logger,

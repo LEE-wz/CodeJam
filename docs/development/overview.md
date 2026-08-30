@@ -537,7 +537,12 @@ export interface ListCoordinationRunsResponse {
   runs: CoordinationRun[];
 }
 
-export interface GetCoordinationRunResponse extends CoordinationRunDetails {}
+export type CoordinationAttemptResponse = Omit<CoordinationAttempt, "leaseToken">;
+
+export interface GetCoordinationRunResponse
+  extends Omit<CoordinationRunDetails, "attempts"> {
+  attempts: CoordinationAttemptResponse[];
+}
 
 export interface CreateCoordinationRunResponse {
   run: CoordinationRun;
@@ -701,7 +706,6 @@ export interface VerifiedHandoffWorkflow {
 export interface PromptEnvelope {
   prompt: string;
   promptDigest: string;
-  includedArtifactIds: CoordinationArtifactId[];
   truncated: boolean;
 }
 

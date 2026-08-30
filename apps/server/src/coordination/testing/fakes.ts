@@ -57,7 +57,6 @@ export class FakeContextBuilder {
     return {
       prompt: `Role: ${input.turn.role}`,
       promptDigest: `prompt-${input.turn.id}`,
-      includedArtifactIds: input.artifacts.map((artifact) => artifact.id),
       truncated: false,
     };
   }

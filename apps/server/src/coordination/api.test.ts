@@ -471,8 +471,11 @@ describe("detail, start, and stop statuses", () => {
 
     const response = await app.inject({ method: "GET", url: "/api/coordination-runs", headers });
     expect(response.statusCode).toBe(500);
-    expect(response.body).not.toContain("at Object");
-    expect(response.body).not.toContain("apps/server/src");
+    expect(response.json()).toEqual({
+      error: { code: "INTERNAL_ERROR", message: "Unexpected internal failure" },
+    });
+    expect(response.body).not.toContain("postgres");
+    expect(response.body).not.toContain("hunter2");
   });
 });
 
@@ -538,6 +541,16 @@ describe("production error envelope", () => {
       expect(response.json()).toEqual({
         error: { code: "NOT_FOUND", message: "Coordination run not found" },
       });
+
+      const removedEventsRoute = await app.inject({
+        method: "GET",
+        url: "/api/coordination-runs/22222222-2222-4222-8222-222222222222/events",
+        headers,
+      });
+      expect(removedEventsRoute.statusCode).toBe(404);
+      expect(removedEventsRoute.json()).toEqual({
+        error: { code: "NOT_FOUND", message: "Coordination route not found" },
+      });
     } finally {
       await cleanup();
     }
@@ -565,7 +578,7 @@ describe("evidence timeline through the real stack", () => {
     const details = (await settleHttp(app, created.run.id)) as unknown as {
       run: { status: string; phase: string; finalArtifactId?: string };
       turns: Array<{ sequence: number; role: string; status: string }>;
-      attempts: Array<{ status: string; outputDigest?: string }>;
+      attempts: Array<{ status: string; outputDigest?: string; leaseToken?: string }>;
       artifacts: Array<{ type: string }>;
       events: Array<{ sequence: number; type: string; message: string }>;
     };
@@ -579,6 +592,7 @@ describe("evidence timeline through the real stack", () => {
       "3:finalizer:committed",
     ]);
     expect(details.attempts.every((attempt) => attempt.status === "succeeded")).toBe(true);
+    expect(details.attempts.every((attempt) => !("leaseToken" in attempt))).toBe(true);
     // The confirmed decision 1.3: every committed attempt records its digest.
     expect(details.attempts.every((attempt) => attempt.outputDigest?.startsWith("sha256:"))).toBe(
       true,

@@ -7,6 +7,8 @@ import { loadConfig } from "./config.js";
 import { JsonStore } from "./store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import type { CoordinationReservationSource } from "./coordination/contracts.js";
+import type { CoordinationRun } from "./coordination/types.js";
 
 class FakeRunner implements AgentRunner {
   async run(request: RunnerRequest): Promise<RunnerResult> {
@@ -35,7 +37,10 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner()): Promise<AgentService> {
+async function makeHarness(
+  runner: AgentRunner = new FakeRunner(),
+  reservations?: CoordinationReservationSource,
+): Promise<{ service: AgentService; store: JsonStore }> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -46,14 +51,57 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
     ARK_API_KEY: "test-key",
     ARK_MODEL: "ep-test",
   });
+  const store = new JsonStore(path.join(root, "data", "db.json"));
   const service = new AgentService(
     config,
-    new JsonStore(path.join(root, "data", "db.json")),
+    store,
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
+    reservations,
   );
   await service.initialize();
-  return service;
+  return { service, store };
+}
+
+async function makeService(runner: AgentRunner = new FakeRunner()): Promise<AgentService> {
+  return (await makeHarness(runner)).service;
+}
+
+async function reserveAgent(
+  store: JsonStore,
+  agentId: string,
+  runId = "coordination-run-1",
+): Promise<void> {
+  const timestamp = new Date().toISOString();
+  const run: CoordinationRun = {
+    id: runId,
+    name: "Reserved run",
+    objective: "Test reservation enforcement",
+    requiredSections: [{ key: "result", title: "Result" }],
+    participants: [
+      { role: "planner", agentId, agentNameSnapshot: "Reserved" },
+      { role: "critic", agentId: "critic", agentNameSnapshot: "Critic" },
+      { role: "finalizer", agentId: "finalizer", agentNameSnapshot: "Finalizer" },
+    ],
+    policy: {
+      workflow: "verified_handoff_v1",
+      maxRevisions: 2,
+      maxTurns: 8,
+      maxAttemptsPerTurn: 2,
+      perAttemptTimeoutMs: 120_000,
+      contextMaxChars: 12_000,
+      outputMaxChars: 20_000,
+    },
+    status: "running",
+    phase: "drafting",
+    revision: 0,
+    nextTurnSequence: 1,
+    version: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    startedAt: timestamp,
+  };
+  await store.mutate((database) => database.coordinationRuns.push(run));
 }
 
 describe("Agent lifecycle", () => {
@@ -129,5 +177,137 @@ describe("Agent lifecycle", () => {
 
     finish({ output: "done", threadId: "thread", usage: null });
     await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+  });
+
+  it("returns an execution handle immediately and persists coordination correlations", async () => {
+    let finish!: (result: RunnerResult) => void;
+    const pending = new Promise<RunnerResult>((resolve) => { finish = resolve; });
+    const { service, store } = await makeHarness({
+      run: () => pending,
+      cancel: async () => true,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Relay Planner" });
+    await reserveAgent(store, agent.id);
+
+    const handle = await service.startExecution({
+      agentId: agent.id,
+      prompt: "Produce the proposal",
+      source: "coordination",
+      coordination: {
+        runId: "coordination-run-1",
+        turnId: "turn-1",
+        attemptId: "attempt-1",
+      },
+    });
+    expect(service.getRun(handle.agentRunId)).toMatchObject({
+      source: "coordination",
+      coordinationRunId: "coordination-run-1",
+      coordinationTurnId: "turn-1",
+      coordinationAttemptId: "attempt-1",
+    });
+    expect(service.getMessages(agent.id)).toHaveLength(1);
+
+    finish({ output: "proposal", threadId: "relay-thread", usage: { outputTokens: 3 } });
+    await expect(handle.completion).resolves.toEqual({ status: "completed", output: "proposal" });
+    expect(service.getAgent(agent.id).codexThreadId).toBe("relay-thread");
+    expect(service.getMessages(agent.id).map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("cancels by Agent run ID and cannot cancel a later unrelated run", async () => {
+    const completions: Array<(result: RunnerResult) => void> = [];
+    let cancelCount = 0;
+    const service = await makeService({
+      run: () => new Promise<RunnerResult>((resolve) => { completions.push(resolve); }),
+      cancel: async () => {
+        cancelCount += 1;
+        completions.shift()?.({ output: "late", threadId: null, usage: null });
+        return true;
+      },
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Scoped cancellation" });
+    const first = await service.startExecution({
+      agentId: agent.id,
+      prompt: "first",
+      source: "playground",
+    });
+    expect(await service.cancelRun(first.agentRunId)).toBe(true);
+    await expect(first.completion).resolves.toEqual({ status: "cancelled" });
+
+    const second = await service.startExecution({
+      agentId: agent.id,
+      prompt: "second",
+      source: "playground",
+    });
+    expect(await service.cancelRun(first.agentRunId)).toBe(false);
+    expect(cancelCount).toBe(1);
+    await expect.poll(() => completions.length).toBe(1);
+    completions.shift()?.({ output: "second result", threadId: "thread-2", usage: null });
+    await expect(second.completion).resolves.toEqual({
+      status: "completed",
+      output: "second result",
+    });
+  });
+
+  it("enforces active coordination reservations and releases them at terminal state", async () => {
+    let reservedRunId: string | undefined = "coordination-run-1";
+    const reservations: CoordinationReservationSource = {
+      getReservingRunId: async () => reservedRunId,
+    };
+    const { service, store } = await makeHarness(new FakeRunner(), reservations);
+    const agent = await service.createAgent({ name: "Reserved" });
+    await reserveAgent(store, agent.id);
+
+    await expect(service.sendMessage(agent.id, "competing turn")).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    await expect(service.updateAgent(agent.id, { name: "Changed" })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    await expect(service.startAgent(agent.id)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(service.stopAgent(agent.id)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(service.deleteAgent(agent.id)).rejects.toMatchObject({ statusCode: 409 });
+
+    await expect(service.startExecution({
+      agentId: agent.id,
+      prompt: "wrong owner",
+      source: "coordination",
+      coordination: { runId: "other-run", turnId: "turn", attemptId: "attempt" },
+    })).rejects.toMatchObject({ statusCode: 409 });
+
+    await store.mutate((database) => {
+      database.coordinationRuns[0]!.status = "completed";
+    });
+    reservedRunId = undefined;
+    const { run } = await service.sendMessage(agent.id, "released turn");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+  });
+
+  it("preserves failure state and allows an explicit restart to recover", async () => {
+    const service = await makeService({
+      run: async () => { throw new Error("provider unavailable"); },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Failure" });
+    const handle = await service.startExecution({
+      agentId: agent.id,
+      prompt: "fail",
+      source: "playground",
+    });
+    await expect(handle.completion).resolves.toEqual({
+      status: "failed",
+      error: "provider unavailable",
+    });
+    expect(service.getRun(handle.agentRunId)).toMatchObject({
+      status: "failed",
+      error: "provider unavailable",
+    });
+    expect(service.getAgent(agent.id).status).toBe("error");
+    expect((await service.startAgent(agent.id)).status).toBe("ready");
   });
 });

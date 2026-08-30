@@ -128,6 +128,16 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     return collectReservedAgentIds(this.store.snapshot()).has(agentId);
   }
 
+  async getReservingRunId(agentId: AgentId): Promise<CoordinationRunId | undefined> {
+    return this.store
+      .snapshot()
+      .coordinationRuns.find(
+        (run) =>
+          (run.status === "running" || run.status === "stop_requested") &&
+          run.participants.some((participant) => participant.agentId === agentId),
+      )?.id;
+  }
+
   // ------------------------------------------------------------- commands
 
   async createRun(input: CreateRunRecordInput): Promise<CoordinationRun> {

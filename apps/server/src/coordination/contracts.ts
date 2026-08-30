@@ -74,7 +74,6 @@ export interface VerifiedHandoffWorkflow {
 export interface PromptEnvelope {
   prompt: string;
   promptDigest: string;
-  includedArtifactIds: CoordinationArtifactId[];
   truncated: boolean;
 }
 
@@ -280,4 +279,8 @@ export interface AgentExecutionHandle {
 export interface AgentExecutionControl {
   startExecution(input: StartAgentExecutionRequest): Promise<AgentExecutionHandle>;
   cancelRun(agentRunId: AgentRunId): Promise<boolean>;
+}
+
+export interface CoordinationReservationSource {
+  getReservingRunId(agentId: AgentId): Promise<CoordinationRunId | undefined>;
 }

@@ -26,30 +26,30 @@ If cancellation ownership, timeout settlement, reservation behavior, provider ac
 
 ### AgentService execution seam
 
-- [ ] **P3-01** Add `startExecution()` that creates the existing run/message state and immediately returns an Agent run ID plus completion promise.
-- [ ] **P3-02** Keep `sendMessage()` as a compatibility wrapper with unchanged observable API behavior.
-- [ ] **P3-03** Add coordination run/turn/attempt correlation to Agent runs without exposing lease tokens.
-- [ ] **P3-04** Add `cancelRun(agentRunId)` or equivalent run-scoped cancellation; never cancel by Agent ID when that could target later work.
-- [ ] **P3-05** Enforce reservation on Playground send, edit, delete, start/stop as frozen; allow only the internal request matching the reserving coordination run.
-- [ ] **P3-06** Preserve status, messages, output/error/usage, thread ID, restart, and workspace behavior.
-- [ ] **P3-07** Expand regression tests for normal send, failure reset, stop/cancel, correlations, reservation conflicts, and reservation release.
+- [x] **P3-01** Add `startExecution()` that creates the existing run/message state and immediately returns an Agent run ID plus completion promise.
+- [x] **P3-02** Keep `sendMessage()` as a compatibility wrapper with unchanged observable API behavior.
+- [x] **P3-03** Add coordination run/turn/attempt correlation to Agent runs without exposing lease tokens.
+- [x] **P3-04** Add `cancelRun(agentRunId)` or equivalent run-scoped cancellation; never cancel by Agent ID when that could target later work.
+- [x] **P3-05** Enforce reservation on Playground send, edit, delete, start/stop as frozen; allow only the internal request matching the reserving coordination run.
+- [x] **P3-06** Preserve status, messages, output/error/usage, thread ID, restart, and workspace behavior.
+- [x] **P3-07** Expand regression tests for normal send, failure reset, stop/cancel, correlations, reservation conflicts, and reservation release.
 
 ### Coordination runtime gateway
 
-- [ ] **P3-08** Start real execution with correlations and return `RuntimeExecutionHandle` before awaiting completion so the Agent run ID can be persisted.
-- [ ] **P3-09** Map success/failure/cancel into the small runtime outcome contract with safe messages.
-- [ ] **P3-10** Implement an explicit attempt timeout and attempt→Agent-run map with cleanup in `finally`.
-- [ ] **P3-11** On timeout, request correlated cancellation and wait a short bounded grace period for settlement before allowing retry.
-- [ ] **P3-12** If settlement cannot be confirmed, fail safely; never run two attempts concurrently on one Agent.
-- [ ] **P3-13** Test timeout-winning races, user cancellation, late completion, targeted cancellation, timer/map cleanup, and redaction using fake execution control.
+- [x] **P3-08** Start real execution with correlations and return `RuntimeExecutionHandle` before awaiting completion so the Agent run ID can be persisted.
+- [x] **P3-09** Map success/failure/cancel into the small runtime outcome contract with safe messages.
+- [x] **P3-10** Implement an explicit attempt timeout and attempt→Agent-run map with cleanup in `finally`.
+- [x] **P3-11** On timeout, request correlated cancellation and wait a short bounded grace period for settlement before allowing retry.
+- [x] **P3-12** If settlement cannot be confirmed, fail safely; never run two attempts concurrently on one Agent.
+- [x] **P3-13** Test timeout-winning races, user cancellation, late completion, targeted cancellation, timer/map cleanup, and redaction using fake execution control.
 
 ### Real smoke and timing
 
-- [ ] **P3-14** Invoke one fresh Agent through the real gateway using a tiny harness before full orchestration.
-- [ ] **P3-15** Verify Agent runs/messages remain visible and thread IDs behave as expected.
-- [ ] **P3-16** Complete one short real Planner → Critic → Finaliser run.
-- [ ] **P3-17** Demonstrate that a reserved Agent rejects a competing Playground or coordination request.
-- [ ] **P3-18** Run at least three successful rehearsals and record per-turn/total timing ranges, redacted IDs, runtime profile, and timeout conclusion in `STATUS.md`.
+- [x] **P3-14** Invoke one fresh Agent through the real gateway using a tiny harness before full orchestration.
+- [x] **P3-15** Verify Agent runs/messages remain visible and thread IDs behave as expected.
+- [x] **P3-16** Complete one short real Planner → Critic → Finaliser run.
+- [x] **P3-17** Demonstrate that a reserved Agent rejects a competing Playground or coordination request.
+- [x] **P3-18** Run at least three successful rehearsals and record per-turn/total timing ranges, redacted IDs, runtime profile, and timeout conclusion in `STATUS.md`.
 
 ## Requirements and boundaries
 

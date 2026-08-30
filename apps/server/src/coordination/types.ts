@@ -281,7 +281,13 @@ export interface ListCoordinationRunsResponse {
   runs: CoordinationRun[];
 }
 
-export interface GetCoordinationRunResponse extends CoordinationRunDetails {}
+/** The HTTP read model excludes the internal attempt lease capability. */
+export type CoordinationAttemptResponse = Omit<CoordinationAttempt, "leaseToken">;
+
+export interface GetCoordinationRunResponse
+  extends Omit<CoordinationRunDetails, "attempts"> {
+  attempts: CoordinationAttemptResponse[];
+}
 
 export interface CreateCoordinationRunResponse {
   run: CoordinationRun;

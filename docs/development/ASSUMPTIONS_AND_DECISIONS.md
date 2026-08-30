@@ -1,7 +1,7 @@
 # Relay Assumptions and Resolved Questions
 
 **Last audited:** 2026-08-30  
-**Baseline commit:** `655fba5`
+**Current implementation base:** `257f933`; Phase 3 working branch `phase3-p3-01-real-runtime`
 **Accepted contract commit:** `ea469b2` (`relay/contracts-v1`)
 **Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
 
@@ -11,7 +11,7 @@ This file closes questions that can be answered from the checked-out code and is
 
 | Question | Answer | Consequence |
 |---|---|---|
-| Does `AgentService` expose completion as a promise? | No. `sendMessage()` returns the queued run/message while `executeRun()` remains private and its promise is stored internally. | Phase 3 must add `startExecution()` returning an `AgentExecutionHandle`, retain `sendMessage()` as a compatibility wrapper, and add run-scoped cancellation. |
+| Does `AgentService` expose completion as a promise? | At the Sprint 0 baseline, no. Phase 3 now exposes internal `startExecution()` returning `AgentExecutionHandle`; public `sendMessage()` remains the compatibility wrapper. | Relay uses the handle and `cancelRun(agentRunId)` without bypassing AgentService. |
 | Does `JsonStore` have a migration hook? | No. `initialize()` parses directly as `Database` and rejects any version other than `1`. | Phase 2 must add explicit v1 parsing and additive v1→v2 migration before changing the empty database to v2. A future/invalid version must be rejected without overwriting the file. |
 | Where are route modules registered? | `createApp(config, service, coordination?)` conditionally calls `registerCoordinationRoutes(...)` after existing Agent routes and before static-file setup. | Preserve this seam. Phase 2 must construct the real coordination dependencies in `index.ts`, initialize them after `AgentService`, and pass the service into `createApp`. |
 | Which spelling is canonical? | Code and API values use `finalizer`. | Use “Finaliser” in user-facing copy to match the product narrative, but never use it as a stored enum or API value. Tests should assert `finalizer` in code. |
@@ -21,9 +21,9 @@ This file closes questions that can be answered from the checked-out code and is
 
 | Item | How it is resolved | Required evidence |
 |---|---|---|
-| Real model latency | Measure in Phase 3 with three fresh demo Agents and the seeded short objective. Do not lower the normal timeout merely to manufacture a failure. | Record per-turn and total timings for at least three successful rehearsals; confirm `perAttemptTimeoutMs=120000` is practical or approve a mini-RFC. |
-| Schema compliance of real output | Exercise each role prompt through the real runtime after pure protocol tests pass. Validators remain authoritative. | Several successful outputs for proposal, rejecting/approving review, and final schemas; record only redacted results. |
-| Old thread contamination | Use fresh Agents for the MVP demo as required by the plan. | Rehearsal checklist confirms fresh Agents; per-run threads remain post-MVP unless promoted by mini-RFC. |
+| Real model latency | Measured over three fresh real workflows: 12.919–59.585s per turn and 56.905–108.157s total. | The 120s attempt timeout is practical and remains unchanged. |
+| Schema compliance of real output | Three real proposal/approve/final paths each committed on their first attempt. Validators remained authoritative. | Phase 3 real-provider gate passed with only redacted status/timing evidence recorded. |
+| Old thread contamination | Every rehearsal used three newly created disposable Agents. | Each role began without a thread; the resulting thread ID persisted in its Agent record. |
 
 ## Resolved contract deviations
 
@@ -95,7 +95,7 @@ the Phase 2 handoff decision table.
 | Retry feedback bounds | At most 10 messages, each at most 500 characters | Overview Section 11.3 requires concise feedback but assigns no numbers; the context cap still applies on top | Cheap, prompt-only |
 | Context truncation | Fixed descending ladder of per-field caps (6000, 3000, 1500, 750, 400, 200), lowest rung then fails | A fixed ladder keeps the chosen cap, prompt, and digest reproducible; a search would not | Cheap, prompt-only |
 | Truncatable fields | Proposal summary and section content, review feedback and issue messages, final content only | Section keys and titles stay intact so a truncated proposal still shows the coverage it claims (Section 11.6 forbids silently removing required section content) | Cheap, prompt-only |
-| Artifact identifiers in prompts | Withheld; only payloads are serialised | The output contract forbids emitting IDs, so an Agent is never shown one it could echo back as forged provenance; `includedArtifactIds` still records what was shown | Cheap, prompt-only |
+| Artifact identifiers in prompts | Withheld; only payloads are serialised | The output contract forbids emitting IDs, so an Agent is never shown one it could echo back as forged provenance; the authoritative evidence is `CoordinationTurn.inputArtifactIds` | Cheap, prompt-only |
 | Retry feedback placement | Appended inside `[YOUR TASK]`, not as a fifth envelope section | Keeps the Section 11.5 envelope literally four sections while satisfying Section 11.3 | Cheap, prompt-only |
 | Required section key normalisation | Trimmed and lower-cased before the duplicate check, then rejected unless it matches the frozen slug format | Section 25.1 requires normalising to the documented slug format and rejecting duplicates; without this a run could be created that no Agent output could ever satisfy | Cheap; changes accepted create inputs |
 | Create-time context check | `createRun` builds a probe prompt with the real context builder and rejects the run if it cannot fit | Section 11.6 requires failing creation when the objective and sections alone do not fit; using the real builder means creation cannot succeed for a run whose first prompt is impossible | Cheap |
@@ -113,9 +113,8 @@ here:
 
 ### Mini-RFC: additive repository inputs for `truncated` and `outputDigest`
 
-**Status:** Recorded on 2026-08-30 during P2-09/P2-11. **Awaiting user
-confirmation**; implemented because it is the only way to honour the handoff
-decisions the user already made, and it is additive and reversible.
+**Status:** Recorded on 2026-08-30 during P2-09/P2-11 and **approved by the
+user on 2026-08-30** when authorising the Phase 2 fixes and Phase 3 work.
 
 **Current contract and blocker:** The confirmed handoff decisions require the
 repository to emit `truncated` on the `attempt.started` event (§1.2) and to
@@ -165,8 +164,35 @@ added, removed, or changed by any of them.
 | §1.3 `attempt.outputDigest` | **Populate it.** The digest of the raw Agent output is written when an attempt settles with output, in P2-09/P2-11 | The frozen field keeps a producer and `DatabaseV2` gets no permanently-null column. It mirrors the existing `promptDigest` and gives attempt→output evidence without persisting raw output. |
 | §2.1 `attempt.stale_ignored` | **Event only.** The repository appends an `attempt.stale_ignored` event referencing the refused attempt; the attempt row keeps the status it settled as | The frozen `FinishAttemptInput.status` union is not extended, so a caller that lost its lease never writes to an attempt it does not hold. Accepted cost: the `stale_ignored` member of `CoordinationAttemptStatus` stays unwritten, and Phase 4 reads the evidence from the event stream. |
 
-Handoff §2.2 (`PromptEnvelope.includedArtifactIds`) is **still open**. It does not
-affect persisted shape and is decided at P2-09, as the handoff allows.
+### Mini-RFC: public attempts exclude the internal lease capability
+
+**Status:** Approved by the user on 2026-08-30 as part of the Phase 2 fixes.
+
+**Current contract and blocker:** `CoordinationAttempt.leaseToken` is required
+internally for atomic commit ownership, while the original
+`GetCoordinationRunResponse extends CoordinationRunDetails` exposed that field
+to every authenticated HTTP client. No HTTP route consumes it, but Phase 4
+would otherwise copy the capability into browser state.
+
+**Change:** Keep `CoordinationRunDetails` and the durable attempt unchanged for
+repository/service use. Define `CoordinationAttemptResponse` as the attempt
+without `leaseToken`, override `attempts` in `GetCoordinationRunResponse`, and
+strip the field at the route boundary. Tests assert no detail attempt owns a
+`leaseToken` property. No database migration is required.
+
+### Mini-RFC: remove redundant `PromptEnvelope.includedArtifactIds`
+
+**Status:** Approved by the user on 2026-08-30 as part of the Phase 2 fixes.
+
+**Current contract and blocker:** The context builder returned
+`includedArtifactIds`, but the service deliberately dropped it. The persisted
+turn already carries the workflow-selected `inputArtifactIds`, and prompt tests
+directly verify the stricter role visibility filter. Keeping a second unused
+array suggested authority it did not have.
+
+**Change:** Remove `includedArtifactIds` from `PromptEnvelope`. Keep
+`CoordinationTurn.inputArtifactIds` as the durable evidence and retain the
+prompt-content visibility/leakage tests. This changes no route or stored shape.
 
 ### Extra events endpoint
 

@@ -342,7 +342,6 @@ const contextBuilder: ContextBuilder = {
     return {
       prompt: turn.role + (retryValidationErrors.length ? " retry" : ""),
       promptDigest: "digest-" + turn.id,
-      includedArtifactIds: [],
       truncated: false,
     };
   },
