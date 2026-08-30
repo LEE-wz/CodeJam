@@ -118,6 +118,17 @@ export interface CoordinationRun {
 
 Session participants are stored in the existing `participants` array as ordered `{ role: "participant", agentId, agentNameSnapshot }` entries, 2 to 6 of them, all distinct. No new participant table.
 
+### 4.1 Session message payload
+
+```ts
+{ schemaVersion: 1, type: "session_message", content: string /* 1..500 */, done?: boolean }
+```
+
+`content` is the participant's message: the exact next integer for countdown, any
+bounded non-empty text for free chat. `done` is the free-chat completion signal
+described in Section 6.5; it is absent on countdown messages and rejected if
+present.
+
 ## 5. Workflow semantics
 
 `SharedSessionWorkflowV1` (new file `coordination/session-workflow.ts`) is pure and deterministic, mirroring `overview.md` Section 11.1:
@@ -171,7 +182,8 @@ A wrong or malformed number follows the existing attempt algorithm unchanged: re
 - **Validation:** the same parsing order as 6.1 steps 1 to 5 (size, trim, one outer fence, one parse, strict schema with content 1..500). There is no cross-field numeric rule.
 - **Shared state:** free-chat runs have no `nextExpectedNumber`; `run.sharedState` stays absent.
 - **Prompt:** `[YOUR TASK]` instructs the Agent to contribute the next message toward the shared objective based on the transcript. The output contract is the same `session_message` shape. No expected value exists to state, so the countdown prompt rule has no free-chat equivalent.
-- **Completion:** the workflow completes when all allowed turns are committed (`maxTurns`) or on user stop. The middleware coordinates turns and guarantees mechanics; it never judges message substance.
+- **Completion:** the workflow completes when **every participant's most recent committed message carries `done: true`** (unanimous consent across one full round), or when all allowed turns are committed (`maxTurns`), or on user stop -- whichever comes first. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*, only whether the participants have all said they are finished.
+- **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the shared objective met; an Agent never ends a run. The completion rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. With no signals at all, behaviour is exactly the frozen `maxTurns` rule, so the addition is strictly additive. Unanimity needs at least one message from every participant, so a run cannot complete before `participantCount` committed turns. `done` is rejected on a countdown message, where the numeric validator is the sole authority.
 - **Retry and failure:** the attempt algorithm is identical (malformed or timed-out output retries once, then the run fails).
 
 ## 7. API changes
@@ -244,16 +256,26 @@ All existing 389 tests must remain green throughout.
 - **Latency mitigation:** per-turn times measured so far are 13 to 60 seconds, so a live 10-turn run is 2.5 to 10 minutes, over the 3-minute demo budget. Mitigations in order: create demo Agents on the fastest available model endpoint; pre-execute a full 10-to-1 run so the evidence view is already populated; start a live shorter run (5-to-1) and narrate architecture while it polls; keep one stored wrong-number run for the failure evidence.
 - **Housekeeping:** the current "Test Relay" run whose objective was "Count down from 10 to 0" produced a final artifact claiming a countdown was executed when nothing was executed. Delete that run from `data/launchpad.json` before judging (Phase 9 task P9-19) or it becomes confusing evidence.
 
-## 11. Open decisions and defaults
+## 11. Settled decisions and defaults
 
-| Question | Default |
+All of these were open questions until P5-01. The team settled every one on
+2026-08-30; full rationale is in
+[`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md). Changing any of
+them now requires a mini-RFC.
+
+| Question | Settled |
 |---|---|
 | `sessionStartValue` default and range | 10; range 2..12 (countdown only) |
 | `workflow` field defaulting vs breaking change | Optional, defaults to `verified_handoff_v1` |
 | Participant ordering UX | Selection order is the turn order; drag reordering is stretch |
-| Wrong-number recovery | Retry same Agent, then fail run; reassignment is stretch |
+| Wrong-number recovery | Retry same Agent, then fail run; reassignment is cut |
 | Free-chat default `maxTurns` | 6; range 3..12 |
+| Free-chat completion | Unanimous `done` across one round, or `maxTurns`, or user stop (mini-RFC, approved) |
 | Delete the misleading countdown run from `data/` | Yes, before submission (P9-19) |
+
+One item is approved in shape but not in detail: the specific unanimity rule for
+the `done` signal was proposed by the implementer, not chosen by the team.
+**Confirm it before P6-01 encodes it.**
 
 ## 12. Relation to existing documents
 
