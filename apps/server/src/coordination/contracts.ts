@@ -142,6 +142,12 @@ export interface BeginAttemptInput {
   runId: CoordinationRunId;
   turnId: CoordinationTurnId;
   attempt: CoordinationAttempt;
+  /**
+   * Whether the prompt for this attempt was truncated to fit
+   * `policy.contextMaxChars`. Recorded in the `attempt.started` event details
+   * rather than on the attempt, per the confirmed handoff decision 1.2.
+   */
+  truncated?: boolean | undefined;
 }
 
 export type BeginAttemptResult =
@@ -155,6 +161,11 @@ export interface CommitAcceptedArtifactInput {
   attemptId: CoordinationAttemptId;
   leaseToken: string;
   artifact: CoordinationArtifact;
+  /**
+   * Digest of the raw Agent output this artifact was parsed from. Written to
+   * `attempt.outputDigest` on commit, per the confirmed handoff decision 1.3.
+   */
+  outputDigest?: string | undefined;
 }
 
 export type CommitAcceptedArtifactResult =

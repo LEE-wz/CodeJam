@@ -1,8 +1,8 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 02:17 UTC
+**Last audit:** 2026-08-30 02:25 UTC
 **Audited commit:** `d81635a` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
-**Implementation branch:** `phase2-p2-05-events-redaction` (chained from `phase2-p2-01-database-v2`, base `d81635a` on `main`)
+**Implementation branch:** `phase2-p2-08-durable-repository` (chained from `phase2-p2-05-events-redaction`, base `d81635a` on `main`)
 **Current phase:** Phase 2 — Durable Backend and Evidence Ledger (in progress)
 **Current gate:** Checkpoint 2 (not reached)
 **Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 authorised and started
@@ -25,13 +25,22 @@ before P2-01 and are recorded in
 
 Next executable actions:
 
-1. **P2-08/P2-09** — the durable repository's deterministic read model
-   (newest-first, cap 50, sorted detail) and the atomic
-   create/start/schedule/begin-attempt commands, each in one `JsonStore.mutate()`.
-   Use `testing/memory-repository.ts` as the accept/reject specification.
-2. **P2-10–P2-13** — lease-scoped correlation, commit, and terminal commands.
-3. **P2-14** — the race suite, driven by the scripted runtime's deferred
-   promises rather than sleeps.
+1. **P2-15/P2-16** — strict create-input validation, UUID params, policy
+   ranges, and safe error envelopes, verified through Fastify injection for
+   list/create/detail/start/stop including auth, `404`, `409`, and body limit.
+2. **P2-17/P2-18** — construct the real workflow, protocol, context builder,
+   and `DurableCoordinationRepository` in `index.ts` with the scripted runtime,
+   initialise coordination after `AgentService`, pass it into `createApp`, and
+   add structured logs carrying identifiers only.
+3. **P2-22** — confirm the detail response reads as a coherent evidence
+   timeline for the normal, reject, retry, stopped, interrupted, and failed
+   fixtures.
+
+One item needs your confirmation, not a decision: the additive mini-RFC in
+`ASSUMPTIONS_AND_DECISIONS.md` that adds `BeginAttemptInput.truncated?` and
+`CommitAcceptedArtifactInput.outputDigest?`. Both are the only way to deliver
+the handoff decisions §1.2 and §1.3 you already confirmed; both are optional,
+so no existing caller or Phase 1 fixture changed.
 
 Still open, by design: handoff §2.2 (`PromptEnvelope.includedArtifactIds`) is
 decided at P2-09; it does not affect persisted shape.
@@ -104,7 +113,9 @@ no task was promoted on a host-only or focused run.
 |---|---|---|
 | P2-01–P2-04 | `complete` | Overview Section 17 mini-sprint 3A implemented as one unit, because `DatabaseV2` cannot compile without the store that loads it. `DatabaseV1`/`DatabaseV2`/`AnyDatabase` and optional `AgentRunCorrelation` fields added; `parseDatabaseDocument` parses v1 explicitly and migrates additively by spread, so unknown top-level and per-record fields survive; new databases are created at v2; future/malformed/unparseable documents are rejected before any write. 11 store tests. Compose `npm run check` passed: 14 files / 247 tests. |
 | P2-05–P2-07 | `complete` | Overview Section 19 mini-sprint 5A. Pure factories for all 17 frozen event types return an identity-free `CoordinationEventDraft`, because Section 10.3 requires the per-run sequence to be allocated inside the repository's own `mutate()`. Details are redacted **inside** the factory, so a caller cannot append an unredacted event by forgetting a step. `truncated` rides on `attempt.started` and `attempt.stale_ignored` exists as an event, per the confirmed handoff decisions. The redactor is a key allowlist plus secret-pattern stripping that runs before truncation. 38 tests. Compose `npm run check` passed: 16 files / 285 tests. |
-| P2-08–P2-18, P2-20–P2-22 | `not_started` | — |
+| P2-08–P2-14 | `complete` | `DurableCoordinationRepository`. Every command runs in exactly one `JsonStore.mutate()`; there is no read-check-write across store calls. Reads are deterministic (newest-first cap 50 with insertion-order tie-break; detail sorted by turn sequence then attempt number, never array position) and return deep copies. `startRun` checks created status, distinctness, Agent existence/readiness, derived coordination reservations, and in-flight ordinary Agent Runs together. Commit checks run status, both active pointers, attempt status, and the opaque lease as one condition. A losing caller writes nothing but an `attempt.stale_ignored` event. 51 tests, including concurrent same-run starts, concurrent overlapping-participant starts, disjoint starts, wrong/superseded lease, timeout-then-successful-retry, stop-versus-commit, duplicate completion, terminal overwrite prevention, per-run event numbering, and a leakage check. |
+| P2-20, P2-21 | `complete` | `interruptActiveRuns()` settles run, turn, and attempt and appends `run.interrupted` then `run.failed` with `SERVER_RESTARTED`, which is what releases the derived reservations; it is idempotent and leaves created/terminal runs alone. `listReservedAgentIds()`/`isAgentReserved()` expose the Section 10.4 derived reservation for `AgentService`; tests prove release after stopped and interrupted. Wiring into `AgentService` and `index.ts` remains P2-17. |
+| P2-15–P2-18, P2-22 | `not_started` | — |
 | P2-19 | `complete` (verify-only) | Confirmed as the handoff predicted: `routes.test.ts` asserts `GET /api/coordination-runs/:id/events` returns `404`. No implementation was required. |
 
 ## Implemented inventory
@@ -143,10 +154,11 @@ no task was promoted on a host-only or focused run.
 - Database v2 and explicit v1 migration are **done** (P2-01–P2-04). P2-19 is
   verified as already satisfied.
 - Event factories and redaction are **done** (P2-05–P2-07).
-- Remaining: the real atomic
-  repository and its race suite (P2-08–P2-14), API validation/injection tests
-  and composition wiring (P2-15–P2-18), and restart settlement plus the
-  reservation helper and evidence-timeline check (P2-20–P2-22).
+- The durable atomic repository, its race suite, restart settlement, and the
+  reservation helper are **done** (P2-08–P2-14, P2-20, P2-21).
+- Remaining: API validation and Fastify-injection tests (P2-15/P2-16),
+  composition wiring and structured logging (P2-17/P2-18), and the
+  evidence-timeline confirmation (P2-22).
 
 ### Phase 3
 
@@ -194,6 +206,9 @@ no task was promoted on a host-only or focused run.
 | 2026-08-29 17:43:51 UTC | `f3caed5` | **Checkpoint 1 gate** — final scoped Docker Compose `npm run check` | **Passed:** server and web typechecks, 14 server test files with 237 tests, web build, and server build. Image built from `node:22-bookworm-slim`; `npm ci` continues to report 1 moderate and 5 high audit findings held for release review. This is the sole completion evidence for P1-07–P1-17. |
 | 2026-08-30 02:15 UTC | `phase2-p2-05-events-redaction` | P2-05–P2-07 focused Docker Compose typecheck and tests | **Passed:** server typecheck plus 38 tests — 25 redaction tests (bearer/authorization/cookie/set-cookie/JWT/provider-key/lease-token patterns, redaction ordered before truncation, visible truncation, allowlist rejection of prompts and lease tokens under five spellings, bounded arrays, dropped objects, stable key order) and 13 event tests (all 17 frozen types covered, stable messages, actor attribution, `truncated` detail, Finaliser label with `finalizer` enum). |
 | 2026-08-30 02:17 UTC | `phase2-p2-05-events-redaction` | P2-05–P2-07 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 16 server test files with 285 tests, web build, and server build. Sole completion evidence for P2-05–P2-07. |
+| 2026-08-30 02:22 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 focused Docker Compose typecheck and `repository.test.ts` | **Passed:** server typecheck plus 51 repository tests. |
+| 2026-08-30 02:24 UTC | `phase2-p2-08-durable-repository` | Race suite repeated ten times through Docker Compose | **Passed 10/10, no flakes.** Required by the phase sheet before the lease/race gate can be considered met. Races are driven by `Promise.all` over the store's serialised mutation queue and by explicit state sequencing — no sleeps anywhere in the suite. |
+| 2026-08-30 02:25 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 final scoped Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 17 server test files with 336 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings held for release review (P5-16). Sole completion evidence for these tasks. |
 | 2026-08-30 02:06 UTC | `d81635a` | Phase 2 baseline Docker Compose `npm run check` on branch `phase2-p2-01-database-v2` | **Passed** before any edit: server/web typechecks, 14 server test files with 237 tests, web build, and server build. Establishes the green baseline the Phase 2 work starts from. |
 | 2026-08-30 02:09 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 focused Docker Compose typecheck and `store.test.ts` | **Passed:** server typecheck plus 11 store tests covering empty v2 startup, realistic v1 migration with field/timestamp preservation, unknown-field preservation, v2 round-trip with coordination collections and Agent Run correlation, and non-overwriting rejection of future, malformed, and unparseable documents. |
 | 2026-08-30 02:10 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 14 server test files with 247 tests, web build, and server build. Sole completion evidence for P2-01–P2-04. |
@@ -260,6 +275,7 @@ no task was promoted on a host-only or focused run.
 - Nine Phase 1 implementation decisions are recorded in `ASSUMPTIONS_AND_DECISIONS.md`; they change no frozen type, route, or persisted shape, and were confirmed unchanged on 2026-08-30.
 - Four Phase 2 handoff decisions settled on 2026-08-30: `sizeChars` stays the raw-output length; `truncated` is an `attempt.started` event detail only; `outputDigest` is populated at commit; `attempt.stale_ignored` is emitted as an event without extending the `finishAttempt` status union. None is a mini-RFC.
 - `DatabaseV2` migration is additive by spread, so unknown fields in an existing v1 file are preserved rather than dropped.
+- An additive mini-RFC adds `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`, the only route by which the confirmed §1.2 and §1.3 decisions can reach the repository. Both are optional; no frozen domain type, event type, route, or persisted shape changed. **Awaiting user confirmation.**
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

@@ -111,6 +111,46 @@ here:
   runtime timeout or failure surfaces through the attempt's `errorCode` and
   `errorMessage` and through the failed run's message, not through that field.
 
+### Mini-RFC: additive repository inputs for `truncated` and `outputDigest`
+
+**Status:** Recorded on 2026-08-30 during P2-09/P2-11. **Awaiting user
+confirmation**; implemented because it is the only way to honour the handoff
+decisions the user already made, and it is additive and reversible.
+
+**Current contract and blocker:** The confirmed handoff decisions require the
+repository to emit `truncated` on the `attempt.started` event (§1.2) and to
+write `attempt.outputDigest` at commit (§1.3). Neither value can reach the
+repository: the frozen `BeginAttemptInput` is `{ runId, turnId, attempt }` and
+`CoordinationAttempt` has no `truncated` field, and the frozen
+`CommitAcceptedArtifactInput` is `{ runId, turnId, attemptId, leaseToken,
+artifact }` with no digest of the raw output. Both values exist in
+`CoordinationService`, which holds the `PromptEnvelope` and the raw output.
+
+**Proposed change:** Two optional input fields, nothing else.
+
+- `BeginAttemptInput.truncated?: boolean | undefined`
+- `CommitAcceptedArtifactInput.outputDigest?: string | undefined`
+
+No frozen domain type, event type, route, or persisted shape changes.
+`CoordinationAttempt.outputDigest` already exists and merely gains a producer.
+Both fields are optional, so every existing caller and the Phase 1 fixtures
+compile unchanged.
+
+**Affected files/workstreams:** `coordination/contracts.ts`,
+`coordination/repository.ts`, `coordination/service.ts` at the two call sites,
+and the repository tests. `testing/memory-repository.ts` ignores both fields and
+so is unchanged, preserving the frozen Phase 1 fixture behaviour.
+
+**Required evidence:** `attempt.started` carries `truncated` for a truncated
+prompt and for an untruncated one; a committed attempt records the supplied
+`outputDigest`; omitting either field leaves the attempt and event exactly as
+before. The full Docker Compose `npm run check` must pass.
+
+**Alternative rejected:** deriving the digest inside the repository from the
+stored payload. That would silently redefine `outputDigest` as a payload digest,
+contradicting decision §1.3 and mirroring the `sizeChars` ambiguity the handoff
+was written to close.
+
 ### Phase 2 handoff decisions
 
 **Status:** Decided by the user on 2026-08-30, before P2-01, in answer to the
