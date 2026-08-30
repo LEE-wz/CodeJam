@@ -51,10 +51,11 @@ to the amendment's original list. `session-placeholders.test.ts` proves each one
 throws.
 
 Out of scope by instruction, and **not** fixed: `repository.ts`
-`expectedArtifactTypeForTurn` (P7-02) and `context-builder.ts` `capPayload`
-(Phase 6). Both accept the new members with no compile error, so neither the
-build nor the test suite will remind anyone they are outstanding. See
-[`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md).
+`expectedArtifactTypeForTurn` (P7-02 now converts it to an exhaustive typed map
+so the compiler enforces the case) and `context-builder.ts` `capPayload` (P6-07
+adds the explicit `session_message` branch). Both accept the new members with no
+compile error, so neither the build nor the test suite will remind anyone they
+are outstanding. See [`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md).
 
 `service.ts` is edited outside the amendment for the create dispatch and minimal
 session create, because P5-07's construction test requires them.
@@ -123,6 +124,11 @@ used a clean working tree, so the source it tarred is exactly the frozen commit.
 
 Frozen session contract commit: **`2fe14eb`**. No convenience tag was created;
 that remains an explicit team decision.
+
+On 2026-08-30 the whole team confirmed the free-chat completion signal
+(unanimous `done`) and the final-artifact-pointer rule (last committed session
+message); see [`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md).
+The Phase 6 sheet already encodes both.
 
 ## Handoff to Phase 6
 

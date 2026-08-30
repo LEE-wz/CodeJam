@@ -305,7 +305,7 @@ Phase 1 split, and the discrepancy is recorded rather than silently coded:
 | Wrong-number recovery | Retry the same Agent once with validation errors; a second failure ends the run with `MAX_ATTEMPTS_EXCEEDED`. Reassignment is cut. |
 | Session creation | `workflow` defaults to `"verified_handoff_v1"`; session variant requires 2–6 ordered distinct Agents and `sessionProtocol` (`"countdown"` default, `"free_chat"`). Countdown: `sessionStartValue` 2–12 (default 10), `maxTurns >= sessionStartValue`. Free chat: no start value, `maxTurns` 3–12 (default 6). No required sections, no max revisions. |
 | Shared state | `run.sharedState.nextExpectedNumber` is public read-model evidence for countdown runs; free-chat runs have no shared state. Leases stay hidden. |
-| Second session protocol | `free_chat` is in scope on the same `shared_session_v1` workflow: bounded non-empty messages (1..500), completion at `maxTurns` (default 6, range 3..12) or user stop, no `sessionStartValue`, no `nextExpectedNumber`, and no substance judgement by the middleware. |
+| Second session protocol | `free_chat` is in scope on the same `shared_session_v1` workflow: bounded non-empty messages (1..500) with an advisory `done` signal, completion on a unanimous `done` round, at `maxTurns` (default 6, range 3..12), or on user stop, no `sessionStartValue`, no `nextExpectedNumber`, and no substance judgement by the middleware. |
 | Failure demo | One demo Agent is instructed to occasionally subtract 2 instead of 1. The Agent genuinely misbehaves; middleware behaviour is never simulated. |
 | Latency | Live 10-turn runs can exceed the 3-minute demo budget. Mitigations: fast demo endpoint, pre-executed full run, live shorter run narrated over polling. |
 
@@ -392,10 +392,12 @@ signal reopens the run; `done` on a countdown message is rejected with
 `INVALID_AGENT_OUTPUT`; a free-chat run with no signals still completes at
 `maxTurns`. Fixtures for the first three exist in `testing/session-fixtures.ts`.
 
-**Not yet confirmed.** The *shape* is approved. The specific unanimity rule above
-was proposed by the implementer, not chosen by the team, and should be confirmed
-before P6-01 encodes it. The alternatives considered were N consecutive signals
-from any participants, and requiring explicit user confirmation.
+**Confirmed (2026-08-30).** The whole team approved the unanimity rule exactly
+as written above, together with the final-artifact-pointer rule: on any session
+completion the run's `finalArtifactId` points at the last committed session
+message (countdown: the message with value `1`; free chat: the closing message
+of the unanimous round, or the message that consumed `maxTurns`). `P6-01`
+encodes both rules.
 
 ### Mini-RFC: Phase 5 exhaustiveness exception (approved, P5-02)
 
@@ -470,7 +472,7 @@ assert them would widen the module surface, which this phase may not do.
 
 - Round-robin selection derives from committed session turns only; retries never advance the position.
 - A countdown session commit updates `nextExpectedNumber` in the same atomic mutation as turn and attempt settlement; free-chat commits update no shared state.
-- Free-chat completion is turn-bound or user-stopped; the middleware never judges message substance.
+- Free-chat completion is unanimous-`done`, turn-bound, or user-stopped; the middleware never judges message substance, only whether participants have declared completion. On completion the run's `finalArtifactId` points at the last committed session message.
 - Only the active lease may commit; late results stay visible but ignored.
 - Countdown prompts never contain the expected number; free-chat prompts contain no hidden state. Prompts never contain lease tokens, events, or another Agent's raw history beyond the bounded transcript.
 - All existing verified-handoff and single-Agent behaviors, tests, and stored shapes remain unchanged.

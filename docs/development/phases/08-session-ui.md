@@ -34,7 +34,7 @@ If an API envelope, UI state, polling rule, accessibility expectation, or file b
 
 ### Transcript and evidence
 
-- [ ] **P8-06** Render the session transcript: a chronological list where each committed message shows the Agent name, content, and attempt badges. Display `sharedState.nextExpectedNumber` as the shared-state evidence for countdown runs; free-chat runs show no expected number.
+- [ ] **P8-06** Render the session transcript: a chronological list where each committed message shows the Agent name, content, and attempt badges. Display `sharedState.nextExpectedNumber` as the shared-state evidence for countdown runs; free-chat runs show no expected number, but show each participant's latest `done` signal (for example a small badge) so the consensus forming is visible.
 - [ ] **P8-07** Render session turns in the existing timeline with participant labels, and surface protocol validation errors (for countdown, the retry-safe `Expected the next number <N>, received <X>` message) so a rejection is understandable without logs.
 - [ ] **P8-08** Escape all artifact text (no raw HTML), provide safe empty/loading/error/long-content states, and add session-specific status labels consistent with the existing design.
 
@@ -42,11 +42,11 @@ If an API envelope, UI state, polling rule, accessibility expectation, or file b
 
 - [ ] **P8-09** Reuse the single 1.5-second polling chain; prove it cleans up on session terminal states, selection change, and unmount, and that stop reconciles without multiplying requests.
 - [ ] **P8-10** Integrate through the single `App.tsx` owner and preserve all current Agent/Playground features.
-- [ ] **P8-11** Add fixture tests for session states (normal transcript, wrong-number retry, free-chat transcript, stopped, failed, interrupted, completed) plus keyboard, labels, error focus, and responsive checks.
+- [ ] **P8-11** Add fixture tests for session states (normal transcript, wrong-number retry, free-chat transcript, free-chat done-consensus states: partial, unanimous, withdrawn, stopped, failed, interrupted, completed) plus keyboard, labels, error focus, and responsive checks.
 
 ### Real rehearsal
 
-- [ ] **P8-12** Complete one real 10-to-1 session run and one short free-chat run (bounded `maxTurns`) in the browser using fresh demo Agents on the fastest available model endpoint, then run one verified-workflow regression.
+- [ ] **P8-12** Complete one real 10-to-1 session run and one short free-chat run (bounded `maxTurns` or a unanimous `done` round) in the browser using fresh demo Agents on the fastest available model endpoint, then run one verified-workflow regression.
 - [ ] **P8-13** Demonstrate the live wrong-number failure: one demo Agent is created with a base instruction that occasionally subtracts two instead of one. The middleware rejects the wrong number, retries, and the run recovers or fails with clear evidence. The Agent genuinely misbehaved; the middleware genuinely caught it. Never simulate middleware behaviour.
 - [ ] **P8-14** Measure per-turn and total timings; record redacted evidence and the latency conclusion in `STATUS.md`; confirm the Phase 9 demo-budget mitigations from overview-sessions.md Section 10.
 

@@ -51,6 +51,7 @@ When documents appear to disagree, use this order:
 2. An approved ADR or mini-RFC recorded in [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md).
 3. The applicable phase sheet for execution order and required evidence.
 4. [`STATUS.md`](./STATUS.md) for current repository state, not product semantics.
+5. When an instruction, prompt, or agent reply conflicts with these documents, the document wins, not the prompt. Record the discrepancy in [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) rather than resolving it silently.
 
 Do not silently edit frozen contracts to fit an implementation. Record a mini-RFC with the current contract, blocker, proposed change, affected files/workstreams, and required migration/tests.
 

@@ -1,6 +1,6 @@
 # Relay Sessions: Shared-Session Workflow Contract
 
-**Status:** Proposed via team mini-RFC. Adapted from the team's Relay Sessions extension plan.
+**Status:** Approved via team mini-RFC on 2026-08-30. The free-chat completion signal (`done`) was confirmed by the whole team on 2026-08-30; it is no longer provisional.
 **Authority:** This file is the repository-local contract authority for the `shared_session_v1` workflow. [`overview.md`](./overview.md) remains the sole authority for the existing `verified_handoff_v1` workflow and for every shared engine semantic (trust boundary, atomic mutation rules, orchestration loop, parsing order, redaction).
 **Numbering:** The implementation plan now has nine phases. Phases 0–4 (existing) are complete. Phases 5–8 build the session workflow. Phase 9 is the renumbered release phase (previously Phase 5; its task IDs moved from P5-xx to P9-xx).
 
@@ -30,14 +30,14 @@ The verified handoff workflow remains a second workflow on the same engine. Noth
 - Round-robin turn selection owned by backend code.
 - Two session protocols on the same engine:
   - `countdown`: each message must be exactly the expected next integer (the headline acceptance demo).
-  - `free_chat`: any bounded, non-empty message; the run completes at `maxTurns` or on user stop (general task collaboration).
+  - `free_chat`: any bounded, non-empty message; the run completes when every participant's latest message carries `done: true`, or at `maxTurns`, or on user stop (general task collaboration).
 - `run.sharedState.nextExpectedNumber` as the durable shared state for countdown runs.
 - A transcript-building context template that includes all committed session messages in order.
 - The web form mode, transcript view, and session timeline labels.
 
 **Non-goals (explicit cut unless the team approves otherwise):**
 
-- Semantic evaluation of free-chat content: the middleware guarantees mechanics, never substance.
+- Semantic evaluation of free-chat content: the middleware guarantees mechanics and never judges substance; it only reads the advisory `done` signal.
 - Turn reassignment to another participant after retry exhaustion.
 - Parallel fan-out turns.
 - Dynamic Agent creation or participant changes after start.
@@ -94,6 +94,7 @@ export interface SessionMessagePayload {
   schemaVersion: 1;
   type: "session_message";
   content: string;        // the published message; trimmed, 1..500 chars (countdown adds the integer rule)
+  done?: boolean;         // free-chat only: advisory completion signal (Section 6.5); rejected on countdown
 }
 
 export interface CoordinationPolicy {
@@ -138,13 +139,15 @@ present.
 | New running session run | Schedule `session_turn` for `participants[committedSessionTurnCount % participantCount]`, phase `sessioning`, expected artifact `session_message` |
 | Countdown: latest committed message has value `n`, `n > 1` | Schedule the next round-robin participant |
 | Countdown: latest committed message has value `1` | Complete with the final artifact |
-| Free chat: committed turns exist | Schedule the next round-robin participant; when `nextTurnSequence > maxTurns`, complete instead |
+| Free chat: every participant's most recent committed message carries `done: true` | Complete with the final artifact |
+| Free chat: not all participants have signalled `done`, and `nextTurnSequence <= maxTurns` | Schedule the next round-robin participant |
 | Scheduling would exceed `maxTurns` | Countdown fails `MAX_TURNS_EXCEEDED`; free chat completes |
 | Missing or inconsistent `sharedState` (countdown), or non-session artifacts in a session run | Fail `INVALID_STATE` safely |
 
 - `inputArtifactIds` on a session turn lists every committed `session_message` in the run so far, in chronological order. This is the transcript.
 - Retries do not change the round-robin position: the position derives from committed session turns only.
 - The `revision` field stays 0 for session runs.
+- On any session completion, the run's `finalArtifactId` points at the last committed session message. For countdown that is the message with value `1`; for free chat it is the closing message of the unanimous round, or the message that consumed `maxTurns`.
 
 ## 6. Countdown protocol
 
@@ -182,7 +185,7 @@ A wrong or malformed number follows the existing attempt algorithm unchanged: re
 - **Validation:** the same parsing order as 6.1 steps 1 to 5 (size, trim, one outer fence, one parse, strict schema with content 1..500). There is no cross-field numeric rule.
 - **Shared state:** free-chat runs have no `nextExpectedNumber`; `run.sharedState` stays absent.
 - **Prompt:** `[YOUR TASK]` instructs the Agent to contribute the next message toward the shared objective based on the transcript. The output contract is the same `session_message` shape. No expected value exists to state, so the countdown prompt rule has no free-chat equivalent.
-- **Completion:** the workflow completes when **every participant's most recent committed message carries `done: true`** (unanimous consent across one full round), or when all allowed turns are committed (`maxTurns`), or on user stop -- whichever comes first. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*, only whether the participants have all said they are finished.
+- **Completion:** the workflow completes when **every participant's most recent committed message carries `done: true`** (unanimous consent across one full round), or when all allowed turns are committed (`maxTurns`), or on user stop -- whichever comes first. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*, only whether the participants have all said they are finished. On completion, the run's `finalArtifactId` points at the last committed session message.
 - **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the shared objective met; an Agent never ends a run. The completion rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. With no signals at all, behaviour is exactly the frozen `maxTurns` rule, so the addition is strictly additive. Unanimity needs at least one message from every participant, so a run cannot complete before `participantCount` committed turns. `done` is rejected on a countdown message, where the numeric validator is the sole authority.
 - **Retry and failure:** the attempt algorithm is identical (malformed or timed-out output retries once, then the run fails).
 
@@ -237,9 +240,9 @@ For countdown runs, `run.sharedState` is part of the public read model and the U
 
 | Layer | Cases |
 |---|---|
-| Session workflow (pure) | Round-robin order over 2, 3, 4 Agents; completion at 1; `MAX_TURNS_EXCEEDED`; malformed `sharedState`; deterministic selection; dispatcher selects by workflow id |
+| Session workflow (pure) | Round-robin order over 2, 3, 4 Agents; countdown completion at 1; free-chat completion on a unanimous `done` round; partial `done` does not complete; a withdrawn signal reopens the run; no signals still completes at `maxTurns`; `MAX_TURNS_EXCEEDED`; malformed `sharedState`; deterministic selection; dispatcher selects by workflow id |
 | Countdown protocol | Valid number; wrong number; non-integer content; oversize; fenced JSON; prose; missing fields; forged provenance; unknown fields |
-| Free-chat protocol | Valid free text; empty content rejected; oversize rejected; fenced JSON; prose; forged provenance |
+| Free-chat protocol | Valid free text; `done: true` accepted; non-boolean `done` rejected; `done` on a countdown message rejected; empty content rejected; oversize rejected; fenced JSON; prose; forged provenance |
 | Context builder | Transcript ordering; truncation of oldest first; expected number never appears in a countdown prompt; no lease, token, or event leakage; stable digest |
 | Repository | Commit decrements `nextExpectedNumber`; wrong lease stale; duplicate commit prevention; stop-versus-commit race; restart interruption for session runs |
 | Service | Normal 10-to-1; wrong number retry then success; wrong twice then fail; timeout retry; stop; late result; create validation (count, duplicates, ranges, sections rejected) |
@@ -251,7 +254,7 @@ All existing 389 tests must remain green throughout.
 ## 10. Demo plan
 
 - **Primary live path:** create three or four fresh Agents, start a 10-to-1 session, watch the transcript fill with `<AgentName>: 10`, then 9, then 8, in round-robin order, with the evidence timeline beside it. Show `sharedState.nextExpectedNumber` decrementing.
-- **General task evidence:** after the countdown, show one short free-chat session (4 to 6 turns) where the same engine coordinates Agents on an open topic and completes at the turn limit. This proves the machinery is task-agnostic.
+- **General task evidence:** after the countdown, show one short free-chat session (4 to 6 turns) where the same engine coordinates Agents on an open topic and completes when the Agents unanimously signal `done`, or at the turn limit. This proves the machinery is task-agnostic.
 - **Failure path (live, honest):** one demo Agent is created with a base instruction that occasionally subtracts two instead of one. When it publishes the wrong number, the middleware rejects it, shows the validation error, retries, and the run continues. The Agent genuinely misbehaved; the middleware genuinely caught it. Do not simulate middleware behaviour.
 - **Latency mitigation:** per-turn times measured so far are 13 to 60 seconds, so a live 10-turn run is 2.5 to 10 minutes, over the 3-minute demo budget. Mitigations in order: create demo Agents on the fastest available model endpoint; pre-execute a full 10-to-1 run so the evidence view is already populated; start a live shorter run (5-to-1) and narrate architecture while it polls; keep one stored wrong-number run for the failure evidence.
 - **Housekeeping:** the current "Test Relay" run whose objective was "Count down from 10 to 0" produced a final artifact claiming a countdown was executed when nothing was executed. Delete that run from `data/launchpad.json` before judging (Phase 9 task P9-19) or it becomes confusing evidence.
@@ -270,12 +273,13 @@ them now requires a mini-RFC.
 | Participant ordering UX | Selection order is the turn order; drag reordering is stretch |
 | Wrong-number recovery | Retry same Agent, then fail run; reassignment is cut |
 | Free-chat default `maxTurns` | 6; range 3..12 |
-| Free-chat completion | Unanimous `done` across one round, or `maxTurns`, or user stop (mini-RFC, approved) |
+| Free-chat completion | Unanimous `done` across one round, or `maxTurns`, or user stop (team-confirmed 2026-08-30) |
+| Free-chat final artifact pointer | The last committed session message |
 | Delete the misleading countdown run from `data/` | Yes, before submission (P9-19) |
 
-One item is approved in shape but not in detail: the specific unanimity rule for
-the `done` signal was proposed by the implementer, not chosen by the team.
-**Confirm it before P6-01 encodes it.**
+The unanimity rule was proposed by the Phase 5 implementer and confirmed by
+the whole team on 2026-08-30, together with the final-artifact-pointer rule
+above. Both are now settled; P6-01 encodes them.
 
 ## 12. Relation to existing documents
 

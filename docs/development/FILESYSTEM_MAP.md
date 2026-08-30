@@ -139,6 +139,12 @@ Do not inspect repository/store internals, runtime providers, deployment files, 
 - `apps/server/src/coordination/testing/**`
 - new empty/minimal session modules directly named by the Phase 5 guide
 
+**Recorded amendment exception (Phase 5 only):** the loud-placeholder edits in
+`context-builder.ts` (four tables), `events.ts` (two labels),
+`artifact-protocol.ts` (`EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND`), and
+`workflow.ts` (verified-state guard). Placeholders are getters that throw with
+the task ID that replaces them; Phase 6 replaces them with real behavior.
+
 **Conditional paths**
 
 - `apps/server/src/types.ts` and `apps/server/src/store.ts` to confirm existing v1/v2 types only
@@ -151,7 +157,7 @@ Do not implement session behavior in this phase. Contracts and fixtures only. Do
 
 **Primary paths**
 
-- `apps/server/src/coordination/session-workflow.ts` (new)
+- `apps/server/src/coordination/session-workflow.ts` (exists as the Phase 5 throwing shell; P6-01 replaces it with real routing)
 - `apps/server/src/coordination/workflow.ts` (dispatch only)
 - `apps/server/src/coordination/schemas.ts`
 - `apps/server/src/coordination/artifact-protocol.ts`

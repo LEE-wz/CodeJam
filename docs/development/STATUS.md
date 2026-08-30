@@ -33,11 +33,12 @@ tree, so the tree the gate tarred is exactly that commit.
 The next task ID is **`P6-01`**, and it belongs to whoever picks up Phase 6.
 Before they write routing:
 
-1. **Confirm the free-chat unanimity rule.** Its shape is team-approved; the
-   specific completion rule is the implementer's proposal, not the team's
-   choice. See **Open questions carried into Phase 6**.
-2. Read those open questions in full. Two of them describe defects the compiler
-   will not surface.
+1. **The free-chat unanimity rule is confirmed.** The whole team confirmed it
+   on 2026-08-30, together with the final-artifact-pointer rule (the last
+   committed session message). P6-01 encodes both; see
+   `ASSUMPTIONS_AND_DECISIONS.md`.
+2. Read the **Phase 6 handoff notes** in full. Items 2 and 3 describe defects
+   the compiler will not surface.
 3. Create a Phase 6 task branch from the recorded frozen commit.
 
 Nine loud placeholders mark the work: every one throws with the task ID that
@@ -68,29 +69,27 @@ Checkpoint 5 gate below.
 | P5-07 | `complete` | `session-contracts.test.ts` (15 tests) and `session-placeholders.test.ts` (7 tests): dual-workflow construction with the real shell, construction without a session workflow, countdown create initialising `phase: "sessioning"` and `sharedState.nextExpectedNumber`, free-chat create with no shared state and `maxTurns` 6, selection order preserved, participant/duplicate/unknown-Agent rejections, verified-handoff create unchanged, `done`-signal fixture shapes, and every placeholder throwing with its task name. |
 | P5-08 | `complete` | Frozen session contract commit: **`2fe14eb`** on `phase5-p5-01-session-contracts`, gate-verified 2026-08-30 with a clean working tree. Mirrors P0-11: an immutable commit reference, no convenience tag created. |
 
-### Open questions carried into Phase 6
+### Phase 6 handoff notes (consolidated 2026-08-30)
 
-1. **The free-chat unanimity rule is proposed, not chosen.** The `done` signal's
-   shape is team-approved; the specific completion rule (unanimous `done` across
-   one round, else `maxTurns`, else user stop) was written by the implementer.
-   **Confirm before P6-01 encodes it.** Alternatives considered: N consecutive
-   signals; explicit user confirmation.
+1. **The free-chat unanimity rule is confirmed.** The whole team confirmed it,
+   together with the final-artifact-pointer rule. P6-01 encodes both.
 2. **`TASK_INSTRUCTIONS` cannot express two protocols on one turn kind.** It is
    keyed by `CoordinationTurnKind` alone, but `session_turn` carries both
-   countdown and free chat. P6-07 must change that map's shape, not just fill in
-   the placeholder. The phase sheet does not mention this.
-3. **Two silent sites are deliberately unfixed and the build will not flag
-   them.** `repository.ts` `expectedArtifactTypeForTurn` (bare `default:` returns
-   `"proposal"`) is P7-02; `context-builder.ts` `capPayload` (bare fallthrough
-   that a session message would take by coincidence, because it also has a
-   `content` field) is Phase 6. Both compile cleanly today. Nothing will remind
-   whoever picks these up.
-4. **No new `CoordinationEventType` was added.** If the `done` signal needs its
-   own evidence row rather than riding on the committed artifact, that is an
-   additive event decision for P6/P7 — Phase 5 froze nothing about it.
-5. **`createSessionRun` is the minimal P5-07 path** — participant count,
-   distinctness and Agent existence only. P6-10 still owns full policy-range
-   validation and the create-time context probe with a session turn shape.
+   countdown and free chat. P6-07 must change that map's shape (for example key
+   it by workflow or protocol, or make it a lookup function), not just fill in
+   the placeholder.
+3. **Two silent sites are fixed by schedule.** `repository.ts`
+   `expectedArtifactTypeForTurn` (bare `default:` returns `"proposal"`) is
+   P7-02, which now converts it to an exhaustive typed map so the compiler
+   enforces the case. `context-builder.ts` `capPayload` (bare fallthrough that
+   a session message would take by coincidence) is P6-07, which now adds the
+   explicit `session_message` branch.
+4. **No new `CoordinationEventType` for `done` (settled).** Unanimity is
+   observable from committed artifacts; the evidence timeline shows the signal
+   via the artifact payload. No event-type change.
+5. **`createSessionRun` is the minimal P5-07 path.** Participant count,
+   distinctness and Agent existence only. P6-10 now extends it with the full
+   policy-range validation and the create-time context probe.
 
 | Phase 4 gate condition | Evidence |
 |---|---|
@@ -448,7 +447,8 @@ no task was promoted on a host-only or focused run.
 - The session extension is governed by `overview-sessions.md` (repository-local authority, adapted from the team's extension plan); `overview.md` remains the authority for the verified workflow and the shared engine semantics.
 - Session contract code (additive types, contracts, fixtures) lands in Phase 5; session behavior (workflow, protocol, context, service create branch, walking skeleton) lands in Phase 6, mirroring the original Phase 0 and Phase 1 split.
 - The session prompt never states the expected number; Agents derive it from the transcript and the countdown validator is the sole authority. Wrong numbers retry the same Agent and a second failure ends the run with `MAX_ATTEMPTS_EXCEEDED`.
-- The session extension includes a second protocol, `free_chat`, on the same `shared_session_v1` workflow: bounded non-empty messages, completion at `maxTurns` (default 6) or user stop, no start value and no next-expected state. The middleware guarantees mechanics and never judges message substance.
+- The session extension includes a second protocol, `free_chat`, on the same `shared_session_v1` workflow: bounded non-empty messages, completion on a unanimous `done` round, at `maxTurns` (default 6), or on user stop, no start value and no next-expected state. The middleware guarantees mechanics and never judges message substance.
+- 2026-08-30 consolidation pass: the free-chat completion signal (unanimous `done`) and the final-artifact-pointer rule (last committed session message) were confirmed by the whole team. No new `CoordinationEventType` for `done`; it rides on committed artifacts. The Phase 6–9 sheets, `FILESYSTEM_MAP.md`, and the README source-of-truth order were synced so the docs match the frozen contract.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

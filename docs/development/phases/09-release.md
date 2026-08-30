@@ -28,7 +28,7 @@ If release scope, command behavior, documented claims, or required evidence is u
 
 - [ ] **P9-01** Update root README with the Relay pitch, prerequisites, configuration, Agent setup for both workflows, both normal flows, verification, both failure demos, limitations, and links.
 - [ ] **P9-02** Create `COORDINATION_ARCHITECTURE.md`: components, trust boundary, state machine, persistence, runtime, reservations, plus the second workflow and the shared-state model.
-- [ ] **P9-03** Create `COORDINATION_PROTOCOL.md`: schemas/examples, validation order, scoped context, retry versus revision, invalid examples, plus the session message schema, countdown rules, and the never-state-the-expected-number prompt rule.
+- [ ] **P9-03** Create `COORDINATION_PROTOCOL.md`: schemas/examples, validation order, scoped context, retry versus revision, invalid examples, plus the session message schema (including the advisory `done` signal and its countdown rejection), countdown rules, the free-chat completion rules (unanimous `done`, `maxTurns`, user stop), the final-artifact-pointer rule, and the never-state-the-expected-number prompt rule.
 - [ ] **P9-04** Create `COORDINATION_API.md`: routes, payloads, statuses/errors, auth, polling, idempotency, plus the session create variant and its validation table.
 - [ ] **P9-05** Create `COORDINATION_OPERATIONS.md`: limits, restart/stop, storage, logging/redaction, recovery, known failures, plus session-specific limits.
 - [ ] **P9-06** Create `DECISIONS.md` with ADR-01–14, rejected alternatives, and the session mini-RFC record.
@@ -39,7 +39,7 @@ If release scope, command behavior, documented claims, or required evidence is u
 - [ ] **P9-08** Add three fresh-Agent instruction templates and one short seeded objective with required sections for the verified workflow.
 - [ ] **P9-09** Add session instruction templates: two or three counting Agents, one mischievous Agent that occasionally subtracts two instead of one, one seeded countdown objective, and one free-chat demo objective with plain collaborative Agents.
 - [ ] **P9-10** Write `DEMO.md` with setup, expected states, a three-minute narration covering both workflows, the latency fallback, reset steps, the failure paths, and contingency.
-- [ ] **P9-11** Prepare clearly labeled completed-run fallbacks: one verified run, one completed 10-to-1 session run, one stored wrong-number session run, and one completed free-chat session run.
+- [ ] **P9-11** Prepare clearly labeled completed-run fallbacks: one verified run, one completed 10-to-1 session run, one stored wrong-number session run, and one completed free-chat session run (prefer one that ended on a unanimous `done` round).
 - [ ] **P9-12** Rehearse the countdown demo multiple times, the free-chat session once, and both failure paths once; record timing ranges and the exact commit.
 - [ ] **P9-13** Have someone other than the author follow README and demo instructions from scratch.
 
