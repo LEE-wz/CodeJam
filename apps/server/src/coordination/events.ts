@@ -201,6 +201,8 @@ export interface CoordinationEventFactory {
   runCompleted(input: {
     runId: CoordinationRunId;
     artifactId: CoordinationArtifactId;
+    /** The durable repository supplies session_message for session runs. */
+    artifactType?: ArtifactType | undefined;
   }): CoordinationEventDraft;
 
   runFailed(input: {
@@ -452,14 +454,14 @@ export const createCoordinationEventFactory = (
         details: { code },
       }),
 
-    runCompleted: ({ runId, artifactId }) =>
+    runCompleted: ({ runId, artifactId, artifactType = "final" }) =>
       draft({
         runId,
         artifactId,
         type: "run.completed",
         actor: SYSTEM,
         message: "Run completed.",
-        details: { artifactType: "final" },
+        details: { artifactType },
       }),
 
     runFailed: ({ runId, code, reason }) =>

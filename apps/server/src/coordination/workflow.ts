@@ -3,7 +3,7 @@ import type {
   WorkflowDecision,
   WorkflowView,
 } from "./contracts.js";
-import type { ArtifactType, CoordinationArtifact } from "./types.js";
+import type { ArtifactType, CoordinationArtifact, CoordinationTurnKind } from "./types.js";
 
 export type {
   VerifiedHandoffWorkflow,
@@ -129,16 +129,21 @@ const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
     proposal_revision: { role: "planner", type: "proposal" },
     proposal_review: { role: "critic", type: "review" },
     finalization: { role: "finalizer", type: "final" },
-  };
+    // A verified-handoff run may never contain a session turn. Keeping this
+    // entry makes additions to CoordinationTurnKind compile-fail here too.
+    session_turn: undefined,
+  } as const satisfies Readonly<
+    Record<CoordinationTurnKind, { role: "planner" | "critic" | "finalizer"; type: ArtifactType } | undefined>
+  >;
   for (const turn of turns) {
     if (turn.status !== "committed") continue;
-    if (turn.kind === "session_turn") {
+    const expected = expectedOutput[turn.kind];
+    if (!expected) {
       return invalidState("Verified-handoff run contains a session turn");
     }
     const artifact = turn.outputArtifactId
       ? artifactsById.get(turn.outputArtifactId)
       : undefined;
-    const expected = expectedOutput[turn.kind];
     if (
       !artifact ||
       artifact.turnId !== turn.id ||

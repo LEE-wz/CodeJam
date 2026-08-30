@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoordinationServiceContract } from "./contracts.js";
 import { CoordinationError } from "./errors.js";
-import type { GetCoordinationRunResponse } from "./types.js";
+import type { CreateRunRequest, GetCoordinationRunResponse } from "./types.js";
 
 const runIdParams = z.object({ id: z.string().uuid() });
 const requiredSectionSchema = z
@@ -16,15 +16,18 @@ const requiredSectionSchema = z
     title: z.string().trim().min(1).max(120),
   })
   .strict();
-const policySchema = z
+const verifiedPolicySchema = z
   .object({
     maxRevisions: z.number().int().min(0).max(3).optional(),
     maxTurns: z.number().int().min(3).max(12).optional(),
     perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),
   })
   .strict();
-const createRunBody = z
+const verifiedCreateRunBody = z
   .object({
+    // Preserve the existing body shape while recording the durable default in
+    // the parsed request, so callers that omit workflow stay on handoff v1.
+    workflow: z.literal("verified_handoff_v1").optional().default("verified_handoff_v1"),
     name: z.string().trim().min(1).max(80),
     objective: z.string().trim().min(1).max(4_000),
     requiredSections: z.array(requiredSectionSchema).min(1).max(10),
@@ -35,9 +38,75 @@ const createRunBody = z
         finalizerAgentId: z.string().trim().min(1),
       })
       .strict(),
-    policy: policySchema.optional(),
+    policy: verifiedPolicySchema.optional(),
   })
   .strict();
+
+const sessionPolicySchema = z
+  .object({
+    sessionProtocol: z.enum(["countdown", "free_chat"]).optional(),
+    sessionStartValue: z.number().int().min(2).max(12).optional(),
+    // Countdown permits a two-turn 2 -> 1 run; free chat is tightened below.
+    maxTurns: z.number().int().min(2).max(12).optional(),
+    perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),
+  })
+  .strict()
+  .superRefine((policy, context) => {
+    const protocol = policy.sessionProtocol ?? "countdown";
+    if (protocol === "free_chat") {
+      if (policy.sessionStartValue !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sessionStartValue"],
+          message: "Free-chat sessions do not accept a start value",
+        });
+      }
+      if (policy.maxTurns !== undefined && policy.maxTurns < 3) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["maxTurns"],
+          message: "Free-chat sessions require at least three turns",
+        });
+      }
+      return;
+    }
+
+    const startValue = policy.sessionStartValue ?? 10;
+    const maxTurns = policy.maxTurns ?? startValue;
+    if (maxTurns < startValue) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxTurns"],
+        message: "Countdown maxTurns must be at least the session start value",
+      });
+    }
+  });
+
+const sessionCreateRunBody = z
+  .object({
+    workflow: z.literal("shared_session_v1"),
+    name: z.string().trim().min(1).max(80),
+    objective: z.string().trim().min(1).max(4_000),
+    agents: z
+      .array(z.string().trim().min(1))
+      .min(2)
+      .max(6)
+      .superRefine((agentIds, context) => {
+        if (new Set(agentIds).size !== agentIds.length) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Each participant must be distinct",
+          });
+        }
+      }),
+    policy: sessionPolicySchema.optional(),
+  })
+  .strict();
+
+const createRunBody: z.ZodType<CreateRunRequest> = z.union([
+  verifiedCreateRunBody,
+  sessionCreateRunBody,
+]);
 
 function parseInput<T>(schema: z.ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
