@@ -41,6 +41,11 @@ export const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND: Readonly<
   proposal_revision: "proposal",
   proposal_review: "review",
   finalization: "final",
+  // PLACEHOLDER (Phase 5 scope amendment). The frozen mapping is
+  // session_turn -> session_message, wired up with the protocol branch.
+  get session_turn(): ArtifactType {
+    throw new Error("session_turn expected artifact type lands in P6-05");
+  },
 };
 
 /**
@@ -307,7 +312,9 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
         ? { ...provenance, type: "proposal", payload }
         : payload.type === "review"
           ? { ...provenance, type: "review", payload }
-          : { ...provenance, type: "final", payload };
+          : payload.type === "final"
+            ? { ...provenance, type: "final", payload }
+            : { ...provenance, type: "session_message", payload };
 
     return { ok: true, artifact };
   }
