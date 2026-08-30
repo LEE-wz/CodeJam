@@ -1,11 +1,11 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 (session phase sheets authored on `session-phase-sheets`)
-**Audited base:** `139019b` (`main` after the Phase 4 merge; tag `phase-4-complete`)
-**Implementation branch:** `session-phase-sheets` (documentation planning only)
-**Current phase:** Phase 5 — planned, not started
-**Current gate:** Checkpoint 4 verified (unchanged; no code was changed)
-**Overall state:** Phases 0–4 `complete`; Phases 5–8 planned with instruction sheets; Phase 9 (release) renumbered, not started
+**Last audit:** 2026-08-30 (Phase 5 session contracts implemented)
+**Audited base:** `1c51170` (`main`, session phase sheets merged)
+**Implementation branch:** `phase5-p5-01-session-contracts` (base `1c51170`)
+**Current phase:** Phase 5 — Session Contracts and Freeze
+**Current gate:** Checkpoint 4 verified. **Checkpoint 5 NOT met** — the Docker Compose gate has not been run.
+**Overall state:** Phases 0–4 `complete`; Phase 5 `implemented_unverified`; Phases 6–8 deferred to teammates by the team decision at P5-01; Phase 9 (release) not started
 
 ## Nine-phase plan
 
@@ -16,7 +16,7 @@
 | 2 | Durable backend and evidence ledger | `complete` |
 | 3 | Real Agent runtime and recovery | `complete` |
 | 4 | End-to-end UI and evidence experience | `complete` |
-| 5 | Session contracts and freeze | `not_started` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
+| 5 | Session contracts and freeze | `implemented_unverified` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
 | 6 | Session core in memory | `not_started` (sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
 | 7 | Durable session backend and API | `not_started` (sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
 | 8 | Session UI and real rehearsal | `not_started` (sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
@@ -26,20 +26,72 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 
 ## Resume here
 
-**Phase 4 is complete and Checkpoint 4 is verified.** Relay is integrated into
-the existing web app: users can configure three distinct ready Agents, create
-and explicitly start a run, observe ordered evidence and artifacts, stop active
-runs, and understand terminal outcomes without reading server logs.
+**One action gates everything: run the Docker Compose `npm run check` on a host
+with a container engine.**
 
-The session extension (Phases 5–8) is fully planned and its instruction sheets
-are drafted on the `session-phase-sheets` branch. The next actions are:
+Phase 5 code is written and committed on `phase5-p5-01-session-contracts`, one
+commit per task ID. **No `P5-*` task may be promoted to `complete` until that
+gate passes** — per this file's status conventions, a check that was skipped or
+run only on the host is not evidence. The command is in
+[`README.md`](./README.md).
 
-1. Team review of `overview-sessions.md` and the four new phase sheets on
-   `session-phase-sheets`.
-2. Approve the session mini-RFC and settle the open decisions in
-   `overview-sessions.md` Section 11 (this is Phase 5 task `P5-01`).
-3. Merge `session-phase-sheets` into `main` after review.
-4. Start Phase 5 on a new task branch from `main`.
+`docker compose up --build` is **not** this gate. That boots the production
+server (`CMD node apps/server/dist/index.js`) and mounts the real `data/`,
+`workspaces/` and `codex-home/` directories. It is a valid smoke check, as P2-17
+used, but it never runs `npm run check`.
+
+After the gate passes:
+
+1. Promote `P5-02`–`P5-07` to `complete` and append the result to the
+   verification log below.
+2. Record the frozen session contract commit for `P5-08`.
+3. Confirm the free-chat unanimity rule before Phase 6 encodes it — see
+   **Open questions carried into Phase 6**.
+4. Hand off to teammates for `P6-01`.
+
+Phases 6–8 are deferred by the team decision recorded at P5-01. Phase 9 (release)
+remains unstarted.
+
+## Phase 5 task ledger
+
+All changes are additive. No existing type member, route, persisted shape, or
+verified-handoff behaviour changed. Existing tests are unchanged at 377 server +
+12 web = 389; Phase 5 adds 22 server tests.
+
+| Task | Status | Evidence |
+|---|---|---|
+| P5-01 | `implemented_unverified` | Team approved the session mini-RFC with one amendment (free-chat `done` signal). Every question open in `overview-sessions.md` Section 11 settled and recorded in `ASSUMPTIONS_AND_DECISIONS.md`; Section 11 rewritten to match. Build scope settled: Phase 5 only, Phases 6–8 to teammates, `free_chat` frozen in contract but implemented in Phase 6. |
+| P5-02 | `implemented_unverified` | Nine-phase numbering and the `P5-xx`/`P9-xx` prefixes confirmed unchanged. Exhaustiveness scope amendment approved and recorded in the Phase 5 sheet and `ASSUMPTIONS_AND_DECISIONS.md`. |
+| P5-03 | `implemented_unverified` | `types.ts`: `participant`, `sessioning`, `session_turn`, `session_message`, `CoordinationWorkflowKind`, `SessionProtocol`, `policy.workflow`/`sessionProtocol`/`sessionStartValue`, `SessionMessagePayload` (with the approved optional `done`), `CoordinationSharedState`, `run.sharedState`, `CreateSessionRunRequest`, `CreateRunRequest`, `SESSION_LIMITS`. `DEFAULT_COORDINATION_POLICY` still names `verified_handoff_v1`. Loud placeholders added under the amendment. |
+| P5-04 | `implemented_unverified` | `contracts.ts`: `SharedSessionWorkflow`, `CoordinationWorkflowDispatch`, widened `createRun` input union. `VerifiedHandoffWorkflow` untouched. Zod schemas deliberately **not** written here — P6-04 owns them, and writing them now would collide with that task. |
+| P5-05 | `implemented_unverified` | New `testing/session-fixtures.ts`: four participants, the 10→1 transcript, round-robin author helper, wrong-number and skipped-number outputs, non-integer/empty/oversize/fenced/prose/forged-provenance cases, free-chat messages, unanimous/partial/withdrawn `done` rounds, committed artifacts, expected event sequences. No randomness, network, or secrets. Added as a new module so the frozen Phase 1 fixture pack is untouched. |
+| P5-06 | `implemented_unverified` | Existing `FixedClock`, `DeterministicIdGenerator`, `InMemoryCoordinationRepository` and `ScriptedCoordinationRuntime` confirmed sufficient; no control added. New shell module `session-workflow.ts` (`SharedSessionWorkflowV1`) throws until P6-01. |
+| P5-07 | `implemented_unverified` | `session-contracts.test.ts` (15 tests) and `session-placeholders.test.ts` (7 tests): dual-workflow construction with the real shell, construction without a session workflow, countdown create initialising `phase: "sessioning"` and `sharedState.nextExpectedNumber`, free-chat create with no shared state and `maxTurns` 6, selection order preserved, participant/duplicate/unknown-Agent rejections, verified-handoff create unchanged, `done`-signal fixture shapes, and every placeholder throwing with its task name. |
+| P5-08 | `not_started` | Blocked: requires a passing gate first. |
+
+### Open questions carried into Phase 6
+
+1. **The free-chat unanimity rule is proposed, not chosen.** The `done` signal's
+   shape is team-approved; the specific completion rule (unanimous `done` across
+   one round, else `maxTurns`, else user stop) was written by the implementer.
+   **Confirm before P6-01 encodes it.** Alternatives considered: N consecutive
+   signals; explicit user confirmation.
+2. **`TASK_INSTRUCTIONS` cannot express two protocols on one turn kind.** It is
+   keyed by `CoordinationTurnKind` alone, but `session_turn` carries both
+   countdown and free chat. P6-07 must change that map's shape, not just fill in
+   the placeholder. The phase sheet does not mention this.
+3. **Two silent sites are deliberately unfixed and the build will not flag
+   them.** `repository.ts` `expectedArtifactTypeForTurn` (bare `default:` returns
+   `"proposal"`) is P7-02; `context-builder.ts` `capPayload` (bare fallthrough
+   that a session message would take by coincidence, because it also has a
+   `content` field) is Phase 6. Both compile cleanly today. Nothing will remind
+   whoever picks these up.
+4. **No new `CoordinationEventType` was added.** If the `done` signal needs its
+   own evidence row rather than riding on the committed artifact, that is an
+   additive event decision for P6/P7 — Phase 5 froze nothing about it.
+5. **`createSessionRun` is the minimal P5-07 path** — participant count,
+   distinctness and Agent existence only. P6-10 still owns full policy-range
+   validation and the create-time context probe with a session turn shape.
 
 | Phase 4 gate condition | Evidence |
 |---|---|
@@ -231,11 +283,12 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 5
 
-- Not started. Instruction sheet is [`phases/05-session-contracts.md`](phases/05-session-contracts.md). `P5-01` is the team approval of the session mini-RFC and the settlement of the open decisions in `overview-sessions.md` Section 11.
+- `implemented_unverified`. P5-01–P5-07 are written on `phase5-p5-01-session-contracts`, one commit per task ID; see **Phase 5 task ledger** above. Nothing may be promoted until the Docker Compose `npm run check` passes. P5-08 (record the frozen contract commit) is blocked on that gate.
 
 ### Phase 6
 
-- Not started. Instruction sheet is [`phases/06-session-core.md`](phases/06-session-core.md). Pure session workflow, countdown and free-chat protocols, transcript context, and the in-memory walking skeleton.
+- Not started; **deferred to teammates by the team decision recorded at P5-01**. Instruction sheet is [`phases/06-session-core.md`](phases/06-session-core.md). Pure session workflow, countdown and free-chat protocols, transcript context, and the in-memory walking skeleton.
+- Read **Open questions carried into Phase 6** above before starting. Every Phase 5 placeholder throws with the task ID that replaces it, so `grep -rn "lands in P6-" apps/server/src/coordination/` lists all nine of them.
 
 ### Phase 7
 
@@ -253,6 +306,10 @@ no task was promoted on a host-only or focused run.
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-30 | `phase5-p5-01-session-contracts` | **Phase 5 Docker Compose `npm run check`** | **NOT RUN — blocking.** No container engine is reachable from the environment the work was done in: `docker`, `podman`, `nerdctl`, `colima` and `lima` are all absent from the shell holding the checkout, and no daemon is reachable. Per this file's status conventions no `P5-*` task may be promoted on this state, so Phase 5 stays `implemented_unverified`. This repeats the 2026-08-29 P1-07–P1-17 situation and takes the same resolution: run the gate on a host with Docker, then promote. |
+| 2026-08-30 | `phase5-p5-01-session-contracts` | Non-authoritative pre-check | Full `npm run check` passed (exit 0) from a clean `npm ci --include=dev` over the same source snapshot the Compose command copies, **run outside the checkout** on Node 22.22.2 / npm 10.9.7: server and web typechecks, 23 server test files with 399 tests, 2 web test files with 12 tests, web build, and server build. The 389-test baseline is intact (377 server + 12 web); Phase 5 adds 22 server tests. `npm ci` continues to report 1 moderate and 5 high audit findings held for P9-16. **Recorded only to predict the Compose result. This is not completion evidence and satisfies no gate.** |
+| 2026-08-30 | `phase5-p5-01-session-contracts` | Placeholder-pattern correction | The amendment's proposed form, `session_turn: (() => { throw ... })()`, evaluates at **module load**, so it throws on import: the server would not boot and all 389 tests would fail, including the test meant to prove the placeholder throws. Verified by running it. Placeholders use getters instead, which satisfy the same `Record` type (tsc exit 0), keep module load clean, and throw only when the session entry is read. |
+| 2026-08-30 | `phase5-p5-01-session-contracts` | Frozen-contract assertion vs. the placeholder | `artifact-protocol.test.ts` asserted `EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND` through `toEqual`, which enumerates properties and therefore triggered the new getter. Rewritten to assert each verified-handoff mapping individually plus the exact key set, so no coverage was lost and the assertion was not weakened. |
 | 2026-08-30 | `session-phase-sheets` (uncommitted) | Session phase sheets and nine-phase renumbering | Documentation-only change: added `overview-sessions.md`, phases 05–08 instruction sheets, renamed `05-release.md` to `09-release.md` with P9-xx task IDs, and updated the runbook, FILESYSTEM_MAP, and this file. No code changed, so no Compose gate was run or required; the Phase 4 gate evidence below remains the authoritative code status. |
 | 2026-08-30 05:18 UTC | `phase-4` working tree | Phase 4 final Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, 2 web test files with 12 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P9-16. |
 | 2026-08-30 05:05–05:16 UTC | `phase-4` working tree | Phase 4 real browser completion, stop, accessibility, and responsive evidence | **Passed:** a disposable Compose deployment completed a real Planner → Critic → Finaliser run while the UI advanced automatically to 15 events and all three artifacts. A second run stopped as `STOPPED_BY_USER` with request/cancel/stopped/stale evidence. Layout passed at 1440×900 and 390×844; the narrow audit found no horizontal overflow or unlabeled inputs. The initial live flow exposed a post-start polling reset defect; an explicit polling epoch fixed it and a regression test now proves detail polling resumes after start. |
