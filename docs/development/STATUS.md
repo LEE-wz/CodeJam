@@ -1,8 +1,8 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 02:10 UTC
+**Last audit:** 2026-08-30 02:17 UTC
 **Audited commit:** `d81635a` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
-**Implementation branch:** `phase2-p2-01-database-v2` (base `d81635a` on `main`)
+**Implementation branch:** `phase2-p2-05-events-redaction` (chained from `phase2-p2-01-database-v2`, base `d81635a` on `main`)
 **Current phase:** Phase 2 — Durable Backend and Evidence Ledger (in progress)
 **Current gate:** Checkpoint 2 (not reached)
 **Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 authorised and started
@@ -25,12 +25,13 @@ before P2-01 and are recorded in
 
 Next executable actions:
 
-1. **P2-05** — pure event factories for all 17 frozen event types, including the
-   `truncated` detail on `attempt.started` and the `attempt.stale_ignored`
-   event decided above.
-2. **P2-06/P2-07** — allowlist redactor and its leakage tests.
-3. **P2-08/P2-09** — the durable repository's read model and atomic
-   create/start/schedule/begin commands.
+1. **P2-08/P2-09** — the durable repository's deterministic read model
+   (newest-first, cap 50, sorted detail) and the atomic
+   create/start/schedule/begin-attempt commands, each in one `JsonStore.mutate()`.
+   Use `testing/memory-repository.ts` as the accept/reject specification.
+2. **P2-10–P2-13** — lease-scoped correlation, commit, and terminal commands.
+3. **P2-14** — the race suite, driven by the scripted runtime's deferred
+   promises rather than sleeps.
 
 Still open, by design: handoff §2.2 (`PromptEnvelope.includedArtifactIds`) is
 decided at P2-09; it does not affect persisted shape.
@@ -102,7 +103,8 @@ no task was promoted on a host-only or focused run.
 | Tasks | Status | Evidence |
 |---|---|---|
 | P2-01–P2-04 | `complete` | Overview Section 17 mini-sprint 3A implemented as one unit, because `DatabaseV2` cannot compile without the store that loads it. `DatabaseV1`/`DatabaseV2`/`AnyDatabase` and optional `AgentRunCorrelation` fields added; `parseDatabaseDocument` parses v1 explicitly and migrates additively by spread, so unknown top-level and per-record fields survive; new databases are created at v2; future/malformed/unparseable documents are rejected before any write. 11 store tests. Compose `npm run check` passed: 14 files / 247 tests. |
-| P2-05–P2-22 | `not_started` | — |
+| P2-05–P2-07 | `complete` | Overview Section 19 mini-sprint 5A. Pure factories for all 17 frozen event types return an identity-free `CoordinationEventDraft`, because Section 10.3 requires the per-run sequence to be allocated inside the repository's own `mutate()`. Details are redacted **inside** the factory, so a caller cannot append an unredacted event by forgetting a step. `truncated` rides on `attempt.started` and `attempt.stale_ignored` exists as an event, per the confirmed handoff decisions. The redactor is a key allowlist plus secret-pattern stripping that runs before truncation. 38 tests. Compose `npm run check` passed: 16 files / 285 tests. |
+| P2-08–P2-18, P2-20–P2-22 | `not_started` | — |
 | P2-19 | `complete` (verify-only) | Confirmed as the handoff predicted: `routes.test.ts` asserts `GET /api/coordination-runs/:id/events` returns `404`. No implementation was required. |
 
 ## Implemented inventory
@@ -140,7 +142,8 @@ no task was promoted on a host-only or focused run.
 
 - Database v2 and explicit v1 migration are **done** (P2-01–P2-04). P2-19 is
   verified as already satisfied.
-- Remaining: event factories and redaction (P2-05–P2-07), the real atomic
+- Event factories and redaction are **done** (P2-05–P2-07).
+- Remaining: the real atomic
   repository and its race suite (P2-08–P2-14), API validation/injection tests
   and composition wiring (P2-15–P2-18), and restart settlement plus the
   reservation helper and evidence-timeline check (P2-20–P2-22).
@@ -189,6 +192,8 @@ no task was promoted on a host-only or focused run.
 | 2026-08-29 | `ea15e37` | P1-06 final scoped Docker Compose `npm run check` | **Passed** (user-run): 12 server test files with 87 tests, both builds. P1-06 is `complete` on this evidence. |
 | 2026-08-29 17:40 UTC | `f3caed5` | P1-07–P1-17 Docker Compose `npm run check` | **Not run.** No container engine is reachable from the environment the work was done in: the shell holding the checkout has no Docker, Podman, or Colima, and the alternative host is blocked from pulling `node:22-bookworm-slim` (403). Per the runbook these tasks therefore stay `implemented_unverified`; the check must be run on a host with Docker before any promotion. **Superseded by the passing gate recorded below.** |
 | 2026-08-29 17:43:51 UTC | `f3caed5` | **Checkpoint 1 gate** — final scoped Docker Compose `npm run check` | **Passed:** server and web typechecks, 14 server test files with 237 tests, web build, and server build. Image built from `node:22-bookworm-slim`; `npm ci` continues to report 1 moderate and 5 high audit findings held for release review. This is the sole completion evidence for P1-07–P1-17. |
+| 2026-08-30 02:15 UTC | `phase2-p2-05-events-redaction` | P2-05–P2-07 focused Docker Compose typecheck and tests | **Passed:** server typecheck plus 38 tests — 25 redaction tests (bearer/authorization/cookie/set-cookie/JWT/provider-key/lease-token patterns, redaction ordered before truncation, visible truncation, allowlist rejection of prompts and lease tokens under five spellings, bounded arrays, dropped objects, stable key order) and 13 event tests (all 17 frozen types covered, stable messages, actor attribution, `truncated` detail, Finaliser label with `finalizer` enum). |
+| 2026-08-30 02:17 UTC | `phase2-p2-05-events-redaction` | P2-05–P2-07 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 16 server test files with 285 tests, web build, and server build. Sole completion evidence for P2-05–P2-07. |
 | 2026-08-30 02:06 UTC | `d81635a` | Phase 2 baseline Docker Compose `npm run check` on branch `phase2-p2-01-database-v2` | **Passed** before any edit: server/web typechecks, 14 server test files with 237 tests, web build, and server build. Establishes the green baseline the Phase 2 work starts from. |
 | 2026-08-30 02:09 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 focused Docker Compose typecheck and `store.test.ts` | **Passed:** server typecheck plus 11 store tests covering empty v2 startup, realistic v1 migration with field/timestamp preservation, unknown-field preservation, v2 round-trip with coordination collections and Agent Run correlation, and non-overwriting rejection of future, malformed, and unparseable documents. |
 | 2026-08-30 02:10 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 14 server test files with 247 tests, web build, and server build. Sole completion evidence for P2-01–P2-04. |
