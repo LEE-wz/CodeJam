@@ -1,11 +1,11 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 (P6-01 shared-session workflow routing complete)
-**Audited base:** `d932a0c` (`main`, Phase 6–9 handoff consolidation)
-**Implementation branch:** `phase6-p6-01-session-workflow` (base `d932a0c`)
+**Last audit:** 2026-08-30 (Phase 6 in-memory session core complete)
+**Audited base:** `50de8cb` (P6-01 checkpoint documentation)
+**Implementation branch:** `phase6-complete-session-core` (base `50de8cb`)
 **Current phase:** Phase 6 — Session Core in Memory
-**Current gate:** Checkpoint 6 in progress; P6-01 complete at `a916d5c`
-**Overall state:** Phases 0–5 `complete`; Phase 6 `in_progress`; Phases 7–9 not started
+**Current gate:** Checkpoint 6 verified (2026-08-30, commit `82f5c85`)
+**Overall state:** Phases 0–6 `complete`; Phases 7–9 not started
 
 ## Nine-phase plan
 
@@ -17,7 +17,7 @@
 | 3 | Real Agent runtime and recovery | `complete` |
 | 4 | End-to-end UI and evidence experience | `complete` |
 | 5 | Session contracts and freeze | `complete` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
-| 6 | Session core in memory | `in_progress` (P6-01 complete; sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
+| 6 | Session core in memory | `complete` (Checkpoint 6: `82f5c85`; sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
 | 7 | Durable session backend and API | `not_started` (sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
 | 8 | Session UI and real rehearsal | `not_started` (sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `not_started` (sheet: [`phases/09-release.md`](phases/09-release.md)) |
@@ -26,21 +26,17 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 
 ## Resume here
 
-**P6-01 is complete at `a916d5c`; Checkpoint 6 remains open.** The shared
-session workflow now routes deterministically, completes countdown and free-chat
-runs under the frozen rules, rejects inconsistent durable state, and supplies
-the selected round-robin Agent identity to turn construction.
+**Phase 6 is complete and Checkpoint 6 is verified at `82f5c85`.** The pure
+workflow, protocol dispatch, strict session parser, transcript context, complete
+create validation, and real in-memory orchestration loop now cover countdown
+and free chat. A deterministic 10-to-1 run completes without persistence, HTTP,
+timers, or a real Agent; retry, exhaustion, timeout, stop, late-result, turn-limit,
+and unanimous-`done` paths are all proven.
 
-The next task ID is **`P6-02`**. Replace `CoordinationService.workflowFor` with
-an implementation of the existing `CoordinationWorkflowDispatch.forRun`
-contract. Keep the orchestration loop and verified-handoff behavior unchanged.
-Then run focused dispatch tests and the full Docker Compose check.
-
-The P6-01 implementation exposed and resolved one frozen-contract omission:
-schedule decisions could name only a role, but every session member has the
-same `participant` role. The user approved an additive optional `agentId` on
-schedule decisions. The mini-RFC and required follow-on evidence are recorded
-in `ASSUMPTIONS_AND_DECISIONS.md`.
+The next task ID is **`P7-01`**. Create a Phase 7 task branch from the Phase 6
+checkpoint, read `phases/07-session-durable.md`, freeze the session fixtures used
+by persistence/API tests, and do not claim durable session support until the
+Phase 7 race gates pass.
 
 Outstanding decision for the team, not for Phase 6: whether to create a
 convenience tag on `2fe14eb`. None was created. The immutable commit reference
@@ -53,7 +49,17 @@ rather than assuming.
 | Task | Status | Evidence |
 |---|---|---|
 | P6-01 | `complete` | `SharedSessionWorkflowV1` validates session state and committed transcript provenance, schedules by committed-turn round robin, emits chronological transcript artifact IDs, completes countdown at 1, completes free chat on unanimous latest `done` signals or the turn limit, uses the last message as final artifact, and fails countdown turn exhaustion safely. The verified workflow now explicitly rejects session turns; participant/session event labels no longer throw. Approved mini-RFC adds optional schedule `agentId`, and service turn construction uses it without changing verified decisions. Four new focused workflow tests plus updated contract/placeholder tests pass. Full Compose gate passed: 24 server files / 403 tests, 2 web files / 12 tests, typechecks, and both builds (415 tests total). |
-| P6-02 | `not_started` | Next: adopt `CoordinationWorkflowDispatch.forRun` in the service. |
+| P6-02 | `complete` | `CoordinationWorkflowDispatchV1.forRun` selects from durable `policy.workflow`; the service loop uses the declared dispatch contract and fails loudly if session routing is unregistered. |
+| P6-03 | `complete` | Fifteen pure workflow/dispatch tests cover deterministic 2/3/4-Agent cycles, chronological inputs, countdown completion/ceiling, free-chat unanimity/partial/withdrawn/limit behavior, malformed state, non-session artifacts, and dispatch. |
+| P6-04 | `complete` | Strict `sessionMessagePayloadSchema` trims content, enforces 1..500 characters, supports optional boolean `done`, removes explicit undefined, and rejects unknown fields. |
+| P6-05 | `complete` | `SharedSessionArtifactProtocol` follows size → trim/fence → one parse → type/version/schema → protocol rule; countdown validates the exact backend-owned number and rejects `done`. Durable workflow dispatch keeps the verified protocol's former session provenance fallback unreachable and removed. |
+| P6-06 | `complete` | Twelve session-protocol tests cover countdown/free-chat validity, wrong/non-integer numbers, global and content size bounds, fences, prose, missing/unknown fields, forged provenance, invalid `done`, authoritative provenance, and parser dispatch. |
+| P6-07 | `complete` | Session context uses protocol-specific instructions/output contracts, a cumulative named transcript, explicit `session_message` capping, and the existing four-section envelope/retry placement. |
+| P6-08 | `complete` | Countdown prompts expose transcript-derived instructions but no expected-number/shared-state field; free-chat prompts expose objective/transcript and no hidden state. |
+| P6-09 | `complete` | Six session-context tests cover chronological order, oldest-first truncation, newest preservation, expected-state non-leakage, capability/event/auth/unrelated-run exclusion, and stable digest. |
+| P6-10 | `complete` | Session create validates 2..6 distinct existing Agents, names/objectives, protocol-specific ranges, timeout, forbidden verified-only fields, input-order snapshots/defaults, shared-state initialization, and a real session-turn context probe. |
+| P6-11 | `complete` | The unchanged orchestration loop drives session schedule/attempt/runtime/validate/lease commit; the in-memory repository adds only the Phase 6 countdown shared-state commit behavior. Retry stays on the same Agent/logical turn; stop and late output cannot progress the run. |
+| P6-12 | `complete` | Twenty in-memory session tests cover 10→1, wrong→retry→success, wrong/malformed/timed-out exhaustion, timeout retry, deferred stop/late result, countdown ceiling, free chat at max turns, unanimous `done`, malformed free chat, and create validation/probing. Existing 36-test verified walking skeleton remains green. |
 
 ### P6-01 verification
 
@@ -61,6 +67,14 @@ rather than assuming.
 - Required full command: `docker compose build launchpad`, followed by the standard disposable `docker compose run ... npm ci --include=dev && npm run check` command from the runbook.
 - Final result: passed on the exact implementation tree committed as `a916d5c`; 403 server tests, 12 web tests, both typechecks, and both builds.
 - Known dependency audit findings remain 1 moderate and 5 high, deferred to P9-17 as already recorded. No dependency versions changed.
+
+### Checkpoint 6 verification
+
+- Focused Compose gates passed: workflow/dispatch 15 tests; schema/protocol 113 tests; context 58 tests; service/walking skeleton 81 tests. The final full gate also passed the two subsequently added exhaustion cases.
+- Two interim focused runs failed only in new test/type scaffolding: exact-optional Zod output and an overly broad verified payload union were tightened; the transcript truncation test's context threshold was corrected to exercise oldest-only truncation. Each focused gate then passed.
+- Required full command: `docker compose build launchpad`, followed by the standard disposable `docker compose run ... npm ci --include=dev && npm run check` command from the runbook.
+- Final result on the implementation tree committed as `82f5c85`: 27 server files / 454 tests, 2 web files / 12 tests, both typechecks, and both builds (466 tests total).
+- No persistence, HTTP, disk fixtures, arbitrary sleeps, or real model were used by the new Phase 6 tests. Dependency findings remain deferred to P9-17.
 
 ## Phase 5 task ledger
 
