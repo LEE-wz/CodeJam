@@ -1,12 +1,12 @@
 # Session Development Status
 
-**Last audit:** 2026-08-30 (Phase 10 implemented; Checkpoint 10 open on `P10-10`)
+**Last audit:** 2026-08-30 (Checkpoint 10 passed; Phase 10 complete)
 **Audited checkpoint:** Phase 8 implementation `e93ffb5`, merged from `phase-8`
 **Implementation branch:** `phase-10-session-v2-surface` (base `186ad89`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Phase 10 - Session v2 Surface, Limits, and Rename
-**Current gate:** `P10-01`..`P10-09` complete and verified; `P10-10` (live ten-participant rehearsal) not started, so Checkpoint 10 is **not** passed
-**Overall state:** Phases 0-8 `complete`; Phase 9 `superseded` by Phase 15; Phase 10 `in_progress`; Phases 11-15 `not_started`
+**Current gate:** Checkpoint 10 passed; Checkpoint 11 not started
+**Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15; Phases 11-15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -27,7 +27,7 @@ they name a past checkpoint.
 | 7 | Durable session backend and API | `complete` (Checkpoint 7 verified; sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
 | 8 | Session UI and real rehearsal | `complete` (Checkpoint 8 verified; sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `superseded` by Phase 15 (sheet: [`phases/09-release.md`](phases/09-release.md)) |
-| 10 | Session v2 surface, limits, and rename | `in_progress` (sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
+| 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
 | 11 | Lifecycle reconciliation and Agent recovery | `not_started` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `not_started` (sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `not_started` (sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
@@ -41,20 +41,15 @@ Session v2 mini-RFC in
 
 The session extension was adopted from the team's Relay Sessions plan. Its repository-local contract authority is [`overview-sessions.md`](overview-sessions.md). Phase 9 was formerly Phase 5; its task IDs moved from P5-xx to P9-xx.
 
-## Resume here
+**Checkpoint 10 is complete.** Phase 10 is implemented, verified through the
+disposable Docker Compose gate, and rehearsed live with ten real Agents. `P11-01`
+is next: enumerate every `CoordinationService` exit that leaves a run
+non-terminal and classify each as resume, fail, or already-owned. That
+classification is a written deliverable and the contract the reconciler
+implements. The reservation decision `P11-05` depends on is already recorded
+(reserve per running attempt).
 
-**`P10-10` is the next action, and it needs the user.** Everything else in Phase
-10 is implemented and verified on `phase-10-session-v2-surface`. `P10-10` is the
-live rehearsal: ten fresh demo Agents in one free-chat session in the Compose
-browser deployment, recording start-to-completion time, per-attempt durations,
-prompt size at the widest turn, and whether transcript windowing engaged. It
-spends real model calls against the configured Ark endpoint and writes real
-runtime data, so it was not run unattended. Checkpoint 10 stays open until it is
-done and its evidence is recorded here.
-
-Phase 11 may not begin before that, and its own `P11-05` additionally depends on
-the reservation decision, which is already recorded (reserve per running
-attempt).
+Create the Phase 11 task branch from the `main` tip that carries Phase 10.
 
 Docker Compose is available as `docker compose`. Baseline validation used
 `LAUNCHPAD_ENV_FILE=/dev/null` so the disposable verification service did not
@@ -73,7 +68,7 @@ load repository-local secrets or runtime state.
 | P10-07 | `complete` | No protocol choice in the UI; every created session sends `sessionProtocol: "free_chat"`. Stored countdown sessions still render their transcript, protocol row, and `nextExpectedNumber`/`Complete` state. The countdown engine branches are untouched and still tested; `P14-07` deletes them. |
 | P10-08 | `complete` | `RelayWorkspace.tsx` is `SessionWorkspace.tsx`, the 68 `relay-*` CSS rules are `session-*`, and the nav, hero, run index, actions, and copy say Session. `App.tsx`'s `workspaceView` union is `"agents" \| "session"`. No behaviour changed with the rename. |
 | P10-09 | `complete` | 29 web tests: every session fixture, every verified fixture read-only, ten-participant create, ceiling disablement, turn-range validation, a 5,000-turn create, consensus, escaping, the three polling-chain proofs, and stop. |
-| P10-10 | `not_started` | Requires the live Compose browser deployment and real model calls. See **Resume here**. |
+| P10-10 | `complete` | Ten fresh demo Agents completed a real twelve-turn free-chat session in the Compose deployment on the `deepseek-v4-flash-ga-260731` endpoint. Evidence below. |
 
 ### Phase 10 verification evidence
 
@@ -86,6 +81,49 @@ load repository-local secrets or runtime state.
   deliberate contract change, and each was re-pointed at the new contract.
 - The web dev dependencies are not installed on the host, so all web
   verification ran through Compose, as the runbook requires.
+
+### Checkpoint 10 live rehearsal evidence (P10-10)
+
+Run `74fbd288-89d6-4a4a-bd5d-3443f994e465`, "P10-10 ten-participant rehearsal",
+ten fresh Agents, free chat, `maxTurns` 12, 120s attempt timeout, model
+`deepseek-v4-flash-ga-260731`, runtime provider `local-process`.
+
+- **Result:** `completed` at the turn ceiling. Start-to-completion **52.865s**
+  (`15:49:36.481Z` to `15:50:29.170Z`). 12 turns, 12 attempts, **every turn
+  committed on attempt 1**, no retries, no failures.
+- **Per-attempt durations:** min **2.373s**, median **4.429s**, max **6.980s**.
+  A full ten-participant round costs roughly **44s** sequentially.
+- **Routing:** round-robin over all ten participants verified programmatically
+  against `participants[index % 10]`, then wrapping correctly to positions 1 and
+  2 for turns 11 and 12. Twelve messages from **ten distinct authors**.
+- **Free-chat completion:** ended at `maxTurns`, not by unanimity — one `done`
+  signal was raised on the final turn. Both paths remain covered by tests.
+- **Context:** the run carried `contextMaxChars` **40,000** (P10-05). The
+  transcript reached **2,595 characters**, so **transcript windowing did not
+  engage**: zero `attempt.started` events carried `truncated: true`. The widened
+  budget was proven sufficient for ten participants at this length; the windowing
+  and field-cap paths themselves remain covered by unit tests only, not by this
+  live run.
+- **Prompt size at the widest turn is not recorded, because it is not
+  observable.** Prompts are never stored or exposed by the API, by design. The
+  honest proxies are the transcript size above and the `truncated` flag, both
+  recorded.
+- **Redaction:** the detail response contains no `leaseToken`. Event types were
+  confined to the frozen set: `run.created`, `run.started`, `turn.scheduled`,
+  `attempt.started`, `turn.committed`, `run.completed`.
+- **Deployment:** the run was driven through the Compose deployment's HTTP API,
+  and the run is served by both endpoints the UI polls. The web app is served
+  (`200`, hashed bundle referenced). **A browser rendering and responsiveness
+  check was not performed** — no browser tooling was available in the
+  implementing environment. Ten-participant form and transcript rendering is
+  covered by the web fixture tests; the `1440x900` / `390x844` layout checks from
+  `P8-11` have not been repeated against the renamed UI.
+- **Latency conclusion for Phase 13:** a sequential ten-participant round is
+  ~44s on the fastest endpoint. That is the baseline the `maxParallelTurns`
+  default must be justified against.
+- **Demo data:** ten `P10 Rehearsal N` Agents, their workspaces, and this run
+  remain in local runtime data. `P15-19` covers removing misleading demo data
+  before judging evidence is captured.
 
 ### Phase 10 recorded deviation
 

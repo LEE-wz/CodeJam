@@ -44,7 +44,7 @@ If a frozen contract, an open-question answer, a limit value, or the treatment o
 ### Tests and rehearsal
 
 - [x] **P10-09** Rewrite the web test suite for the reduced surface. Delete or convert the verified-handoff fixtures in `apps/web/src/testing/coordination-fixtures.ts` and the verified cases in the renamed workspace test; keep every session fixture (running, retry, consensus, withdrawal, stopped, failed, interrupted, completed). Add cases for a ten-participant picker, a `maxTurns` value above 12, a legacy verified run rendering under the chosen treatment, and a legacy countdown run rendering its transcript. Keyboard, label, focus-on-error, and responsive checks from P8-11 must survive the rename.
-- [ ] **P10-10** Rehearse in the Compose browser deployment: create ten fresh demo Agents, run one free-chat session with all ten as participants to a bounded `maxTurns`, and record start-to-completion time, per-attempt durations, prompt sizes at the widest turn, and whether transcript windowing engaged. Record the redacted evidence and the latency conclusion in `STATUS.md`. If ten concurrent participants make round-robin latency unacceptable, say so plainly in the evidence — Phase 13 is where that is fixed, and the number is the input to its concurrency cap.
+- [x] **P10-10** Rehearse in the Compose browser deployment: create ten fresh demo Agents, run one free-chat session with all ten as participants to a bounded `maxTurns`, and record start-to-completion time, per-attempt durations, prompt sizes at the widest turn, and whether transcript windowing engaged. Record the redacted evidence and the latency conclusion in `STATUS.md`. If ten concurrent participants make round-robin latency unacceptable, say so plainly in the evidence — Phase 13 is where that is fixed, and the number is the input to its concurrency cap.
 
 ## Requirements and boundaries
 
@@ -82,6 +82,17 @@ Phase 10 is complete only when:
 - legacy verified and countdown runs still render without error;
 - the full server regression suite passes unmodified in behaviour;
 - the final Docker Compose `npm run check` passes on the task branch.
+
+### Checkpoint 10 record
+
+Ten fresh Agents completed a real twelve-turn free-chat session in the Compose
+deployment in **52.865s**, every turn committing on its first attempt, with
+round-robin routing over all ten participants verified programmatically. Median
+attempt **4.429s**. The 40,000-character session budget was not exhausted by a
+2,595-character transcript, so windowing did not engage live. The full Compose
+`npm run check` passed with 485 server tests, 31 web tests, both typechecks, and
+both production builds. A browser layout check was not performed; see the
+evidence in [`../STATUS.md`](../STATUS.md).
 
 ## Handoff to Phase 11
 
