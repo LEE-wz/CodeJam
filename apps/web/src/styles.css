@@ -1098,7 +1098,7 @@ textarea:focus {
 }
 
 /* Relay workspace */
-.relay-nav-button {
+.session-nav-button {
   width: 100%;
   margin-top: 10px;
   padding: 10px;
@@ -1113,13 +1113,13 @@ textarea:focus {
   cursor: pointer;
 }
 
-.relay-nav-button:hover,
-.relay-nav-button.selected {
+.session-nav-button:hover,
+.session-nav-button.selected {
   background: #353430;
   border-color: #665a94;
 }
 
-.relay-nav-icon {
+.session-nav-icon {
   width: 34px;
   height: 34px;
   display: grid;
@@ -1130,28 +1130,28 @@ textarea:focus {
   font-size: 18px;
 }
 
-.relay-nav-button strong,
-.relay-nav-button small {
+.session-nav-button strong,
+.session-nav-button small {
   display: block;
 }
 
-.relay-nav-button strong {
+.session-nav-button strong {
   font-size: 12px;
 }
 
-.relay-nav-button small {
+.session-nav-button small {
   margin-top: 3px;
   color: #8e8e87;
   font-size: 9px;
 }
 
-.relay-workspace,
-.relay-create {
+.session-workspace,
+.session-create {
   max-width: 1380px;
   margin: 0 auto;
 }
 
-.relay-hero {
+.session-hero {
   min-height: 92px;
   display: flex;
   align-items: center;
@@ -1159,21 +1159,21 @@ textarea:focus {
   gap: 24px;
 }
 
-.relay-hero h1 {
+.session-hero h1 {
   margin: 2px 0 3px;
   font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
   font-size: 30px;
   letter-spacing: -0.045em;
 }
 
-.relay-hero p,
+.session-hero p,
 .run-detail-header p {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
 }
 
-.relay-notice {
+.session-notice {
   margin-bottom: 14px;
   padding: 11px 13px;
   border: 1px solid #e5d59e;
@@ -1183,7 +1183,7 @@ textarea:focus {
   font-size: 11px;
 }
 
-.relay-layout {
+.session-layout {
   min-height: calc(100vh - 150px);
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
@@ -1250,7 +1250,7 @@ textarea:focus {
   font-size: 9px;
 }
 
-.relay-status,
+.session-status,
 .turn-status,
 .attempt-status {
   display: inline-flex;
@@ -1262,29 +1262,29 @@ textarea:focus {
   text-transform: uppercase;
 }
 
-.relay-status {
+.session-status {
   padding: 4px 7px;
   color: #686963;
   background: #e6e4de;
 }
 
-.relay-status-running,
-.relay-status-stop_requested {
+.session-status-running,
+.session-status-stop_requested {
   color: #5440b3;
   background: #e8e3fc;
 }
 
-.relay-status-completed {
+.session-status-completed {
   color: #277756;
   background: #dcf2e9;
 }
 
-.relay-status-failed {
+.session-status-failed {
   color: #a73f3f;
   background: #f6dfdc;
 }
 
-.relay-status-stopped {
+.session-status-stopped {
   color: #7a5c2b;
   background: #f5ead4;
 }
@@ -1302,19 +1302,19 @@ textarea:focus {
 }
 
 .empty-run-list p,
-.relay-muted {
+.session-muted {
   color: #898a83;
   font-size: 10px;
   line-height: 1.5;
 }
 
-.relay-detail {
+.session-detail {
   min-width: 0;
   padding: 23px 25px 42px;
   background: #fbfaf7;
 }
 
-.relay-detail-empty {
+.session-detail-empty {
   min-height: 460px;
   display: flex;
   flex-direction: column;
@@ -1324,18 +1324,18 @@ textarea:focus {
   text-align: center;
 }
 
-.relay-detail-empty > div {
+.session-detail-empty > div {
   font-size: 30px;
   color: #806ce1;
 }
 
-.relay-detail-empty h2 {
+.session-detail-empty h2 {
   margin: 12px 0 4px;
   color: #393a35;
   font-size: 17px;
 }
 
-.relay-detail-empty p {
+.session-detail-empty p {
   margin: 0;
   font-size: 11px;
 }
@@ -1343,7 +1343,7 @@ textarea:focus {
 .run-detail-header,
 .run-title-row,
 .run-actions,
-.relay-section-heading {
+.session-section-heading {
   display: flex;
   align-items: center;
 }
@@ -1456,23 +1456,23 @@ textarea:focus {
   margin-top: 27px;
 }
 
-.relay-section-heading {
+.session-section-heading {
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 12px;
 }
 
-.relay-section-heading h2,
-.relay-section-heading h3 {
+.session-section-heading h2,
+.session-section-heading h3 {
   margin: 3px 0 0;
   letter-spacing: -0.025em;
 }
 
-.relay-section-heading h2 {
+.session-section-heading h2 {
   font-size: 21px;
 }
 
-.relay-section-heading h3 {
+.session-section-heading h3 {
   font-size: 15px;
 }
 
@@ -1708,7 +1708,7 @@ textarea:focus {
   background: #f4dedb;
 }
 
-.relay-create {
+.session-create {
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -1716,22 +1716,22 @@ textarea:focus {
   box-shadow: 0 14px 40px rgba(43, 42, 38, 0.07);
 }
 
-.relay-form-grid,
-.relay-role-grid,
-.relay-policy-grid {
+.session-form-grid,
+.session-role-grid,
+.session-policy-grid {
   display: grid;
   gap: 13px;
 }
 
-.relay-form-grid {
+.session-form-grid {
   grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
 }
 
-.relay-objective {
+.session-objective {
   grid-row: span 2;
 }
 
-.relay-create fieldset {
+.session-create fieldset {
   min-width: 0;
   margin: 20px 0 0;
   padding: 16px;
@@ -1739,21 +1739,21 @@ textarea:focus {
   border-radius: 11px;
 }
 
-.relay-create legend {
+.session-create legend {
   padding: 0 5px;
   color: #41423d;
   font-size: 11px;
   font-weight: 700;
 }
 
-.relay-create fieldset > p {
+.session-create fieldset > p {
   margin: 0 0 12px;
   color: #898a83;
   font-size: 9px;
 }
 
-.relay-role-grid,
-.relay-policy-grid {
+.session-role-grid,
+.session-policy-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -1834,11 +1834,11 @@ summary:focus-visible {
   font-weight: 700;
 }
 
-.relay-policy-grid {
+.session-policy-grid {
   margin-top: 13px;
 }
 
-.relay-create-footer {
+.session-create-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1846,14 +1846,14 @@ summary:focus-visible {
   margin-top: 20px;
 }
 
-.relay-create-footer p {
+.session-create-footer p {
   margin: 0;
   color: #85867f;
   font-size: 9px;
 }
 
 @media (max-width: 1000px) {
-  .relay-layout {
+  .session-layout {
     grid-template-columns: 210px minmax(0, 1fr);
   }
 
@@ -1863,26 +1863,26 @@ summary:focus-visible {
 }
 
 @media (max-width: 900px) {
-  .relay-nav-button {
+  .session-nav-button {
     justify-content: center;
     padding: 8px;
   }
 
-  .relay-nav-button > span:last-child {
+  .session-nav-button > span:last-child {
     display: none;
   }
 
-  .relay-layout {
+  .session-layout {
     grid-template-columns: 180px minmax(0, 1fr);
   }
 
-  .relay-detail {
+  .session-detail {
     padding: 18px;
   }
 }
 
 @media (max-width: 760px) {
-  .relay-layout {
+  .session-layout {
     display: block;
   }
 
@@ -1896,7 +1896,7 @@ summary:focus-visible {
 
   .run-index-heading,
   .empty-run-list,
-  .run-index > .relay-muted {
+  .run-index > .session-muted {
     min-width: 150px;
   }
 
@@ -1904,49 +1904,49 @@ summary:focus-visible {
     min-width: 180px;
   }
 
-  .relay-form-grid,
-  .relay-role-grid,
-  .relay-policy-grid {
+  .session-form-grid,
+  .session-role-grid,
+  .session-policy-grid {
     grid-template-columns: 1fr;
   }
 
-  .relay-objective {
+  .session-objective {
     grid-row: auto;
   }
 }
 
 @media (max-width: 680px) {
-  .relay-nav-button {
+  .session-nav-button {
     width: 38px;
     margin: 0;
     padding: 2px;
     border: 0;
   }
 
-  .relay-nav-icon {
+  .session-nav-icon {
     width: 34px;
     height: 34px;
   }
 
-  .relay-hero,
+  .session-hero,
   .run-detail-header,
-  .relay-create-footer {
+  .session-create-footer {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .relay-hero {
+  .session-hero {
     padding: 8px 4px 14px;
   }
 
-  .relay-hero .button,
+  .session-hero .button,
   .run-actions,
   .run-actions .button,
-  .relay-create-footer .button {
+  .session-create-footer .button {
     width: 100%;
   }
 
-  .relay-detail {
+  .session-detail {
     padding: 15px 12px 28px;
   }
 
@@ -1968,7 +1968,7 @@ summary:focus-visible {
     grid-column: 1 / -1;
   }
 
-  .relay-create {
+  .session-create {
     padding: 17px 13px;
   }
 }
@@ -2349,4 +2349,9 @@ summary:focus-visible {
   .transcript-message {
     max-width: 100%;
   }
+}
+
+/* A run from the removed verified-handoff workflow, shown read-only (P10-06). */
+.legacy-summary {
+  border-color: rgba(148, 163, 184, 0.35);
 }

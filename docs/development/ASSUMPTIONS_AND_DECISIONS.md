@@ -515,3 +515,50 @@ assert them would widen the module surface, which this phase may not do.
 - Only the active lease may commit; late results stay visible but ignored.
 - Countdown prompts never contain the expected number; free-chat prompts contain no hidden state. Prompts never contain lease tokens, events, or another Agent's raw history beyond the bounded transcript.
 - All existing verified-handoff and single-Agent behaviors, tests, and stored shapes remain unchanged.
+
+---
+
+## Mini-RFC: Session v2 contract amendments
+
+**Status:** Approved by the user on 2026-08-30 for P10-01.
+**Plan:** [`plans/session-v2-plan.md`](./plans/session-v2-plan.md). Implementation sheets: [`phases/10-session-v2-surface.md`](./phases/10-session-v2-surface.md) through [`phases/15-scale-and-release.md`](./phases/15-scale-and-release.md).
+
+**Current contract and blocker.** [`overview-sessions.md`](./overview-sessions.md)
+freezes the shared-session workflow around a single-shot, strictly sequential,
+countdown-first run with 2..6 participants. Six requested changes are outside
+that contract, and three of them are named in Section 2 as explicit non-goals.
+The work cannot proceed under the document as written.
+
+**Approved changes.** Each names the phase that implements it, so the contract
+never describes behaviour the code does not have.
+
+| # | Amendment | Section | Phase |
+|---|---|---|---|
+| 1 | Parallel fan-out turns are in scope; a wave of turns may be scheduled and executed concurrently | 2 | 13 |
+| 2 | The countdown protocol is removed. Ordered output becomes an emergent property of planned sequential scheduling, not of an engine-side numeric validator | 1, 2, 6.1–6.4 | 10 (UI), 14 (engine) |
+| 3 | A session is long-lived. It accepts repeated user prompts and terminates only on explicit user action, user stop, failure, or the hard turn ceiling | 6.5 | 12 |
+| 4 | Participants range 2..10; session `maxTurns` ceiling rises to 100,000 with a default of 200 | 4, 7 | 10 |
+| 5 | Turn assignment may come from a validated `session_plan` artifact authored by a participant. The middleware validates the plan's structure only and never its substance | 5, 6 | 14 |
+| 6 | An Agent is reserved while it has a **running attempt** in a non-terminal run, not merely while it appears in a running run | 8 (and `overview.md` 10.4) | 11 |
+
+**Affected files/workstreams.** Session types, routes, service create/validate,
+session workflow, artifact protocol, context builder, repository commit and
+reservation reads, the whole web session surface, and every fixture and test
+that pins a session limit, protocol, or lifecycle assumption. Verified-handoff
+semantics, routes, and stored shapes are unchanged throughout.
+
+**Migration and tests.** No database migration. Every change is additive to the
+v2 shape or a limit widening; removed engine behaviour (countdown) keeps its
+stored fields readable, asserted by a fixture test in P14-07. Each phase sheet
+carries its own required test matrix.
+
+### Recorded answers to the Session v2 open questions
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Legacy verified-handoff runs in the UI after the workflow is removed from the frontend (P10-06) | Keep them in the run index, opening read-only behind a legacy-workflow banner | Checkpoint 8 verified evidence stays reachable from the browser; one render branch plus a fixture test |
+| Default `maxTurns` for a new session (P10-04) | 200. Ceiling stays 100,000 for callers that ask explicitly | A runaway loop costs ~200 turns, and Phase 12 sessions do not hit the ceiling in normal use |
+| Reservation model (P11-05) | Reserve per running attempt | Idle participants of a live session stay usable in the Playground, which is what stops Phase 12 sessions from feeling permanently stuck |
+| Coordinator identity (P14-03) | Deferred to Phase 14 entry | Recorded there before `P14-03` starts |
+| API and module naming (P10-08) | The product renames to Session; `/api/coordination-runs` and the server-side `coordination*` modules keep their names | Deliberate divergence between product name and API path, to avoid ~1,100 lines of test churn for no user-visible gain |
+| Phase 9 | Superseded by Phase 15 | Releasing the pre-v2 feature set would document a product that no longer exists |

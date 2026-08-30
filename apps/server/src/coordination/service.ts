@@ -23,6 +23,7 @@ import {
   type CoordinationRunDetails,
   type CoordinationRunId,
   type CoordinationTurn,
+  SESSION_CONTEXT_MAX_CHARS,
   SESSION_LIMITS,
   type CoordinationParticipant,
   type CreateCoordinationRunRequest,
@@ -226,7 +227,7 @@ export class CoordinationService implements CoordinationServiceContract {
       input.policy?.maxTurns ??
       (protocol === "countdown"
         ? (startValue ?? SESSION_LIMITS.defaultStartValue)
-        : SESSION_LIMITS.defaultFreeChatTurns);
+        : SESSION_LIMITS.defaultSessionTurns);
 
     if (
       (protocol === "countdown" &&
@@ -235,11 +236,11 @@ export class CoordinationService implements CoordinationServiceContract {
           startValue! > SESSION_LIMITS.maxStartValue ||
           !Number.isInteger(maxTurns) ||
           maxTurns < startValue! ||
-          maxTurns > SESSION_LIMITS.maxFreeChatTurns)) ||
+          maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
       (protocol === "free_chat" &&
         (!Number.isInteger(maxTurns) ||
-          maxTurns < SESSION_LIMITS.minFreeChatTurns ||
-          maxTurns > SESSION_LIMITS.maxFreeChatTurns)) ||
+          maxTurns < SESSION_LIMITS.minSessionTurns ||
+          maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
       (input.policy?.perAttemptTimeoutMs !== undefined &&
         (!Number.isInteger(input.policy.perAttemptTimeoutMs) ||
           input.policy.perAttemptTimeoutMs < 10_000 ||
@@ -253,6 +254,9 @@ export class CoordinationService implements CoordinationServiceContract {
       workflow: "shared_session_v1" as const,
       // A session turn produces one bounded message, never a revised document.
       maxRevisions: 0,
+      // A transcript across up to ten participants needs more room than one
+      // verified-handoff document (P10-05).
+      contextMaxChars: SESSION_CONTEXT_MAX_CHARS,
       maxTurns,
       sessionProtocol: protocol,
       ...(startValue !== undefined ? { sessionStartValue: startValue } : {}),

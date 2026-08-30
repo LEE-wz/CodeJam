@@ -29,16 +29,15 @@ import {
   SESSION_PARTICIPANTS,
   SESSION_START_VALUE,
   UNANIMOUS_DONE_ROUND,
+  sessionParticipantRoster,
   WITHDRAWN_DONE_SEQUENCE,
   countdownPayload,
 } from "./testing/session-fixtures.js";
 import { DEFAULT_COORDINATION_POLICY, SESSION_LIMITS } from "./types.js";
 
-const buildService = () =>
+const buildServiceWith = (agents: readonly { id: string; name: string; status: "ready" }[]) =>
   new CoordinationService({
-    agentDirectory: new FakeAgentDirectory([
-      ...SESSION_PARTICIPANTS.map((agent) => ({ ...agent })),
-    ]),
+    agentDirectory: new FakeAgentDirectory(agents.map((agent) => ({ ...agent }))),
     repository: new InMemoryCoordinationRepository(new FixedClock()),
     workflow: new FakeWorkflow(),
     sessionWorkflow: new SharedSessionWorkflowV1(),
@@ -48,6 +47,8 @@ const buildService = () =>
     clock: new FixedClock(),
     ids: new DeterministicIdGenerator(),
   });
+
+const buildService = () => buildServiceWith(SESSION_PARTICIPANTS);
 
 describe("Phase 5 session contracts", () => {
   it("constructs CoordinationService with both workflows registered", () => {
@@ -100,12 +101,17 @@ describe("Phase 5 session create", () => {
   });
 
   it("initialises a free-chat run with no shared state and the default turn limit", async () => {
-    const run = await buildService().createRun(CREATE_FREE_CHAT_REQUEST);
+    // The fixture pins its own short ceiling, so the default is asserted from a
+    // request that omits maxTurns entirely (P10-04).
+    const run = await buildService().createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: { sessionProtocol: "free_chat" },
+    });
 
     expect(run.policy.sessionProtocol).toBe("free_chat");
     expect(run.policy.sessionStartValue).toBeUndefined();
     expect(run.sharedState).toBeUndefined();
-    expect(run.policy.maxTurns).toBe(SESSION_LIMITS.defaultFreeChatTurns);
+    expect(run.policy.maxTurns).toBe(SESSION_LIMITS.defaultSessionTurns);
   });
 
   it("rejects a participant list outside the frozen bounds", async () => {
@@ -113,6 +119,36 @@ describe("Phase 5 session create", () => {
       buildService().createRun({
         ...CREATE_COUNTDOWN_REQUEST,
         agents: [SESSION_PARTICIPANTS[0].id],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  // P10-03: the widened participant range, asserted at both boundaries and one
+  // past the ceiling. The service reads SESSION_LIMITS rather than its own
+  // literals, so these cases also prove there is a single source of truth.
+  it.each([SESSION_LIMITS.minParticipants, SESSION_LIMITS.maxParticipants])(
+    "accepts a session with %i participants",
+    async (count) => {
+      const roster = sessionParticipantRoster(count);
+      const run = await buildServiceWith(roster).createRun({
+        ...CREATE_FREE_CHAT_REQUEST,
+        agents: roster.map((agent) => agent.id),
+        policy: { sessionProtocol: "free_chat" },
+      });
+      expect(run.participants).toHaveLength(count);
+      expect(run.participants.map(({ agentId }) => agentId)).toEqual(
+        roster.map((agent) => agent.id),
+      );
+    },
+  );
+
+  it("rejects a session with more than the maximum participants", async () => {
+    const roster = sessionParticipantRoster(SESSION_LIMITS.maxParticipants + 1);
+    await expect(
+      buildServiceWith(roster).createRun({
+        ...CREATE_FREE_CHAT_REQUEST,
+        agents: roster.map((agent) => agent.id),
+        policy: { sessionProtocol: "free_chat" },
       }),
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
@@ -188,7 +224,10 @@ describe("Phase 5 session message payload", () => {
     expect(SESSION_LIMITS.messageMinChars).toBe(1);
     expect(SESSION_LIMITS.messageMaxChars).toBe(500);
     expect(SESSION_LIMITS.minParticipants).toBe(2);
-    expect(SESSION_LIMITS.maxParticipants).toBe(6);
+    expect(SESSION_LIMITS.maxParticipants).toBe(10);
+    expect(SESSION_LIMITS.minSessionTurns).toBe(3);
+    expect(SESSION_LIMITS.maxSessionTurns).toBe(100_000);
+    expect(SESSION_LIMITS.defaultSessionTurns).toBe(200);
   });
 });
 

@@ -10,7 +10,11 @@ import { CoordinationService } from "./service.js";
 import { SharedSessionWorkflowV1 } from "./session-workflow.js";
 import { VerifiedHandoffWorkflowV1 } from "./workflow.js";
 import type { CoordinationRun, CoordinationRunDetails, CreateSessionRunRequest } from "./types.js";
-import { DEFAULT_COORDINATION_POLICY } from "./types.js";
+import {
+  DEFAULT_COORDINATION_POLICY,
+  SESSION_CONTEXT_MAX_CHARS,
+  SESSION_LIMITS,
+} from "./types.js";
 import { AdvancingClock, DeterministicIdGenerator } from "./testing/controls.js";
 import {
   FakeAgentDirectory,
@@ -118,7 +122,10 @@ describe("session create validation and context probe", () => {
       policy: { sessionProtocol: "free_chat" },
     });
     expect(freeChatRun.sharedState).toBeUndefined();
-    expect(freeChatRun.policy).toMatchObject({ sessionProtocol: "free_chat", maxTurns: 6 });
+    expect(freeChatRun.policy).toMatchObject({
+      sessionProtocol: "free_chat",
+      maxTurns: SESSION_LIMITS.defaultSessionTurns,
+    });
     expect(freeChatRun.policy.sessionStartValue).toBeUndefined();
   });
 
@@ -127,7 +134,10 @@ describe("session create validation and context probe", () => {
     { policy: { sessionStartValue: 13 }, label: "start above range" },
     { policy: { sessionStartValue: 2.5 }, label: "non-integer start" },
     { policy: { sessionStartValue: 5, maxTurns: 4 }, label: "turns below start" },
-    { policy: { sessionStartValue: 10, maxTurns: 13 }, label: "turns above range" },
+    {
+      policy: { sessionStartValue: 10, maxTurns: SESSION_LIMITS.maxSessionTurns + 1 },
+      label: "turns above range",
+    },
     { policy: { perAttemptTimeoutMs: 9_999 }, label: "timeout below range" },
     { policy: { perAttemptTimeoutMs: 180_001 }, label: "timeout above range" },
   ])("rejects countdown $label", async ({ policy }) => {
@@ -137,17 +147,66 @@ describe("session create validation and context probe", () => {
     })).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
   });
 
-  it("rejects free-chat start values and turn limits outside 3..12", async () => {
+  it("rejects free-chat start values and turn limits outside the session range", async () => {
     for (const policy of [
       { sessionProtocol: "free_chat" as const, sessionStartValue: 3 },
-      { sessionProtocol: "free_chat" as const, maxTurns: 2 },
-      { sessionProtocol: "free_chat" as const, maxTurns: 13 },
+      { sessionProtocol: "free_chat" as const, maxTurns: SESSION_LIMITS.minSessionTurns - 1 },
+      { sessionProtocol: "free_chat" as const, maxTurns: SESSION_LIMITS.maxSessionTurns + 1 },
+      { sessionProtocol: "free_chat" as const, maxTurns: 12.5 },
     ]) {
       await expect(sessionHarness([]).service.createRun({
         ...CREATE_FREE_CHAT_REQUEST,
         policy,
       })).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
     }
+  });
+
+  // P10-04: the raise applies to session runs. Values that were rejected before
+  // the raise are now accepted, including at the new ceiling.
+  it.each([13, 1_000, SESSION_LIMITS.maxSessionTurns])(
+    "accepts a free-chat turn ceiling of %i",
+    async (maxTurns) => {
+      const run = await sessionHarness([]).service.createRun({
+        ...CREATE_FREE_CHAT_REQUEST,
+        policy: { sessionProtocol: "free_chat", maxTurns },
+      });
+      expect(run.policy.maxTurns).toBe(maxTurns);
+    },
+  );
+
+  // P10-04: the verified workflow keeps its own frozen 3..12 range. The session
+  // raise must not leak across the workflow boundary.
+  it("leaves the verified-handoff turn range unchanged", async () => {
+    const verifiedRequest = {
+      workflow: "verified_handoff_v1" as const,
+      name: "Verified range regression",
+      objective: "Prove the session turn raise did not cross the workflow boundary.",
+      requiredSections: [{ key: "summary", title: "Summary" }],
+      agents: {
+        plannerAgentId: PARTICIPANT_ONE.id,
+        criticAgentId: PARTICIPANT_TWO.id,
+        finalizerAgentId: PARTICIPANT_THREE.id,
+      },
+    };
+
+    await expect(sessionHarness([]).service.createRun({
+      ...verifiedRequest,
+      policy: { maxTurns: 13 },
+    })).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+
+    const accepted = await sessionHarness([]).service.createRun({
+      ...verifiedRequest,
+      policy: { maxTurns: 12 },
+    });
+    expect(accepted.policy.maxTurns).toBe(12);
+  });
+
+  // P10-05: a session run carries the wider transcript budget, not the
+  // verified-handoff document budget.
+  it("gives session runs the session context budget", async () => {
+    const run = await sessionHarness([]).service.createRun(CREATE_FREE_CHAT_REQUEST);
+    expect(run.policy.contextMaxChars).toBe(SESSION_CONTEXT_MAX_CHARS);
+    expect(DEFAULT_COORDINATION_POLICY.contextMaxChars).toBe(12_000);
   });
 
   it("enforces name/objective bounds and rejects verified-only fields", async () => {

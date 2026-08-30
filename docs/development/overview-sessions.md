@@ -4,11 +4,25 @@
 **Authority:** This file is the repository-local contract authority for the `shared_session_v1` workflow. [`overview.md`](./overview.md) remains the sole authority for the existing `verified_handoff_v1` workflow and for every shared engine semantic (trust boundary, atomic mutation rules, orchestration loop, parsing order, redaction).
 **Numbering:** The implementation plan now has nine phases. Phases 0–4 (existing) are complete. Phases 5–8 build the session workflow. Phase 9 is the renumbered release phase (previously Phase 5; its task IDs moved from P5-xx to P9-xx).
 
+**Session v2 amendment (2026-08-30).** This document is amended by the Session v2
+mini-RFC in [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md),
+implemented by [`phases/10-session-v2-surface.md`](./phases/10-session-v2-surface.md)
+through [`phases/15-scale-and-release.md`](./phases/15-scale-and-release.md).
+Amended statements below are marked **[v2, Phase N]** and describe the contract
+as of the phase that implements them. Until that phase lands, the surrounding
+frozen text still governs the code. Phase 9 is superseded by Phase 15.
+
 ---
 
 ## 1. Why this exists
 
 The problem statement's multi-agent coordination example requires: several Agents counting down from 10 to 1 in a shared conversation, one number per turn, in turn order, with a visible history of which Agent produced each number, and timeout/retry/stop rules. The verified handoff pipeline cannot demonstrate this because its Agents exchange typed review documents, not a shared conversation.
+
+**[v2, Phase 14]** The countdown *demo* remains; the countdown *protocol* does not.
+Ordered output is proved by a validated plan that assigns each participant a
+position, executed sequentially, with no numeric validator in the engine. That is
+a stronger claim: the ordering emerges from coordination the Agents performed,
+not from a rule the middleware hard-coded for one demo.
 
 The minimum coordination layer and how Relay Sessions meets it:
 
@@ -16,7 +30,7 @@ The minimum coordination layer and how Relay Sessions meets it:
 |---|---|
 | Shared session all Agents can read and write | The session is the committed message log. Every turn's prompt contains the full transcript. Agents write by publishing a validated message. |
 | Turn-selection or routing rule | Round-robin over an ordered participant list: next Agent = `participants[committedSessionTurns % N]`. |
-| Shared state preventing duplicate or skipped turns | `run.sharedState.nextExpectedNumber` plus a validator that accepts only the exact expected integer. Duplicate and stale prevention reuses the existing lease and version machinery unchanged. |
+| Shared state preventing duplicate or skipped turns | `run.sharedState.nextExpectedNumber` plus a validator that accepts only the exact expected integer. Duplicate and stale prevention reuses the existing lease and version machinery unchanged. **[v2, Phase 14]** The countdown shared state is removed; duplicate and skipped turns are prevented by the committed-turn ledger, the lease, and the version check alone, which is what already prevented them for free chat. |
 | Visible event history showing who produced each number | The existing event ledger and evidence timeline, plus a chat-like transcript view in the web app. |
 | Timeout, retry, stop | The existing runtime gateway, reservation system, stop flow, and late-result fencing. Reused 100%. |
 
@@ -26,11 +40,11 @@ The verified handoff workflow remains a second workflow on the same engine. Noth
 
 **Build:**
 
-- A `shared_session_v1` workflow with 2 to 6 distinct pre-created Agents as ordered participants.
-- Round-robin turn selection owned by backend code.
+- A `shared_session_v1` workflow with 2 to 6 distinct pre-created Agents as ordered participants. **[v2, Phase 10]** The range becomes 2 to 10.
+- Round-robin turn selection owned by backend code. **[v2, Phase 14]** Round-robin remains the deterministic fallback (`sessionPlanning: "round_robin"`); the default becomes execution of a validated `session_plan`.
 - Two session protocols on the same engine:
-  - `countdown`: each message must be exactly the expected next integer (the headline acceptance demo).
-  - `free_chat`: any bounded, non-empty message; the run completes when every participant's latest message carries `done: true`, or at `maxTurns`, or on user stop (general task collaboration).
+  - `countdown`: each message must be exactly the expected next integer (the headline acceptance demo). **[v2, Phase 10]** No longer creatable from the UI. **[v2, Phase 14]** Removed from the engine; stored countdown runs remain readable.
+  - `free_chat`: any bounded, non-empty message; the run completes when every participant's latest message carries `done: true`, or at `maxTurns`, or on user stop (general task collaboration). **[v2, Phase 10]** The only creatable protocol. **[v2, Phase 12]** Completion becomes an explicit user action; `done` stays advisory and ends the wave rather than the session.
 - `run.sharedState.nextExpectedNumber` as the durable shared state for countdown runs.
 - A transcript-building context template that includes all committed session messages in order.
 - The web form mode, transcript view, and session timeline labels.
@@ -39,7 +53,7 @@ The verified handoff workflow remains a second workflow on the same engine. Noth
 
 - Semantic evaluation of free-chat content: the middleware guarantees mechanics and never judges substance; it only reads the advisory `done` signal.
 - Turn reassignment to another participant after retry exhaustion.
-- Parallel fan-out turns.
+- ~~Parallel fan-out turns.~~ **[v2, Phase 13]** In scope: a wave of turns is scheduled atomically and executed concurrently under a bounded cap.
 - Dynamic Agent creation or participant changes after start.
 - Any change to verified-handoff semantics, routes, or stored shapes.
 
@@ -101,6 +115,7 @@ export interface CoordinationPolicy {
   workflow: CoordinationWorkflowKind;   // was a literal; becomes a discriminated field
   maxRevisions: number;                 // ignored by session workflow
   maxTurns: number;                     // session: must be >= sessionStartValue
+                                        // [v2, Phase 10] session range 3..100_000, default 200
   maxAttemptsPerTurn: number;           // unchanged
   perAttemptTimeoutMs: number;          // unchanged
   contextMaxChars: number;              // unchanged
@@ -117,7 +132,7 @@ export interface CoordinationRun {
 }
 ```
 
-Session participants are stored in the existing `participants` array as ordered `{ role: "participant", agentId, agentNameSnapshot }` entries, 2 to 6 of them, all distinct. No new participant table.
+Session participants are stored in the existing `participants` array as ordered `{ role: "participant", agentId, agentNameSnapshot }` entries, 2 to 6 of them, all distinct. No new participant table. **[v2, Phase 10]** 2 to 10 of them.
 
 ### 4.1 Session message payload
 
@@ -186,7 +201,7 @@ A wrong or malformed number follows the existing attempt algorithm unchanged: re
 - **Validation:** the same parsing order as 6.1 steps 1 to 5 (size, trim, one outer fence, one parse, strict schema with content 1..500). There is no cross-field numeric rule.
 - **Shared state:** free-chat runs have no `nextExpectedNumber`; `run.sharedState` stays absent.
 - **Prompt:** `[YOUR TASK]` instructs the Agent to contribute the next message toward the shared objective based on the transcript. The output contract is the same `session_message` shape. No expected value exists to state, so the countdown prompt rule has no free-chat equivalent.
-- **Completion:** the workflow completes when **every participant's most recent committed message carries `done: true`** (unanimous consent across one full round), or when all allowed turns are committed (`maxTurns`), or on user stop -- whichever comes first. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*, only whether the participants have all said they are finished. On completion, the run's `finalArtifactId` points at the last committed session message.
+- **Completion:** the workflow completes when **every participant's most recent committed message carries `done: true`** (unanimous consent across one full round), or when all allowed turns are committed (`maxTurns`), or on user stop -- whichever comes first. **[v2, Phase 12]** These conditions end the current *wave* and return the session to `awaiting_input`, where it accepts another user prompt. A session becomes terminal only on explicit user end, user stop, failure, or the hard `maxTurns` ceiling. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*, only whether the participants have all said they are finished. On completion, the run's `finalArtifactId` points at the last committed session message.
 - **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the shared objective met; an Agent never ends a run. The completion rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. With no signals at all, behaviour is exactly the frozen `maxTurns` rule, so the addition is strictly additive. Unanimity needs at least one message from every participant, so a run cannot complete before `participantCount` committed turns. `done` is rejected on a countdown message, where the numeric validator is the sole authority.
 - **Retry and failure:** the attempt algorithm is identical (malformed or timed-out output retries once, then the run fails).
 
@@ -206,12 +221,12 @@ The create body becomes a union on `workflow`. `workflow` is optional and defaul
 
 | Rule | Error |
 |---|---|
-| `agents` ordered array, 2..6, distinct | 400 |
+| `agents` ordered array, 2..6, distinct (**[v2, Phase 10]** 2..10) | 400 |
 | Every Agent exists | 404 |
 | Every Agent is ready at start (existing start-time checks apply) | 409 |
 | `sessionProtocol` is `"countdown"` (default) or `"free_chat"` | 400 otherwise |
 | Countdown: `sessionStartValue` integer 2..12 (required or defaulted); free chat: `sessionStartValue` forbidden | 400 |
-| Countdown: `maxTurns >= sessionStartValue`; free chat: `maxTurns` 3..12 (default 6) | 400 |
+| Countdown: `maxTurns >= sessionStartValue`; free chat: `maxTurns` 3..12 (default 6) (**[v2, Phase 10]** 3..100,000, default 200) | 400 |
 | `requiredSections` absent or empty for session runs | 400 |
 | `maxRevisions` not accepted on session runs | 400 |
 
@@ -234,7 +249,7 @@ For countdown runs, `run.sharedState` is part of the public read model and the U
 - Every session commit runs in exactly one `JsonStore.mutate()` with the unchanged lease and version checks (`overview.md` Section 10.3).
 - `expectedArtifactTypeForTurn` gains a `session_turn` case returning `"session_message"`.
 - No new database collections. `sharedState` is an optional run field, so the database shape stays version 2.
-- Reservation is already derived from participants of non-terminal runs (`overview.md` Section 10.4); session runs inherit it with no change.
+- Reservation is already derived from participants of non-terminal runs (`overview.md` Section 10.4); session runs inherit it with no change. **[v2, Phase 11]** Reservation narrows to participants with a *running attempt* in a non-terminal run, so an idle session does not hold its Agents.
 - Restart interruption (`overview.md` Section 10.5) settles active session runs exactly like verified runs.
 
 ## 9. Test matrix (new tests only)
@@ -276,7 +291,20 @@ them now requires a mini-RFC.
 | Free-chat default `maxTurns` | 6; range 3..12 |
 | Free-chat completion | Unanimous `done` across one round, or `maxTurns`, or user stop (team-confirmed 2026-08-30) |
 | Free-chat final artifact pointer | The last committed session message |
-| Delete the misleading countdown run from `data/` | Yes, before submission (P9-19) |
+| Delete the misleading countdown run from `data/` | Yes, before submission (P15-19) |
+
+**[v2, Phase 10]** Amended settled decisions:
+
+| Question | Settled |
+|---|---|
+| Participant range | 2..10 |
+| Session `maxTurns` | Range 3..100,000, default 200 |
+| Creatable protocols | Free chat only |
+| Countdown protocol | Removed from the engine in Phase 14; stored runs stay readable |
+| Session termination | Explicit user action, stop, failure, or the hard ceiling (Phase 12) |
+| Turn assignment | Validated `session_plan` by default, `round_robin` as fallback (Phase 14) |
+| Reservation scope | Per running attempt (Phase 11) |
+| Product name | Session. The API path `/api/coordination-runs` is unchanged |
 
 The unanimity rule was proposed by the Phase 5 implementer and confirmed by
 the whole team on 2026-08-30, together with the final-artifact-pointer rule
@@ -286,4 +314,5 @@ above. Both are now settled; P6-01 encodes them.
 
 - `overview.md` Sections 5.1 (trust boundary), 10.3 (atomic mutation rules), 10.4 (reservation), 10.5 (restart), 11.2 (orchestration loop), 11.3 (attempt algorithm), 11.4 (parsing order) apply unchanged to session runs.
 - `overview.md` Sections 7–8 remain the frozen contract for the verified workflow only; session additions in this file are additive on top of them.
-- Phase sheets: `phases/05-session-contracts.md`, `06-session-core.md`, `07-session-durable.md`, `08-session-ui.md`, and `09-release.md`.
+- Phase sheets: `phases/05-session-contracts.md`, `06-session-core.md`, `07-session-durable.md`, `08-session-ui.md`, and `09-release.md` (superseded by `15-scale-and-release.md`).
+- Session v2 sheets: `phases/10-session-v2-surface.md`, `11-lifecycle-reconciliation.md`, `12-durable-multi-prompt-sessions.md`, `13-parallel-waves.md`, `14-coordinator-planning.md`, and `15-scale-and-release.md`.

@@ -372,16 +372,33 @@ export interface CreateSessionRunRequest {
 /** Either create body. The service discriminates on `workflow`. */
 export type CreateRunRequest = CreateCoordinationRunRequest | CreateSessionRunRequest;
 
-/** Frozen session limits, referenced by the routes, the service, and the UI. */
+/**
+ * Frozen session limits, referenced by the routes, the service, and the UI.
+ *
+ * The participant and turn ranges were widened by the Session v2 mini-RFC
+ * (P10-03, P10-04). `maxSessionTurns` is a ceiling for callers that ask for it
+ * explicitly; `defaultSessionTurns` is what a session gets when it does not, so
+ * a runaway wave costs a bounded number of turns rather than the ceiling.
+ *
+ * The countdown values remain until P14-07 deletes the protocol.
+ */
+/**
+ * Context budget for shared-session runs (P10-05). Ten participants holding a
+ * long conversation overflow the 12,000-character verified-handoff budget, and
+ * an overflowing session prompt degrades into an unreadable transcript. The
+ * verified workflow keeps `DEFAULT_COORDINATION_POLICY.contextMaxChars`.
+ */
+export const SESSION_CONTEXT_MAX_CHARS = 40_000;
+
 export const SESSION_LIMITS = {
   minParticipants: 2,
-  maxParticipants: 6,
+  maxParticipants: 10,
   minStartValue: 2,
   maxStartValue: 12,
   defaultStartValue: 10,
-  minFreeChatTurns: 3,
-  maxFreeChatTurns: 12,
-  defaultFreeChatTurns: 6,
+  minSessionTurns: 3,
+  maxSessionTurns: 100_000,
+  defaultSessionTurns: 200,
   messageMinChars: 1,
   messageMaxChars: 500,
 } as const;

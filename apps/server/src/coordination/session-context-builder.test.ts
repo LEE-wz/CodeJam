@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CONTEXT_TRUNCATION_MARKER, digestPrompt, RoleScopedContextBuilder } from "./context-builder.js";
+import {
+  CONTEXT_TRUNCATION_MARKER,
+  SESSION_OMISSION_MARKER,
+  digestPrompt,
+  RoleScopedContextBuilder,
+} from "./context-builder.js";
 import { FIXED_NOW } from "./testing/controls.js";
 import {
   PARTICIPANT_ONE,
@@ -138,19 +143,67 @@ describe("session context builder", () => {
     ]) expect(envelope.prompt).not.toContain(secret);
   });
 
-  it("truncates oldest transcript entries first and preserves the newest", () => {
+  // P10-05 changed the degradation order for session turns: whole oldest
+  // messages are dropped before any message text is truncated, because a chat
+  // degraded uniformly is unreadable. The verified-handoff ladder is unchanged.
+  it("drops the oldest transcript messages before truncating any message text", () => {
     const artifacts = [
       message(0, `OLDEST-${"a".repeat(500)}`),
       message(1, `MIDDLE-${"b".repeat(500)}`),
       message(2, `NEWEST-${"c".repeat(500)}`),
     ];
     const envelope = build("free_chat", artifacts, undefined, 2_150);
+
+    expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
+    expect(envelope.prompt).not.toContain("OLDEST-");
+    expect(envelope.prompt).toContain(`NEWEST-${"c".repeat(500)}`);
+    expect(envelope.prompt).not.toContain(CONTEXT_TRUNCATION_MARKER);
+    // Dropping messages is a form of truncation and is reported as such, so the
+    // attempt.started evidence stays honest about what the Agent was shown.
     expect(envelope.truncated).toBe(true);
-    const oldestLine = envelope.prompt.split("\n").find((line) => line.includes("OLDEST-"));
-    const newestLine = envelope.prompt.split("\n").find((line) => line.includes("NEWEST-"));
-    expect(oldestLine).toContain(CONTEXT_TRUNCATION_MARKER);
-    expect(newestLine).toContain(`NEWEST-${"c".repeat(500)}`);
-    expect(newestLine).not.toContain(CONTEXT_TRUNCATION_MARKER);
+  });
+
+  it("keeps the whole transcript when it fits, with no marker of either kind", () => {
+    const artifacts = [message(0, "First"), message(1, "Second"), message(2, "Third")];
+    const envelope = build("free_chat", artifacts);
+
+    for (const content of ["First", "Second", "Third"]) {
+      expect(envelope.prompt).toContain(content);
+    }
+    expect(envelope.prompt).not.toContain(SESSION_OMISSION_MARKER);
+    expect(envelope.prompt).not.toContain(CONTEXT_TRUNCATION_MARKER);
+    expect(envelope.truncated).toBe(false);
+  });
+
+  it("falls back to truncating text when even one retained message does not fit", () => {
+    const artifacts = [
+      message(0, `OLDEST-${"a".repeat(2_000)}`),
+      message(1, `NEWEST-${"c".repeat(2_000)}`),
+    ];
+    const envelope = build("free_chat", artifacts, undefined, 1_600);
+
+    expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
+    expect(envelope.prompt).toContain(CONTEXT_TRUNCATION_MARKER);
+    expect(envelope.prompt).not.toContain("OLDEST-");
+    expect(envelope.truncated).toBe(true);
+  });
+
+  it("renders a long transcript within the session window without dropping recent turns", () => {
+    const artifacts = Array.from({ length: 40 }, (_unused, index) =>
+      message(index, `MESSAGE-${index}`),
+    );
+    const envelope = build(
+      "free_chat",
+      artifacts,
+      artifacts.map(({ id }) => id),
+      1_400,
+    );
+
+    // The window keeps at least the most recent messages and always marks what
+    // it dropped, so the Agent is never silently shown a partial history.
+    expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
+    expect(envelope.prompt).toContain("MESSAGE-39");
+    expect(envelope.prompt).not.toContain("MESSAGE-0\n");
   });
 
   it("produces the same prompt and digest for identical input", () => {

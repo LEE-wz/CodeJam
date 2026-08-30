@@ -227,6 +227,108 @@ Do not inspect repository/store internals, runtime providers, deployment files, 
 
 Do not perform broad source reviews during release documentation. If documentation reveals an implementation defect, record it in `STATUS.md` and return to the appropriate phase/task rather than editing unrelated code opportunistically.
 
+## Phase 10 — Session v2 surface, limits, and rename
+
+**Primary paths**
+
+- `docs/development/ASSUMPTIONS_AND_DECISIONS.md`, `overview-sessions.md`, `FILESYSTEM_MAP.md`, `STATUS.md`
+- `apps/web/src/` session UI, types, fixtures, styles, and tests
+- `apps/server/src/coordination/types.ts` (limits only)
+- `apps/server/src/coordination/routes.ts` and `service.ts` (session validation ranges only)
+- `apps/server/src/coordination/context-builder.ts` (session transcript window only)
+- matching `*.test.ts` files
+
+**Conditional paths**
+
+- `apps/server/src/coordination/session-workflow.ts` only to confirm it reads `SESSION_LIMITS` rather than literals
+- `apps/server/src/config.ts` when the session context budget becomes configurable
+- server fixtures under `apps/server/src/coordination/testing/` that pin a session limit
+
+No workflow, protocol, or repository behaviour is deleted in this phase. Do not open the countdown engine branches except to confirm they still compile and pass.
+
+## Phase 11 — Lifecycle reconciliation and Agent recovery
+
+**Primary paths**
+
+- `apps/server/src/coordination/service.ts`
+- `apps/server/src/coordination/repository.ts`
+- `apps/server/src/coordination/events.ts`, `redaction.ts`, `types.ts` (additive error code and event)
+- `apps/server/src/agent-service.ts` (reservation reads only)
+- `apps/server/src/index.ts` (reconciler composition)
+- matching `*.test.ts` files and `coordination/testing/**`
+
+**Conditional paths**
+
+- `apps/web/src/` only for the Agent recovery affordance and the reservation message
+- `apps/server/src/config.ts` for the sweep interval
+
+Do not change the execution seam in `AgentService.startExecution`. Reconciliation reads and settles durable state; it never bypasses the repository.
+
+## Phase 12 — Durable multi-prompt sessions
+
+**Primary paths**
+
+- `apps/server/src/coordination/types.ts`, `contracts.ts`, `schemas.ts`
+- `apps/server/src/coordination/repository.ts`, `service.ts`, `routes.ts`, `session-workflow.ts`, `context-builder.ts`, `artifact-protocol.ts`, `events.ts`, `redaction.ts`
+- `apps/web/src/` session chat surface, API client, types, fixtures, and tests
+- matching `*.test.ts` files and `coordination/testing/**`
+
+**Conditional paths**
+
+- `apps/server/src/store.ts` and `apps/server/src/types.ts` only to confirm the v2 shape absorbs the additive fields
+- `apps/server/src/app.ts` for route registration
+
+Use temporary directories for persistence tests. Do not open or mutate real `data/`, `workspaces/`, or `codex-home/` content.
+
+## Phase 13 — Parallel waves
+
+**Primary paths**
+
+- `apps/server/src/coordination/types.ts`, `contracts.ts`
+- `apps/server/src/coordination/repository.ts` (batch schedule and per-turn settlement)
+- `apps/server/src/coordination/service.ts` (wave supervisor)
+- `apps/server/src/coordination/session-workflow.ts` (concurrent-history validation)
+- `apps/server/src/coordination/routes.ts` (concurrency policy)
+- matching `*.test.ts` files and `coordination/testing/**`
+
+**Conditional paths**
+
+- `apps/server/src/coordination/runtime-gateway.ts` and `apps/server/src/agent-service.ts` only for the busy-Agent contention path
+- `apps/web/src/` only for wave-aware transcript and status rendering
+
+Do not modify `workflow.ts`. Verified handoff must keep scheduling exactly one turn at a time, proven by its unmodified regression matrix.
+
+## Phase 14 — Coordinator planning and countdown removal
+
+**Primary paths**
+
+- `apps/server/src/coordination/schemas.ts`, `artifact-protocol.ts`, `session-workflow.ts`, `context-builder.ts`, `types.ts`, `routes.ts`, `service.ts`
+- `apps/server/src/coordination/repository.ts` only for the countdown deletion
+- `apps/web/src/` for the planning policy control and countdown remnants
+- matching `*.test.ts` files, `coordination/testing/**`, and `apps/web/src/testing/**`
+
+**Conditional paths**
+
+- `docs/development/overview-sessions.md` and `ASSUMPTIONS_AND_DECISIONS.md` for the amendment record
+
+Countdown deletion applies to the engine only. Stored history keeps its fields, and a fixture test proves a pre-existing countdown run still loads and renders.
+
+## Phase 15 — Scale, storage, and release
+
+**Primary paths**
+
+- `README.md`, `docs/development/**`, and the Session v2 documentation set named by the Phase 15 guide
+- a temporary scale-measurement harness and its output
+- `apps/server/src/store.ts` and `apps/server/src/coordination/repository.ts` only if the storage swap is approved
+- package/Compose/Docker files needed to verify documented commands
+
+**Conditional paths**
+
+- implementation files referenced by documentation, read only to verify exact current behaviour
+- deployment files only when deployment validation is in submission scope
+
+Run the scale harness against temporary directories only. Never measure against real `data/` content, and never publish an unmeasured scale claim.
+
 ## Always excluded unless explicitly authorized
 
 - `.git/**` internals (ordinary Git commands are allowed)

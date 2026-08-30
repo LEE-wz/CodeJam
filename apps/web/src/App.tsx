@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
-import { RelayWorkspace } from "./RelayWorkspace";
+import { SessionWorkspace } from "./SessionWorkspace";
 import type { Agent, AgentRun, Message, SystemInfo } from "./types";
 
 const starterPrompts = [
@@ -50,7 +50,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
-  const [workspaceView, setWorkspaceView] = useState<"agents" | "relay">("agents");
+  const [workspaceView, setWorkspaceView] = useState<"agents" | "session">("agents");
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
@@ -335,12 +335,12 @@ export default function App() {
         </button>
 
         <button
-          className={"relay-nav-button " + (workspaceView === "relay" ? "selected" : "")}
-          onClick={() => setWorkspaceView("relay")}
-          aria-current={workspaceView === "relay" ? "page" : undefined}
+          className={"session-nav-button " + (workspaceView === "session" ? "selected" : "")}
+          onClick={() => setWorkspaceView("session")}
+          aria-current={workspaceView === "session" ? "page" : undefined}
         >
-          <span className="relay-nav-icon">⇄</span>
-          <span><strong>Relay</strong><small>Verified handoffs</small></span>
+          <span className="session-nav-icon">⇄</span>
+          <span><strong>Sessions</strong><small>Shared Agent sessions</small></span>
         </button>
 
         <div className="sidebar-label">
@@ -407,8 +407,8 @@ export default function App() {
           </div>
         )}
 
-        {workspaceView === "relay" ? (
-          <RelayWorkspace agents={agents} />
+        {workspaceView === "session" ? (
+          <SessionWorkspace agents={agents} />
         ) : selected ? (
           <>
             <header className="agent-header">

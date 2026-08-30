@@ -54,6 +54,22 @@ export const SESSION_PARTICIPANTS = [
   PARTICIPANT_THREE,
 ] as const;
 
+/**
+ * A roster of `count` distinct ready participants, for the widened participant
+ * bounds (P10-03). The first four reuse the named fixtures so existing
+ * transcripts and expectations keep their names.
+ */
+export const sessionParticipantRoster = (count: number): CoordinationAgentView[] =>
+  Array.from({ length: count }, (_unused, index) =>
+    index < SESSION_PARTICIPANTS_FOUR.length
+      ? { ...SESSION_PARTICIPANTS_FOUR[index]! }
+      : {
+          id: `agent-session-${index + 1}`,
+          name: `Relay ${index + 1}`,
+          status: "ready" as const,
+        },
+  );
+
 export const SESSION_PARTICIPANTS_FOUR = [
   PARTICIPANT_ONE,
   PARTICIPANT_TWO,
@@ -66,6 +82,15 @@ export const SESSION_PARTICIPANTS_FOUR = [
  * ------------------------------------------------------------------ */
 
 export const SESSION_START_VALUE = SESSION_LIMITS.defaultStartValue;
+
+/**
+ * Turn ceiling for the free-chat fixtures. Deliberately a fixture constant
+ * rather than `SESSION_LIMITS.defaultSessionTurns`: the session default is 200
+ * (P10-04), and a fixture that expands to 200 committed turns would be neither
+ * readable nor fast. Fixtures pin the shape of a short run, not the product
+ * default.
+ */
+export const FREE_CHAT_FIXTURE_TURNS = 6;
 
 export const COUNTDOWN_OBJECTIVE = "Count down from 10 to 1 together, one number per turn.";
 
@@ -91,7 +116,7 @@ export const CREATE_FREE_CHAT_REQUEST: CreateSessionRunRequest = {
   agents: SESSION_PARTICIPANTS.map((agent) => agent.id),
   policy: {
     sessionProtocol: "free_chat",
-    maxTurns: SESSION_LIMITS.defaultFreeChatTurns,
+    maxTurns: FREE_CHAT_FIXTURE_TURNS,
   },
 };
 
@@ -310,7 +335,7 @@ export const NORMAL_COUNTDOWN_EVENT_SEQUENCE: readonly CoordinationEventType[] =
 export const NORMAL_FREE_CHAT_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
   "run.created",
   "run.started",
-  ...Array.from({ length: SESSION_LIMITS.defaultFreeChatTurns }, () => COMMITTED_TURN_EVENTS).flat(),
+  ...Array.from({ length: FREE_CHAT_FIXTURE_TURNS }, () => COMMITTED_TURN_EVENTS).flat(),
   "run.completed",
 ];
 

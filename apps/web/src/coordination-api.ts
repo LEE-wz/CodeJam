@@ -2,14 +2,14 @@ import { request } from "./api";
 import type {
   CoordinationRun,
   CoordinationRunDetails,
-  CreateRunRequest,
+  CreateSessionRunRequest,
 } from "./coordination-types";
 
 const base = "/api/coordination-runs";
 
 export const coordinationApi = {
   list: () => request<{ runs: CoordinationRun[] }>(base),
-  create: (body: CreateRunRequest) =>
+  create: (body: CreateSessionRunRequest) =>
     request<{ run: CoordinationRun }>(base, {
       method: "POST",
       body: JSON.stringify(body),

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { CoordinationServiceContract } from "./contracts.js";
 import { CoordinationError } from "./errors.js";
 import type { CreateRunRequest, GetCoordinationRunResponse } from "./types.js";
+import { SESSION_LIMITS } from "./types.js";
 
 const runIdParams = z.object({ id: z.string().uuid() });
 const requiredSectionSchema = z
@@ -45,9 +46,14 @@ const verifiedCreateRunBody = z
 const sessionPolicySchema = z
   .object({
     sessionProtocol: z.enum(["countdown", "free_chat"]).optional(),
-    sessionStartValue: z.number().int().min(2).max(12).optional(),
+    sessionStartValue: z
+      .number()
+      .int()
+      .min(SESSION_LIMITS.minStartValue)
+      .max(SESSION_LIMITS.maxStartValue)
+      .optional(),
     // Countdown permits a two-turn 2 -> 1 run; free chat is tightened below.
-    maxTurns: z.number().int().min(2).max(12).optional(),
+    maxTurns: z.number().int().min(2).max(SESSION_LIMITS.maxSessionTurns).optional(),
     perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),
   })
   .strict()
@@ -61,7 +67,10 @@ const sessionPolicySchema = z
           message: "Free-chat sessions do not accept a start value",
         });
       }
-      if (policy.maxTurns !== undefined && policy.maxTurns < 3) {
+      if (
+        policy.maxTurns !== undefined &&
+        policy.maxTurns < SESSION_LIMITS.minSessionTurns
+      ) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["maxTurns"],
@@ -71,7 +80,7 @@ const sessionPolicySchema = z
       return;
     }
 
-    const startValue = policy.sessionStartValue ?? 10;
+    const startValue = policy.sessionStartValue ?? SESSION_LIMITS.defaultStartValue;
     const maxTurns = policy.maxTurns ?? startValue;
     if (maxTurns < startValue) {
       context.addIssue({
@@ -89,8 +98,8 @@ const sessionCreateRunBody = z
     objective: z.string().trim().min(1).max(4_000),
     agents: z
       .array(z.string().trim().min(1))
-      .min(2)
-      .max(6)
+      .min(SESSION_LIMITS.minParticipants)
+      .max(SESSION_LIMITS.maxParticipants)
       .superRefine((agentIds, context) => {
         if (new Set(agentIds).size !== agentIds.length) {
           context.addIssue({

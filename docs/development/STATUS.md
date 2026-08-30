@@ -1,14 +1,19 @@
-# Relay Development Status
+# Session Development Status
 
-**Last audit:** 2026-08-30 (Checkpoint 8 verified and merged to `main`)
+**Last audit:** 2026-08-30 (Phase 10 implemented; Checkpoint 10 open on `P10-10`)
 **Audited checkpoint:** Phase 8 implementation `e93ffb5`, merged from `phase-8`
-**Implementation branch:** `phase-8` (base `9e82e50`, merged)
+**Implementation branch:** `phase-10-session-v2-surface` (base `186ad89`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 9 - Documentation, Demo, and Release Candidate
-**Current gate:** Checkpoint 8 passed and merged to `main`; Checkpoint 9 not started
-**Overall state:** Phases 0-8 `complete`; Phase 9 `not_started`
+**Current phase:** Phase 10 - Session v2 Surface, Limits, and Rename
+**Current gate:** `P10-01`..`P10-09` complete and verified; `P10-10` (live ten-participant rehearsal) not started, so Checkpoint 10 is **not** passed
+**Overall state:** Phases 0-8 `complete`; Phase 9 `superseded` by Phase 15; Phase 10 `in_progress`; Phases 11-15 `not_started`
 
-## Nine-phase plan
+The product is renamed from Relay to Session (P10-08). The HTTP surface
+`/api/coordination-runs` and the server-side `coordination*` modules keep their
+names by recorded decision; this file keeps historical Relay references where
+they name a past checkpoint.
+
+## Phase plan
 
 | Phase | Content | Status |
 |---|---|---|
@@ -21,23 +26,76 @@
 | 6 | Session core in memory | `complete` (Checkpoint 6: `82f5c85`; sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
 | 7 | Durable session backend and API | `complete` (Checkpoint 7 verified; sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
 | 8 | Session UI and real rehearsal | `complete` (Checkpoint 8 verified; sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
-| 9 | Documentation, demo, release candidate (both workflows) | `not_started` (sheet: [`phases/09-release.md`](phases/09-release.md)) |
+| 9 | Documentation, demo, release candidate (both workflows) | `superseded` by Phase 15 (sheet: [`phases/09-release.md`](phases/09-release.md)) |
+| 10 | Session v2 surface, limits, and rename | `in_progress` (sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
+| 11 | Lifecycle reconciliation and Agent recovery | `not_started` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
+| 12 | Durable multi-prompt sessions | `not_started` (sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
+| 13 | Parallel waves | `not_started` (sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
+| 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
+| 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
+
+Phases 10-15 implement the Session v2 plan in
+[`plans/session-v2-plan.md`](plans/session-v2-plan.md), approved through the
+Session v2 mini-RFC in
+[`ASSUMPTIONS_AND_DECISIONS.md`](ASSUMPTIONS_AND_DECISIONS.md).
 
 The session extension was adopted from the team's Relay Sessions plan. Its repository-local contract authority is [`overview-sessions.md`](overview-sessions.md). Phase 9 was formerly Phase 5; its task IDs moved from P5-xx to P9-xx.
 
 ## Resume here
 
-**Checkpoint 8 is complete and merged to `main`.** The verified Phase 8
-implementation remains at `e93ffb5` on `phase-8`; `main` contains it through a
-non-fast-forward merge. The pre-merge clean-copy Docker Compose gate passed 474
-server tests, 27 web tests, both typechecks, and both production builds (501
-tests total). When Phase 9 starts, create its task branch from this updated
-`main`; `P9-01` is next: freeze the product documentation set for both workflows,
-then prepare the three-minute demo and release-candidate evidence.
+**`P10-10` is the next action, and it needs the user.** Everything else in Phase
+10 is implemented and verified on `phase-10-session-v2-surface`. `P10-10` is the
+live rehearsal: ten fresh demo Agents in one free-chat session in the Compose
+browser deployment, recording start-to-completion time, per-attempt durations,
+prompt size at the widest turn, and whether transcript windowing engaged. It
+spends real model calls against the configured Ark endpoint and writes real
+runtime data, so it was not run unattended. Checkpoint 10 stays open until it is
+done and its evidence is recorded here.
+
+Phase 11 may not begin before that, and its own `P11-05` additionally depends on
+the reservation decision, which is already recorded (reserve per running
+attempt).
 
 Docker Compose is available as `docker compose`. Baseline validation used
 `LAUNCHPAD_ENV_FILE=/dev/null` so the disposable verification service did not
 load repository-local secrets or runtime state.
+
+## Phase 10 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P10-01 | `complete` | Session v2 mini-RFC recorded in `ASSUMPTIONS_AND_DECISIONS.md` with the six amendments, each naming its implementing phase, plus the recorded answers to the open questions. `overview-sessions.md` carries 14 `[v2, Phase N]` amendments across Sections 1, 2, 4, 6.5, 7, 8, 11, and 12. |
+| P10-02 | `complete` | `FILESYSTEM_MAP.md` has primary/conditional path sections for Phases 10-15. |
+| P10-03 | `complete` | `SESSION_LIMITS.maxParticipants` is 10; `routes.ts` reads `SESSION_LIMITS` instead of literals for participants and start value. Boundary tests at 2, 10, and 11 participants prove the service and the route share one source of truth. |
+| P10-04 | `complete` | `minSessionTurns` 3, `maxSessionTurns` 100,000, `defaultSessionTurns` 200 replace the free-chat trio. Tests accept 13, 1,000, and 100,000 turns, reject 2, 100,001, and 12.5, and prove the verified workflow still rejects `maxTurns: 13` and accepts 12. |
+| P10-05 | `complete` | Session runs get `SESSION_CONTEXT_MAX_CHARS` (40,000). The session prompt ladder now drops whole oldest messages behind `[earlier messages omitted]` before any text truncation, and `truncated` reports either kind so `attempt.started` evidence stays honest. Four context tests cover fit, drop, drop-then-truncate, and a 40-message transcript. |
+| P10-06 | `complete` | The web app has no workflow toggle, role selects, required-sections editor, or `maxRevisions`. Verified runs open read-only behind a `Legacy workflow` banner with no start/stop action; all seven verified fixtures render, asserted per fixture. |
+| P10-07 | `complete` | No protocol choice in the UI; every created session sends `sessionProtocol: "free_chat"`. Stored countdown sessions still render their transcript, protocol row, and `nextExpectedNumber`/`Complete` state. The countdown engine branches are untouched and still tested; `P14-07` deletes them. |
+| P10-08 | `complete` | `RelayWorkspace.tsx` is `SessionWorkspace.tsx`, the 68 `relay-*` CSS rules are `session-*`, and the nav, hero, run index, actions, and copy say Session. `App.tsx`'s `workspaceView` union is `"agents" \| "session"`. No behaviour changed with the rename. |
+| P10-09 | `complete` | 29 web tests: every session fixture, every verified fixture read-only, ten-participant create, ceiling disablement, turn-range validation, a 5,000-turn create, consensus, escaping, the three polling-chain proofs, and stop. |
+| P10-10 | `not_started` | Requires the live Compose browser deployment and real model calls. See **Resume here**. |
+
+### Phase 10 verification evidence
+
+- The full disposable Docker Compose gate passed on `phase-10-session-v2-surface`
+  with `LAUNCHPAD_ENV_FILE=/dev/null`: **27 server files / 485 tests**, **2 web
+  files / 31 tests**, both typechecks, and both production builds (516 tests
+  total, up from 501 at Checkpoint 8).
+- Server tests rose 474 → 485 and web tests 27 → 31. No test was deleted to make
+  a change pass: the six pre-existing failures after the limit raise were each a
+  deliberate contract change, and each was re-pointed at the new contract.
+- The web dev dependencies are not installed on the host, so all web
+  verification ran through Compose, as the runbook requires.
+
+### Phase 10 recorded deviation
+
+`P10-05` specifies the session context budget as "configurable through
+`AppConfig`". It is implemented as the exported constant
+`SESSION_CONTEXT_MAX_CHARS` in `coordination/types.ts`, not as a configuration
+value: nothing in Phases 10-15 reads it from configuration, and adding a config
+key, its parser, and its composition wiring would widen the surface this phase is
+allowed to touch. If a deployment ever needs to tune it, `P15-07` is where the
+operations document would record it.
 
 ## Phase 8 task ledger
 

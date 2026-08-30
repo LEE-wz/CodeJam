@@ -9,16 +9,18 @@ import type {
   CoordinationRunDetails,
   CoordinationRunStatus,
   CoordinationTurn,
-  CreateCoordinationRunRequest,
-  CreateRunRequest,
   CreateSessionRunRequest,
-  RequiredSection,
-  SessionProtocol,
 } from "./coordination-types";
 import { SESSION_LIMITS } from "./coordination-types";
 import type { Agent } from "./types";
 
 const activeStatuses = new Set<CoordinationRunStatus>(["running", "stop_requested"]);
+
+/**
+ * Role labels. `participant` is the only role a session creates; the three
+ * verified-handoff roles remain because runs created before the workflow was
+ * removed from this app are still rendered, read-only (P10-06).
+ */
 const roleLabels = {
   planner: "Planner",
   critic: "Critic",
@@ -26,24 +28,14 @@ const roleLabels = {
   participant: "Participant",
 } as const;
 
-interface RelayWorkspaceProps {
+interface SessionWorkspaceProps {
   agents: Agent[];
 }
 
-type FormMode = "verified" | "session";
-
 interface FormState {
-  mode: FormMode;
   name: string;
   objective: string;
-  sections: RequiredSection[];
-  plannerAgentId: string;
-  criticAgentId: string;
-  finalizerAgentId: string;
   sessionAgentIds: string[];
-  sessionProtocol: SessionProtocol;
-  sessionStartValue: string;
-  maxRevisions: string;
   maxTurns: string;
   perAttemptTimeoutSeconds: string;
 }
@@ -51,22 +43,10 @@ interface FormState {
 const initialForm = (agents: Agent[]): FormState => {
   const ready = agents.filter(({ status }) => status === "ready");
   return {
-    mode: "verified",
-    name: "Verified handoff",
+    name: "Shared session",
     objective: "",
-    sections: [
-      { key: "summary", title: "Summary" },
-      { key: "recommendations", title: "Recommendations" },
-      { key: "risks", title: "Risks and Mitigations" },
-    ],
-    plannerAgentId: ready[0]?.id ?? "",
-    criticAgentId: ready[1]?.id ?? "",
-    finalizerAgentId: ready[2]?.id ?? "",
     sessionAgentIds: ready.slice(0, 3).map(({ id }) => id),
-    sessionProtocol: "countdown",
-    sessionStartValue: String(SESSION_LIMITS.defaultStartValue),
-    maxRevisions: "2",
-    maxTurns: "8",
+    maxTurns: String(SESSION_LIMITS.defaultSessionTurns),
     perAttemptTimeoutSeconds: "120",
   };
 };
@@ -93,12 +73,12 @@ const errorMessage = (reason: unknown): string => {
 const terminalMessage = (run: CoordinationRun): string => {
   if (run.errorMessage) return run.errorMessage;
   switch (run.errorCode) {
-    case "STOPPED_BY_USER": return "The run was stopped by the user. The same Agents can be used in a new run.";
-    case "SERVER_RESTARTED": return "The server restarted during this run. Create a new run to continue safely.";
+    case "STOPPED_BY_USER": return "The session was stopped by the user. The same Agents can be used in a new session.";
+    case "SERVER_RESTARTED": return "The server restarted during this session. Create a new session to continue safely.";
     case "MAX_ATTEMPTS_EXCEEDED": return "A turn exhausted its retry limit. Review the attempt evidence before trying again.";
     case "MAX_REVISIONS_EXCEEDED": return "The proposal reached its revision limit without approval. Review the Critic feedback.";
-    case "MAX_TURNS_EXCEEDED": return "The workflow reached its turn limit. Review the latest committed artifacts.";
-    default: return "The run reached a terminal state. Review the evidence below before trying again.";
+    case "MAX_TURNS_EXCEEDED": return "The session reached its turn limit. Review the latest committed messages.";
+    default: return "The session reached a terminal state. Review the evidence below before trying again.";
   }
 };
 
@@ -106,7 +86,7 @@ const isSessionRun = (run: CoordinationRun): boolean =>
   run.policy.workflow === "shared_session_v1";
 
 function RunStatus({ status }: { status: CoordinationRunStatus }) {
-  return <span className={`relay-status relay-status-${status}`}>{humanize(status)}</span>;
+  return <span className={`session-status session-status-${status}`}>{humanize(status)}</span>;
 }
 
 function validateForm(form: FormState, agents: Agent[]): Record<string, string> {
@@ -117,75 +97,36 @@ function validateForm(form: FormState, agents: Agent[]): Record<string, string> 
   if (!objective || objective.length > 4_000) errors.objective = "Use an objective between 1 and 4,000 characters.";
 
   const readyIds = new Set(agents.filter(({ status }) => status === "ready").map(({ id }) => id));
+  if (
+    form.sessionAgentIds.length < SESSION_LIMITS.minParticipants ||
+    form.sessionAgentIds.length > SESSION_LIMITS.maxParticipants ||
+    new Set(form.sessionAgentIds).size !== form.sessionAgentIds.length
+  ) {
+    errors.agents = `Choose ${SESSION_LIMITS.minParticipants}-${SESSION_LIMITS.maxParticipants} different ready Agents in turn order.`;
+  } else if (form.sessionAgentIds.some((id) => !readyIds.has(id))) {
+    errors.agents = "Every session participant must be ready.";
+  }
+
+  const maxTurns = Number(form.maxTurns);
+  if (
+    !Number.isInteger(maxTurns) ||
+    maxTurns < SESSION_LIMITS.minSessionTurns ||
+    maxTurns > SESSION_LIMITS.maxSessionTurns
+  ) {
+    errors.policy = `Maximum turns must be an integer from ${SESSION_LIMITS.minSessionTurns}-${SESSION_LIMITS.maxSessionTurns.toLocaleString()}.`;
+  }
   const timeout = Number(form.perAttemptTimeoutSeconds);
   if (!Number.isInteger(timeout) || timeout < 10 || timeout > 180) {
     errors.policy = "Attempt timeout must be 10-180 seconds.";
   }
-
-  if (form.mode === "session") {
-    if (
-      form.sessionAgentIds.length < SESSION_LIMITS.minParticipants ||
-      form.sessionAgentIds.length > SESSION_LIMITS.maxParticipants ||
-      new Set(form.sessionAgentIds).size !== form.sessionAgentIds.length
-    ) {
-      errors.agents = "Choose 2-6 different ready Agents in turn order.";
-    } else if (form.sessionAgentIds.some((id) => !readyIds.has(id))) {
-      errors.agents = "Every session participant must be ready.";
-    }
-
-    const maxTurns = Number(form.maxTurns);
-    if (form.sessionProtocol === "countdown") {
-      const startValue = Number(form.sessionStartValue);
-      if (
-        !Number.isInteger(startValue) ||
-        startValue < SESSION_LIMITS.minStartValue ||
-        startValue > SESSION_LIMITS.maxStartValue
-      ) {
-        errors.policy = "Countdown start value must be an integer from 2-12.";
-      } else if (!Number.isInteger(maxTurns) || maxTurns < startValue || maxTurns > 12) {
-        errors.policy = "Countdown maximum turns must be at least the start value and no more than 12.";
-      }
-    } else if (
-      !Number.isInteger(maxTurns) ||
-      maxTurns < SESSION_LIMITS.minFreeChatTurns ||
-      maxTurns > SESSION_LIMITS.maxFreeChatTurns
-    ) {
-      errors.policy = "Free-chat maximum turns must be an integer from 3-12.";
-    }
-    return errors;
-  }
-
-  if (form.sections.length < 1 || form.sections.length > 10) {
-    errors.sections = "Add between 1 and 10 required sections.";
-  }
-  const keys = form.sections.map(({ key }) => key.trim());
-  if (keys.some((key) => !/^[a-z0-9][a-z0-9_-]*$/.test(key))) {
-    errors.sections = "Section keys must be lower-case slugs.";
-  }
-  if (new Set(keys).size !== keys.length) errors.sections = "Section keys must be unique.";
-  if (form.sections.some(({ title }) => !title.trim() || title.trim().length > 120)) {
-    errors.sections = "Each section needs a title of at most 120 characters.";
-  }
-
-  const selections = [form.plannerAgentId, form.criticAgentId, form.finalizerAgentId];
-  if (selections.some((id) => !id) || new Set(selections).size !== 3) {
-    errors.agents = "Choose three different ready Agents.";
-  } else if (selections.some((id) => !readyIds.has(id))) {
-    errors.agents = "Every selected Agent must be ready.";
-  }
-
-  const maxRevisions = Number(form.maxRevisions);
-  const maxTurns = Number(form.maxTurns);
-  if (!Number.isInteger(maxRevisions) || maxRevisions < 0 || maxRevisions > 3) {
-    errors.policy = "Maximum revisions must be 0-3.";
-  }
-  if (!Number.isInteger(maxTurns) || maxTurns < 3 || maxTurns > 12) {
-    errors.policy = "Maximum turns must be 3-12.";
-  }
   return errors;
 }
 
-function ArtifactCard({ artifact }: { artifact: Exclude<CoordinationArtifact, { type: "session_message" }> }) {
+/**
+ * Renders the typed artifacts of a verified-handoff run. Sessions never produce
+ * these; the card exists so a run created before P10-06 still opens.
+ */
+function LegacyArtifactCard({ artifact }: { artifact: Exclude<CoordinationArtifact, { type: "session_message" }> }) {
   const payload = artifact.payload;
   return (
     <article className={`artifact-card artifact-${artifact.type}`}>
@@ -352,7 +293,7 @@ function SessionParticipantPicker({
   return (
     <fieldset ref={focusRef} tabIndex={-1} className="session-participant-picker" aria-describedby={error ? "session-agents-error" : undefined}>
       <legend>Participants and turn order</legend>
-      <p>Select 2-6 ready Agents. The numbered order below is the backend round-robin order.</p>
+      <p>Select {SESSION_LIMITS.minParticipants}-{SESSION_LIMITS.maxParticipants} ready Agents. The numbered order below is the backend round-robin order.</p>
       <div className="participant-options" aria-label="Ready Agents">
         {readyAgents.map((agent) => {
           const selected = selectedIds.includes(agent.id);
@@ -403,32 +344,8 @@ function CreationForm({
   const [serverError, setServerError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const objectiveRef = useRef<HTMLTextAreaElement>(null);
-  const plannerRef = useRef<HTMLSelectElement>(null);
   const sessionParticipantRef = useRef<HTMLFieldSetElement>(null);
-  const sectionRef = useRef<HTMLInputElement>(null);
   const policyRef = useRef<HTMLInputElement>(null);
-  const readyAgents = agents.filter(({ status }) => status === "ready");
-
-  const setMode = (mode: FormMode) => {
-    setErrors({});
-    setServerError(null);
-    setForm((current) => ({
-      ...current,
-      mode,
-      name: current.name === "Verified handoff" || current.name === "Shared session"
-        ? mode === "session" ? "Shared session" : "Verified handoff"
-        : current.name,
-      maxTurns: mode === "session" ? String(SESSION_LIMITS.defaultStartValue) : "8",
-    }));
-  };
-
-  const updateSection = (index: number, field: keyof RequiredSection, value: string) => {
-    setForm((current) => ({
-      ...current,
-      sections: current.sections.map((section, sectionIndex) =>
-        sectionIndex === index ? { ...section, [field]: value } : section),
-    }));
-  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -438,48 +355,24 @@ function CreationForm({
     if (Object.keys(nextErrors).length > 0) {
       const firstInvalid = nextErrors.name ? nameRef.current
         : nextErrors.objective ? objectiveRef.current
-          : nextErrors.agents ? form.mode === "session" ? sessionParticipantRef.current : plannerRef.current
-            : nextErrors.sections ? sectionRef.current
-              : policyRef.current;
+          : nextErrors.agents ? sessionParticipantRef.current
+            : policyRef.current;
       firstInvalid?.focus();
       return;
     }
 
     setSubmitting(true);
-    let request: CreateRunRequest;
-    if (form.mode === "session") {
-      request = {
-        workflow: "shared_session_v1",
-        name: form.name.trim(),
-        objective: form.objective.trim(),
-        agents: form.sessionAgentIds,
-        policy: {
-          sessionProtocol: form.sessionProtocol,
-          ...(form.sessionProtocol === "countdown"
-            ? { sessionStartValue: Number(form.sessionStartValue) }
-            : {}),
-          maxTurns: Number(form.maxTurns),
-          perAttemptTimeoutMs: Number(form.perAttemptTimeoutSeconds) * 1_000,
-        },
-      } satisfies CreateSessionRunRequest;
-    } else {
-      request = {
-        workflow: "verified_handoff_v1",
-        name: form.name.trim(),
-        objective: form.objective.trim(),
-        requiredSections: form.sections.map(({ key, title }) => ({ key: key.trim(), title: title.trim() })),
-        agents: {
-          plannerAgentId: form.plannerAgentId,
-          criticAgentId: form.criticAgentId,
-          finalizerAgentId: form.finalizerAgentId,
-        },
-        policy: {
-          maxRevisions: Number(form.maxRevisions),
-          maxTurns: Number(form.maxTurns),
-          perAttemptTimeoutMs: Number(form.perAttemptTimeoutSeconds) * 1_000,
-        },
-      } satisfies CreateCoordinationRunRequest;
-    }
+    const request: CreateSessionRunRequest = {
+      workflow: "shared_session_v1",
+      name: form.name.trim(),
+      objective: form.objective.trim(),
+      agents: form.sessionAgentIds,
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: Number(form.maxTurns),
+        perAttemptTimeoutMs: Number(form.perAttemptTimeoutSeconds) * 1_000,
+      },
+    };
 
     try {
       const { run } = await coordinationApi.create(request);
@@ -492,100 +385,44 @@ function CreationForm({
   };
 
   return (
-    <form className="relay-create" onSubmit={submit} noValidate>
-      <div className="relay-section-heading">
-        <div><span className="eyebrow">New Relay run</span><h2>Configure coordination</h2></div>
+    <form className="session-create" onSubmit={submit} noValidate>
+      <div className="session-section-heading">
+        <div><span className="eyebrow">New session</span><h2>Configure the session</h2></div>
         <button type="button" className="button button-ghost" onClick={onCancel}>Cancel</button>
       </div>
       {serverError && <div className="error-banner" role="alert">{serverError}</div>}
 
-      <fieldset className="workflow-toggle">
-        <legend>Workflow</legend>
-        <div>
-          <label className={form.mode === "verified" ? "selected" : ""}>
-            <input type="radio" name="workflow" value="verified" checked={form.mode === "verified"} onChange={() => setMode("verified")} />
-            <span><strong>Verified handoff</strong><small>Planner, Critic, and Finaliser exchange typed artifacts.</small></span>
-          </label>
-          <label className={form.mode === "session" ? "selected" : ""}>
-            <input type="radio" name="workflow" value="session" checked={form.mode === "session"} onChange={() => setMode("session")} />
-            <span><strong>Shared session</strong><small>2-6 Agents take round-robin turns in one transcript.</small></span>
-          </label>
-        </div>
-      </fieldset>
-
-      <div className="relay-form-grid">
-        <label>Run name<input ref={nameRef} autoFocus value={form.name} maxLength={80} aria-invalid={Boolean(errors.name)} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-        <label className="relay-objective">Objective<textarea ref={objectiveRef} rows={4} value={form.objective} maxLength={4_000} aria-invalid={Boolean(errors.objective)} onChange={(event) => setForm({ ...form, objective: event.target.value })} /></label>
+      <div className="session-form-grid">
+        <label>Session name<input ref={nameRef} autoFocus value={form.name} maxLength={80} aria-invalid={Boolean(errors.name)} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+        <label className="session-objective">Objective<textarea ref={objectiveRef} rows={4} value={form.objective} maxLength={4_000} aria-invalid={Boolean(errors.objective)} onChange={(event) => setForm({ ...form, objective: event.target.value })} /></label>
       </div>
       {(errors.name || errors.objective) && <p className="field-error" role="alert">{errors.name ?? errors.objective}</p>}
 
-      {form.mode === "verified" ? (
-        <>
-          <fieldset>
-            <legend>Role assignments</legend>
-            <p>Choose three different ready Agents. Relay reserves them while the run is active.</p>
-            <div className="relay-role-grid">
-              {(["planner", "critic", "finalizer"] as const).map((role) => {
-                const field = `${role}AgentId` as const;
-                return <label key={role}>{roleLabels[role]}<select ref={role === "planner" ? plannerRef : undefined} value={form[field]} onChange={(event) => setForm({ ...form, [field]: event.target.value })}><option value="">Select an Agent</option>{readyAgents.map((agent) => <option value={agent.id} key={agent.id}>{agent.name}</option>)}</select></label>;
-              })}
-            </div>
-            {errors.agents && <p className="field-error" role="alert">{errors.agents}</p>}
-          </fieldset>
+      <SessionParticipantPicker
+        agents={agents}
+        selectedIds={form.sessionAgentIds}
+        error={errors.agents}
+        focusRef={sessionParticipantRef}
+        onChange={(sessionAgentIds) => setForm({ ...form, sessionAgentIds })}
+      />
 
-          <fieldset>
-            <div className="fieldset-heading"><legend>Required sections</legend><button type="button" className="button button-ghost" disabled={form.sections.length >= 10} onClick={() => setForm({ ...form, sections: [...form.sections, { key: "", title: "" }] })}>Add section</button></div>
-            <div className="section-editor">
-              {form.sections.map((section, index) => (
-                <div className="section-row" key={index}>
-                  <label>Key<input ref={index === 0 ? sectionRef : undefined} aria-label={`Section ${index + 1} key`} value={section.key} maxLength={64} onChange={(event) => updateSection(index, "key", event.target.value.toLowerCase().replaceAll(" ", "-"))} /></label>
-                  <label>Title<input aria-label={`Section ${index + 1} title`} value={section.title} maxLength={120} onChange={(event) => updateSection(index, "title", event.target.value)} /></label>
-                  <button type="button" aria-label={`Remove section ${index + 1}`} disabled={form.sections.length === 1} onClick={() => setForm({ ...form, sections: form.sections.filter((_, itemIndex) => itemIndex !== index) })}>×</button>
-                </div>
-              ))}
-            </div>
-            {errors.sections && <p className="field-error" role="alert">{errors.sections}</p>}
-          </fieldset>
-        </>
-      ) : (
-        <>
-          <fieldset>
-            <legend>Session protocol</legend>
-            <p>Countdown accepts only the exact next integer. Free chat accepts bounded messages until consensus or the turn limit.</p>
-            <div className="protocol-options">
-              <label><input type="radio" name="sessionProtocol" value="countdown" checked={form.sessionProtocol === "countdown"} onChange={() => setForm({ ...form, sessionProtocol: "countdown", maxTurns: form.sessionStartValue })} />Countdown</label>
-              <label><input type="radio" name="sessionProtocol" value="free_chat" checked={form.sessionProtocol === "free_chat"} onChange={() => setForm({ ...form, sessionProtocol: "free_chat", maxTurns: String(SESSION_LIMITS.defaultFreeChatTurns) })} />Free chat</label>
-            </div>
-          </fieldset>
-          <SessionParticipantPicker
-            agents={agents}
-            selectedIds={form.sessionAgentIds}
-            error={errors.agents}
-            focusRef={sessionParticipantRef}
-            onChange={(sessionAgentIds) => setForm({ ...form, sessionAgentIds })}
-          />
-        </>
-      )}
-
-      <details className="policy-controls" open={form.mode === "session"}>
+      <details className="policy-controls" open>
         <summary>Safety limits</summary>
-        <div className="relay-policy-grid">
-          {form.mode === "verified" && <label>Maximum revisions<input ref={policyRef} type="number" min="0" max="3" value={form.maxRevisions} onChange={(event) => setForm({ ...form, maxRevisions: event.target.value })} /></label>}
-          {form.mode === "session" && form.sessionProtocol === "countdown" && <label>Countdown start<input ref={policyRef} type="number" min="2" max="12" value={form.sessionStartValue} onChange={(event) => setForm({ ...form, sessionStartValue: event.target.value, maxTurns: event.target.value })} /></label>}
-          <label>Maximum turns<input ref={form.mode === "session" && form.sessionProtocol === "free_chat" ? policyRef : undefined} type="number" min={form.mode === "session" && form.sessionProtocol === "countdown" ? form.sessionStartValue : "3"} max="12" value={form.maxTurns} onChange={(event) => setForm({ ...form, maxTurns: event.target.value })} /></label>
+        <div className="session-policy-grid">
+          <label>Maximum turns<input ref={policyRef} type="number" min={SESSION_LIMITS.minSessionTurns} max={SESSION_LIMITS.maxSessionTurns} value={form.maxTurns} onChange={(event) => setForm({ ...form, maxTurns: event.target.value })} /></label>
           <label>Attempt timeout (seconds)<input type="number" min="10" max="180" value={form.perAttemptTimeoutSeconds} onChange={(event) => setForm({ ...form, perAttemptTimeoutSeconds: event.target.value })} /></label>
         </div>
         {errors.policy && <p className="field-error" role="alert">{errors.policy}</p>}
       </details>
 
-      <div className="relay-create-footer"><p>Creating the run does not start it. Review the configuration, then start it as a separate action.</p><button className="button button-primary" disabled={submitting}>{submitting ? "Creating…" : "Create run"}</button></div>
+      <div className="session-create-footer"><p>Creating the session does not start it. Review the configuration, then start it as a separate action.</p><button className="button button-primary" disabled={submitting}>{submitting ? "Creating…" : "Create session"}</button></div>
     </form>
   );
 }
 
 function ParticipantMap({ details }: { details: CoordinationRunDetails }) {
   const isSession = isSessionRun(details.run);
-  const doneByAgent = isSession && details.run.policy.sessionProtocol === "free_chat"
+  const doneByAgent = isSession && details.run.policy.sessionProtocol !== "countdown"
     ? latestDoneByParticipant(details)
     : new Map<string, boolean>();
   return (
@@ -594,7 +431,7 @@ function ParticipantMap({ details }: { details: CoordinationRunDetails }) {
         <div key={participant.agentId}>
           <span>{isSession ? `Turn position ${index + 1}` : roleLabels[participant.role]}</span>
           <strong>{participant.agentNameSnapshot}</strong>
-          {isSession && details.run.policy.sessionProtocol === "free_chat" && (
+          {isSession && details.run.policy.sessionProtocol !== "countdown" && (
             <small className={doneByAgent.get(participant.agentId) ? "consensus-done" : "consensus-open"}>
               {doneByAgent.get(participant.agentId) ? "done signalled" : "still contributing"}
             </small>
@@ -605,7 +442,7 @@ function ParticipantMap({ details }: { details: CoordinationRunDetails }) {
   );
 }
 
-export function RelayWorkspace({ agents }: RelayWorkspaceProps) {
+export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
   const [runs, setRuns] = useState<CoordinationRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [details, setDetails] = useState<CoordinationRunDetails | null>(null);
@@ -705,64 +542,74 @@ export function RelayWorkspace({ agents }: RelayWorkspaceProps) {
 
   const selectedRun = details?.run;
   const session = selectedRun ? isSessionRun(selectedRun) : false;
+  // A run created by the removed verified-handoff workflow opens read-only: its
+  // evidence stays reachable, but this app no longer drives that workflow.
+  const legacy = Boolean(selectedRun) && !session;
   const ungroupedEvents = useMemo(() => details?.events.filter(({ turnId }) => !turnId) ?? [], [details]);
   const readyCount = agents.filter(({ status }) => status === "ready").length;
 
   if (showCreate) return <CreationForm agents={agents} onCreated={(run) => void created(run)} onCancel={() => setShowCreate(false)} />;
 
   return (
-    <section className="relay-workspace" aria-labelledby="relay-title">
-      <header className="relay-hero">
-        <div><span className="eyebrow">Agent middleware</span><h1 id="relay-title">Relay</h1><p>Verified handoffs and shared sessions with durable evidence.</p></div>
-        <button className="button button-primary" onClick={() => setShowCreate(true)} disabled={readyCount < 2}>Create Relay run</button>
+    <section className="session-workspace" aria-labelledby="session-title">
+      <header className="session-hero">
+        <div><span className="eyebrow">Agent middleware</span><h1 id="session-title">Sessions</h1><p>Shared Agent sessions with durable evidence.</p></div>
+        <button className="button button-primary" onClick={() => setShowCreate(true)} disabled={readyCount < SESSION_LIMITS.minParticipants}>Create session</button>
       </header>
-      {readyCount < 2 && <div className="relay-notice" role="status">Create or start at least two Agents before configuring Relay.</div>}
+      {readyCount < SESSION_LIMITS.minParticipants && <div className="session-notice" role="status">Create or start at least two Agents before configuring a session.</div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}>×</button></div>}
 
-      <div className="relay-layout">
-        <aside className="run-index" aria-label="Relay runs">
-          <div className="run-index-heading"><span>Runs</span><strong>{runs.length}</strong></div>
-          {loadingRuns && <p className="relay-muted" role="status">Loading runs…</p>}
-          {!loadingRuns && runs.length === 0 && <div className="empty-run-list"><strong>No Relay runs yet</strong><p>Create a verified handoff or shared session.</p></div>}
+      <div className="session-layout">
+        <aside className="run-index" aria-label="Sessions">
+          <div className="run-index-heading"><span>Sessions</span><strong>{runs.length}</strong></div>
+          {loadingRuns && <p className="session-muted" role="status">Loading sessions…</p>}
+          {!loadingRuns && runs.length === 0 && <div className="empty-run-list"><strong>No sessions yet</strong><p>Create a session and add Agents to it.</p></div>}
           {runs.map((run) => (
             <button className={`run-index-item ${run.id === selectedRunId ? "selected" : ""}`} key={run.id} onClick={() => setSelectedRunId(run.id)}>
               <strong>{run.name}</strong><RunStatus status={run.status} />
-              <span>{run.policy.workflow === "shared_session_v1" ? "Shared session" : "Verified handoff"} · {formatDate(run.updatedAt)}</span>
+              <span>{isSessionRun(run) ? "Shared session" : "Legacy verified handoff"} · {formatDate(run.updatedAt)}</span>
             </button>
           ))}
         </aside>
 
-        <div className="relay-detail">
-          {loadingDetail && <div className="relay-detail-empty" role="status">Loading run evidence…</div>}
-          {!loadingDetail && !selectedRun && <div className="relay-detail-empty"><div>⇄</div><h2>Select a run</h2><p>Its workflow, attempts, decisions, and artifacts will appear here.</p></div>}
+        <div className="session-detail">
+          {loadingDetail && <div className="session-detail-empty" role="status">Loading session evidence…</div>}
+          {!loadingDetail && !selectedRun && <div className="session-detail-empty"><div>⇄</div><h2>Select a session</h2><p>Its participants, transcript, attempts, and evidence will appear here.</p></div>}
           {selectedRun && details && (
             <>
               <header className="run-detail-header">
                 <div><div className="run-title-row"><h2>{selectedRun.name}</h2><RunStatus status={selectedRun.status} /></div><p>{selectedRun.objective}</p></div>
                 <div className="run-actions">
-                  {selectedRun.status === "created" && <button className="button button-primary" onClick={() => void start()} disabled={action !== null}>{action === "start" ? "Starting…" : "Start run"}</button>}
-                  {activeStatuses.has(selectedRun.status) && <button className="button button-danger" onClick={() => void stop()} disabled={action !== null}>{action === "stop" ? "Stopping…" : "Stop run"}</button>}
+                  {!legacy && selectedRun.status === "created" && <button className="button button-primary" onClick={() => void start()} disabled={action !== null}>{action === "start" ? "Starting…" : "Start session"}</button>}
+                  {!legacy && activeStatuses.has(selectedRun.status) && <button className="button button-danger" onClick={() => void stop()} disabled={action !== null}>{action === "stop" ? "Stopping…" : "Stop session"}</button>}
                 </div>
               </header>
 
+              {legacy && (
+                <div className="terminal-summary legacy-summary" role="status">
+                  <strong>Legacy workflow</strong>
+                  <p>This run used the verified-handoff workflow, which this app no longer creates or drives. Its evidence is shown read-only.</p>
+                </div>
+              )}
+
               {(selectedRun.errorMessage || selectedRun.status === "failed" || selectedRun.status === "stopped") && (
                 <div className={`terminal-summary terminal-${selectedRun.status}`} role="status">
-                  <strong>{selectedRun.status === "failed" ? "Run failed" : selectedRun.status === "stopped" ? "Run stopped" : "Run update"}</strong>
+                  <strong>{selectedRun.status === "failed" ? "Session failed" : selectedRun.status === "stopped" ? "Session stopped" : "Session update"}</strong>
                   <p>{terminalMessage(selectedRun)}</p>
                   {selectedRun.errorCode && <code>{selectedRun.errorCode}</code>}
                 </div>
               )}
 
               <div className="run-facts">
-                <div><span>Workflow</span><strong>{session ? "Shared session" : "Verified handoff"}</strong></div>
+                <div><span>Workflow</span><strong>{session ? "Shared session" : "Legacy verified handoff"}</strong></div>
                 <div><span>Status phase</span><strong>{humanize(selectedRun.phase)}</strong></div>
-                <div><span>Turns</span><strong>{details.turns.length} / {selectedRun.policy.maxTurns}</strong></div>
+                <div><span>Turns</span><strong>{details.turns.length} / {selectedRun.policy.maxTurns.toLocaleString()}</strong></div>
                 <div><span>Attempt timeout</span><strong>{selectedRun.policy.perAttemptTimeoutMs / 1_000}s</strong></div>
               </div>
 
               {session && (
                 <section className="session-state" aria-label="Session state">
-                  <div><span>Protocol</span><strong>{selectedRun.policy.sessionProtocol === "free_chat" ? "Free chat" : "Countdown"}</strong></div>
+                  <div><span>Protocol</span><strong>{selectedRun.policy.sessionProtocol === "countdown" ? "Countdown" : "Free chat"}</strong></div>
                   {selectedRun.policy.sessionProtocol === "countdown" && (
                     <div className="expected-number"><span>{selectedRun.status === "completed" ? "Countdown state" : "Next expected number"}</span><strong>{selectedRun.status === "completed" ? "Complete" : selectedRun.sharedState?.nextExpectedNumber ?? "Unavailable"}</strong></div>
                   )}
@@ -773,23 +620,23 @@ export function RelayWorkspace({ agents }: RelayWorkspaceProps) {
 
               {session && (
                 <section className="evidence-section transcript-section">
-                  <div className="relay-section-heading"><div><span className="eyebrow">Shared conversation</span><h3>Transcript</h3></div><span className="evidence-count">{details.artifacts.filter(({ type }) => type === "session_message").length} messages</span></div>
+                  <div className="session-section-heading"><div><span className="eyebrow">Shared conversation</span><h3>Transcript</h3></div><span className="evidence-count">{details.artifacts.filter(({ type }) => type === "session_message").length} messages</span></div>
                   <SessionTranscript details={details} />
                 </section>
               )}
 
               <section className="evidence-section">
-                <div className="relay-section-heading"><div><span className="eyebrow">Evidence timeline</span><h3>Workflow and attempts</h3></div><span className="evidence-count">{details.events.length} events</span></div>
+                <div className="session-section-heading"><div><span className="eyebrow">Evidence timeline</span><h3>Turns and attempts</h3></div><span className="evidence-count">{details.events.length} events</span></div>
                 {ungroupedEvents.length > 0 && <ol className="event-list run-events">{ungroupedEvents.map((event) => <EventRow event={event} key={event.id} />)}</ol>}
-                {details.turns.length === 0 ? <p className="relay-muted">No turns have been scheduled.</p> : details.turns.map((turn) => <TurnEvidence turn={turn} details={details} key={turn.id} />)}
+                {details.turns.length === 0 ? <p className="session-muted">No turns have been scheduled.</p> : details.turns.map((turn) => <TurnEvidence turn={turn} details={details} key={turn.id} />)}
               </section>
 
-              {!session && (
+              {legacy && (
                 <section className="evidence-section">
-                  <div className="relay-section-heading"><div><span className="eyebrow">Committed output</span><h3>Artifacts</h3></div><span className="evidence-count">{details.artifacts.length}</span></div>
+                  <div className="session-section-heading"><div><span className="eyebrow">Committed output</span><h3>Artifacts</h3></div><span className="evidence-count">{details.artifacts.length}</span></div>
                   {details.artifacts.length === 0
-                    ? <p className="relay-muted">No artifacts have been committed yet.</p>
-                    : <div className="artifact-list">{details.artifacts.filter((artifact): artifact is Exclude<CoordinationArtifact, { type: "session_message" }> => artifact.type !== "session_message").map((artifact) => <ArtifactCard artifact={artifact} key={artifact.id} />)}</div>}
+                    ? <p className="session-muted">No artifacts have been committed yet.</p>
+                    : <div className="artifact-list">{details.artifacts.filter((artifact): artifact is Exclude<CoordinationArtifact, { type: "session_message" }> => artifact.type !== "session_message").map((artifact) => <LegacyArtifactCard artifact={artifact} key={artifact.id} />)}</div>}
                 </section>
               )}
             </>

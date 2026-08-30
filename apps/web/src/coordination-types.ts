@@ -44,13 +44,10 @@ export type CoordinationEventType =
 
 export const SESSION_LIMITS = {
   minParticipants: 2,
-  maxParticipants: 6,
-  minStartValue: 2,
-  maxStartValue: 12,
-  defaultStartValue: 10,
-  minFreeChatTurns: 3,
-  maxFreeChatTurns: 12,
-  defaultFreeChatTurns: 6,
+  maxParticipants: 10,
+  minSessionTurns: 3,
+  maxSessionTurns: 100_000,
+  defaultSessionTurns: 200,
 } as const;
 
 export interface RequiredSection {
@@ -204,23 +201,12 @@ export interface CoordinationRunDetails {
   events: CoordinationEvent[];
 }
 
-export interface CreateCoordinationRunRequest {
-  workflow?: "verified_handoff_v1";
-  name: string;
-  objective: string;
-  requiredSections: RequiredSection[];
-  agents: {
-    plannerAgentId: string;
-    criticAgentId: string;
-    finalizerAgentId: string;
-  };
-  policy?: {
-    maxRevisions?: number;
-    maxTurns?: number;
-    perAttemptTimeoutMs?: number;
-  };
-}
-
+/**
+ * The session create contract is the only one this app sends. The
+ * verified-handoff create body was removed with its UI (P10-06); the run and
+ * artifact types above are retained because runs created by that workflow are
+ * still rendered read-only.
+ */
 export interface CreateSessionRunRequest {
   workflow: "shared_session_v1";
   name: string;
@@ -234,4 +220,4 @@ export interface CreateSessionRunRequest {
   };
 }
 
-export type CreateRunRequest = CreateCoordinationRunRequest | CreateSessionRunRequest;
+export type CreateRunRequest = CreateSessionRunRequest;
