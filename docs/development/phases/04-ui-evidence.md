@@ -5,7 +5,7 @@
 
 ## Entry criteria
 
-Preflight status on `codex/phase4-preflight-cleanup`: the Phase 3 checkpoint is
+Preflight status on `pre-phase4-cleanup`: the Phase 3 checkpoint is
 stable, API strings are frozen, and the reusable lease-free fixture matrix is
 in `apps/server/src/coordination/testing/phase4-response-fixtures.ts`. The
 automated/web-browser test split is recorded in

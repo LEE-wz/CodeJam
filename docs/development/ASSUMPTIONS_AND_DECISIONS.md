@@ -1,7 +1,7 @@
 # Relay Assumptions and Resolved Questions
 
 **Last audited:** 2026-08-30  
-**Current implementation base:** `12d4612`; Phase 4 preflight branch `codex/phase4-preflight-cleanup`
+**Current implementation base:** `12d4612`; Phase 4 preflight branch `pre-phase4-cleanup`
 **Accepted contract commit:** immutable reference `ea469b2` (optional `relay/contracts-v1` tag is absent)
 **Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
 
