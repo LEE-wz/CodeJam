@@ -10,7 +10,9 @@ import {
   finalPayloadSchema,
   proposalPayloadSchema,
   reviewPayloadSchema,
+  sessionMessagePayloadSchema,
 } from "./schemas.js";
+import { SESSION_LIMITS } from "./types.js";
 
 const repeated = (length: number): string => "x".repeat(length);
 
@@ -235,5 +237,41 @@ describe("artifact payload schemas", () => {
     });
 
     expect(result.issues[0]).not.toHaveProperty("sectionKey");
+  });
+
+  it("strictly validates and trims bounded session messages", () => {
+    expect(sessionMessagePayloadSchema.parse({
+      schemaVersion: 1,
+      type: "session_message",
+      content: "  Ready to continue.  ",
+      done: true,
+    })).toEqual({
+      schemaVersion: 1,
+      type: "session_message",
+      content: "Ready to continue.",
+      done: true,
+    });
+    expect(sessionMessagePayloadSchema.safeParse({
+      schemaVersion: 1,
+      type: "session_message",
+      content: "x".repeat(SESSION_LIMITS.messageMaxChars),
+    }).success).toBe(true);
+    expect(sessionMessagePayloadSchema.safeParse({
+      schemaVersion: 1,
+      type: "session_message",
+      content: "x".repeat(SESSION_LIMITS.messageMaxChars + 1),
+    }).success).toBe(false);
+    expect(sessionMessagePayloadSchema.safeParse({
+      schemaVersion: 1,
+      type: "session_message",
+      content: "   ",
+    }).success).toBe(false);
+  });
+
+  it("rejects invalid done values and unknown session fields", () => {
+    const base = { schemaVersion: 1, type: "session_message", content: "Ready" };
+    expect(sessionMessagePayloadSchema.safeParse({ ...base, done: "yes" }).success).toBe(false);
+    expect(sessionMessagePayloadSchema.safeParse({ ...base, agentId: "forged" }).success).toBe(false);
+    expect(sessionMessagePayloadSchema.safeParse({ ...base, schemaVersion: 2 }).success).toBe(false);
   });
 });

@@ -4,7 +4,9 @@ import type {
   ProposalPayload,
   ReviewIssue,
   ReviewPayload,
+  SessionMessagePayload,
 } from "./types.js";
+import { SESSION_LIMITS } from "./types.js";
 
 export const COORDINATION_ARTIFACT_SCHEMA_VERSION = 1 as const;
 
@@ -78,3 +80,19 @@ export const finalPayloadSchema: z.ZodType<FinalPayload> = z
     content: boundedText(ARTIFACT_SCHEMA_LIMITS.finalContentChars),
   })
   .strict();
+
+export const sessionMessagePayloadSchema: z.ZodType<SessionMessagePayload> = z
+  .object({
+    schemaVersion: z.literal(COORDINATION_ARTIFACT_SCHEMA_VERSION),
+    type: z.literal("session_message"),
+    content: z
+      .string()
+      .trim()
+      .min(SESSION_LIMITS.messageMinChars)
+      .max(SESSION_LIMITS.messageMaxChars),
+    done: z.boolean().optional(),
+  })
+  .strict()
+  .transform(({ done, ...message }): SessionMessagePayload =>
+    done === undefined ? message : { ...message, done },
+  );

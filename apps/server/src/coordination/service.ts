@@ -6,6 +6,7 @@ import type {
   CoordinationRepository,
   CoordinationRuntime,
   CoordinationServiceContract,
+  CoordinationWorkflowDispatch,
   IdGenerator,
   SharedSessionWorkflow,
   VerifiedHandoffWorkflow,
@@ -110,6 +111,28 @@ interface CoordinationServiceDependencies {
   logger?: CoordinationLogger | undefined;
 }
 
+/** Durable workflow selector shared by the service loop and pure dispatch tests. */
+export class CoordinationWorkflowDispatchV1 implements CoordinationWorkflowDispatch {
+  constructor(
+    private readonly verifiedWorkflow: VerifiedHandoffWorkflow,
+    private readonly sessionWorkflow?: SharedSessionWorkflow | undefined,
+  ) {}
+
+  forRun(run: CoordinationRun): ReturnType<CoordinationWorkflowDispatch["forRun"]> {
+    if (run.policy.workflow === "shared_session_v1") {
+      if (!this.sessionWorkflow) {
+        throw new CoordinationError(
+          500,
+          "INTERNAL_ERROR",
+          "Shared session workflow is not registered",
+        );
+      }
+      return this.sessionWorkflow;
+    }
+    return this.verifiedWorkflow;
+  }
+}
+
 /**
  * Owns coordination-run lifecycle and orchestration. Durable transitions belong
  * to the repository; routing, validation, context construction, and invocation
@@ -117,8 +140,14 @@ interface CoordinationServiceDependencies {
  */
 export class CoordinationService implements CoordinationServiceContract {
   private readonly activeLoops = new Map<CoordinationRunId, Promise<void>>();
+  private readonly workflowDispatch: CoordinationWorkflowDispatch;
 
-  constructor(private readonly dependencies: CoordinationServiceDependencies) {}
+  constructor(private readonly dependencies: CoordinationServiceDependencies) {
+    this.workflowDispatch = new CoordinationWorkflowDispatchV1(
+      dependencies.workflow,
+      dependencies.sessionWorkflow,
+    );
+  }
 
   async initialize(): Promise<void> {
     await this.dependencies.repository.interruptActiveRuns();
@@ -132,46 +161,35 @@ export class CoordinationService implements CoordinationServiceContract {
     return this.dependencies.repository.getRunDetails(id);
   }
 
-  /**
-   * Selects the decision source for a run from its durable policy. An Agent
-   * cannot reach this: the workflow is fixed at create time and read from the
-   * stored run, never from model output.
-   */
-  private workflowFor(run: CoordinationRun): {
-    decideNext(view: Parameters<VerifiedHandoffWorkflow["decideNext"]>[0]): WorkflowDecision;
-  } {
-    if (run.policy.workflow === "shared_session_v1") {
-      const sessionWorkflow = this.dependencies.sessionWorkflow;
-      if (!sessionWorkflow) {
-        throw new CoordinationError(
-          500,
-          "INTERNAL_ERROR",
-          "Shared session workflow is not registered",
-        );
-      }
-      return sessionWorkflow;
-    }
-    return this.dependencies.workflow;
-  }
-
   async createRun(input: CreateRunRequest): Promise<CoordinationRun> {
     return input.workflow === "shared_session_v1"
       ? this.createSessionRun(input)
       : this.createVerifiedRun(input);
   }
 
-  /**
-   * Minimal shared-session create (P5-07). Enough to prove the contracts hold
-   * and the dispatch resolves; P6-10 owns full create validation, the policy
-   * range checks, and the create-time context probe with a session turn shape.
-   */
+  /** Validates and snapshots the complete shared-session create contract. */
   private async createSessionRun(
     input: CreateSessionRunRequest,
   ): Promise<CoordinationRun> {
     const agentIds = input.agents;
+    const raw = input as CreateSessionRunRequest & {
+      requiredSections?: unknown;
+      policy?: (NonNullable<CreateSessionRunRequest["policy"]> & { maxRevisions?: unknown }) | undefined;
+    };
+    if (
+      input.name.trim().length < 1 ||
+      input.name.trim().length > 80 ||
+      input.objective.trim().length < 1 ||
+      input.objective.trim().length > 4_000 ||
+      raw.requiredSections !== undefined ||
+      raw.policy?.maxRevisions !== undefined
+    ) {
+      throw new CoordinationError(400, "VALIDATION_FAILED", "Session create input is invalid");
+    }
     if (
       agentIds.length < SESSION_LIMITS.minParticipants ||
-      agentIds.length > SESSION_LIMITS.maxParticipants
+      agentIds.length > SESSION_LIMITS.maxParticipants ||
+      agentIds.some((id) => id.trim().length === 0)
     ) {
       throw new CoordinationError(
         400,
@@ -190,6 +208,16 @@ export class CoordinationService implements CoordinationServiceContract {
     }
 
     const protocol = input.policy?.sessionProtocol ?? "countdown";
+    if (protocol !== "countdown" && protocol !== "free_chat") {
+      throw new CoordinationError(400, "VALIDATION_FAILED", "Session protocol is invalid");
+    }
+    if (protocol === "free_chat" && input.policy?.sessionStartValue !== undefined) {
+      throw new CoordinationError(
+        400,
+        "VALIDATION_FAILED",
+        "Free-chat sessions do not accept a start value",
+      );
+    }
     const startValue =
       protocol === "countdown"
         ? (input.policy?.sessionStartValue ?? SESSION_LIMITS.defaultStartValue)
@@ -199,6 +227,26 @@ export class CoordinationService implements CoordinationServiceContract {
       (protocol === "countdown"
         ? (startValue ?? SESSION_LIMITS.defaultStartValue)
         : SESSION_LIMITS.defaultFreeChatTurns);
+
+    if (
+      (protocol === "countdown" &&
+        (!Number.isInteger(startValue) ||
+          startValue! < SESSION_LIMITS.minStartValue ||
+          startValue! > SESSION_LIMITS.maxStartValue ||
+          !Number.isInteger(maxTurns) ||
+          maxTurns < startValue! ||
+          maxTurns > SESSION_LIMITS.maxFreeChatTurns)) ||
+      (protocol === "free_chat" &&
+        (!Number.isInteger(maxTurns) ||
+          maxTurns < SESSION_LIMITS.minFreeChatTurns ||
+          maxTurns > SESSION_LIMITS.maxFreeChatTurns)) ||
+      (input.policy?.perAttemptTimeoutMs !== undefined &&
+        (!Number.isInteger(input.policy.perAttemptTimeoutMs) ||
+          input.policy.perAttemptTimeoutMs < 10_000 ||
+          input.policy.perAttemptTimeoutMs > 180_000))
+    ) {
+      throw new CoordinationError(400, "VALIDATION_FAILED", "Session policy is invalid");
+    }
 
     const policy = {
       ...DEFAULT_COORDINATION_POLICY,
@@ -240,6 +288,7 @@ export class CoordinationService implements CoordinationServiceContract {
       updatedAt: timestamp,
     };
 
+    this.assertContextFits(run, timestamp);
     return this.dependencies.repository.createRun({ run });
   }
 
@@ -312,8 +361,10 @@ export class CoordinationService implements CoordinationServiceContract {
    * impossible to build.
    */
   private assertContextFits(run: CoordinationRun, timestamp: string): void {
-    const planner = run.participants.find((participant) => participant.role === "planner");
-    if (!planner) {
+    const participant = run.policy.workflow === "shared_session_v1"
+      ? run.participants[0]
+      : run.participants.find((candidate) => candidate.role === "planner");
+    if (!participant) {
       throw new CoordinationError(
         500,
         "INTERNAL_ERROR",
@@ -328,9 +379,9 @@ export class CoordinationService implements CoordinationServiceContract {
           id: `${run.id}-context-probe`,
           runId: run.id,
           sequence: 1,
-          role: "planner",
-          agentId: planner.agentId,
-          kind: "initial_proposal",
+          role: run.policy.workflow === "shared_session_v1" ? "participant" : "planner",
+          agentId: participant.agentId,
+          kind: run.policy.workflow === "shared_session_v1" ? "session_turn" : "initial_proposal",
           status: "scheduled",
           attemptCount: 0,
           inputArtifactIds: [],
@@ -345,7 +396,7 @@ export class CoordinationService implements CoordinationServiceContract {
         throw new CoordinationError(
           400,
           "VALIDATION_FAILED",
-          "Objective and required sections do not fit the coordination context limit",
+          "Run objective does not fit the coordination context limit",
         );
       }
       throw error;
@@ -458,7 +509,7 @@ export class CoordinationService implements CoordinationServiceContract {
         return;
       }
 
-      const decision = this.workflowFor(details.run).decideNext({
+      const decision = this.workflowDispatch.forRun(details.run).decideNext({
         run: details.run,
         turns: details.turns,
         artifacts: details.artifacts,
@@ -662,7 +713,7 @@ export class CoordinationService implements CoordinationServiceContract {
           validation.errors.map((error) => error.message),
         );
         lastErrorCode = validation.code;
-        lastErrorMessage = "Agent output did not satisfy the handoff contract";
+        lastErrorMessage = "Agent output did not satisfy the coordination contract";
         if (
           !(await this.finishAttempt(
             attempt,

@@ -10,6 +10,7 @@ import {
   finalPayloadSchema,
   proposalPayloadSchema,
   reviewPayloadSchema,
+  sessionMessagePayloadSchema,
   COORDINATION_ARTIFACT_SCHEMA_VERSION,
 } from "./schemas.js";
 import type {
@@ -23,6 +24,8 @@ import type {
   ProposalPayload,
   ReviewPayload,
 } from "./types.js";
+
+type VerifiedArtifactPayload = Exclude<ArtifactPayload, { type: "session_message" }>;
 
 export type {
   ArtifactProtocol,
@@ -41,11 +44,7 @@ export const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND: Readonly<
   proposal_revision: "proposal",
   proposal_review: "review",
   finalization: "final",
-  // PLACEHOLDER (Phase 5 scope amendment). The frozen mapping is
-  // session_turn -> session_message, wired up with the protocol branch.
-  get session_turn(): ArtifactType {
-    throw new Error("session_turn expected artifact type lands in P6-05");
-  },
+  session_turn: "session_message",
 };
 
 /**
@@ -90,9 +89,9 @@ const stripOuterFence = (trimmed: string): string => {
 };
 
 const parsePayload = (
-  type: ArtifactType,
+  type: Exclude<ArtifactType, "session_message">,
   value: unknown,
-): { ok: true; payload: ArtifactPayload } | { ok: false; error: z.ZodError } => {
+): { ok: true; payload: VerifiedArtifactPayload } | { ok: false; error: z.ZodError } => {
   const result =
     type === "proposal"
       ? proposalPayloadSchema.safeParse(value)
@@ -257,6 +256,13 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
 
     // 5. Expected artifact type and schema version, then the bounded schema.
     const expectedType = EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
+    if (expectedType === "session_message") {
+      return invalidAt(
+        "type",
+        "unexpected_artifact_type",
+        "Session turns must use the shared-session artifact protocol",
+      );
+    }
     const candidate = parsed as Record<string, unknown>;
 
     if (candidate["type"] !== expectedType) {
@@ -312,10 +318,128 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
         ? { ...provenance, type: "proposal", payload }
         : payload.type === "review"
           ? { ...provenance, type: "review", payload }
-          : payload.type === "final"
-            ? { ...provenance, type: "final", payload }
-            : { ...provenance, type: "session_message", payload };
+          : { ...provenance, type: "final", payload };
 
     return { ok: true, artifact };
+  }
+}
+
+export class SharedSessionArtifactProtocol implements ArtifactProtocol {
+  constructor(private readonly dependencies: ArtifactProtocolDependencies) {}
+
+  validate(input: {
+    run: CoordinationRun;
+    turn: CoordinationTurn;
+    attempt: CoordinationAttempt;
+    rawOutput: string;
+  }): ArtifactValidationResult {
+    const { run, turn, rawOutput } = input;
+    if (rawOutput.length > run.policy.outputMaxChars) {
+      return {
+        ok: false,
+        code: "OUTPUT_TOO_LARGE",
+        errors: [{
+          path: "output",
+          code: "output_too_large",
+          message: `Agent output exceeds the ${run.policy.outputMaxChars} character limit`,
+        }],
+      };
+    }
+
+    const body = stripOuterFence(rawOutput.trim());
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return invalidAt("output", "invalid_json", "Agent output is not a single JSON object");
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return invalidAt("output", "not_an_object", "Agent output must be one JSON object");
+    }
+
+    const candidate = parsed as Record<string, unknown>;
+    if (
+      turn.kind !== "session_turn" ||
+      candidate["type"] !== EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn
+    ) {
+      return invalidAt(
+        "type",
+        "unexpected_artifact_type",
+        'This turn must produce an artifact of type "session_message"',
+      );
+    }
+    if (candidate["schemaVersion"] !== COORDINATION_ARTIFACT_SCHEMA_VERSION) {
+      return invalidAt(
+        "schemaVersion",
+        "unsupported_schema_version",
+        `Artifact schema version must be ${COORDINATION_ARTIFACT_SCHEMA_VERSION}`,
+      );
+    }
+
+    const schemaResult = sessionMessagePayloadSchema.safeParse(candidate);
+    if (!schemaResult.success) {
+      return invalid(schemaResult.error.issues.map((issue) => ({
+        path: formatPath(issue.path),
+        code: issue.code,
+        message: issue.message,
+      })));
+    }
+    const payload = schemaResult.data;
+    if (run.policy.workflow !== "shared_session_v1") {
+      return invalidAt("output", "invalid_workflow", "Session output requires a shared-session run");
+    }
+    if (run.policy.sessionProtocol === "countdown") {
+      if (payload.done !== undefined) {
+        return invalidAt(
+          "done",
+          "countdown_done_not_allowed",
+          "done is not allowed on countdown messages",
+        );
+      }
+      const expected = run.sharedState?.nextExpectedNumber;
+      const received = Number(payload.content);
+      if (
+        typeof expected !== "number" ||
+        !Number.isInteger(expected) ||
+        !Number.isInteger(received) ||
+        received !== expected
+      ) {
+        return invalidAt(
+          "content",
+          "unexpected_countdown_number",
+          `Expected the next number ${String(expected)}, received ${payload.content}`,
+        );
+      }
+    } else if (run.policy.sessionProtocol !== "free_chat") {
+      return invalidAt("output", "invalid_session_protocol", "Session protocol is invalid");
+    }
+
+    return {
+      ok: true,
+      artifact: {
+        id: this.dependencies.ids.artifactId(),
+        runId: run.id,
+        turnId: turn.id,
+        createdByRole: turn.role,
+        createdByAgentId: turn.agentId,
+        sizeChars: rawOutput.length,
+        createdAt: this.dependencies.clock.nowIso(),
+        type: "session_message",
+        payload,
+      },
+    };
+  }
+}
+
+/** Selects the parser from durable workflow state; Agent prose cannot affect it. */
+export class CoordinationArtifactProtocolDispatchV1 implements ArtifactProtocol {
+  constructor(
+    private readonly verified: ArtifactProtocol,
+    private readonly session: ArtifactProtocol,
+  ) {}
+
+  validate(input: Parameters<ArtifactProtocol["validate"]>[0]): ArtifactValidationResult {
+    return (input.run.policy.workflow === "shared_session_v1" ? this.session : this.verified)
+      .validate(input);
   }
 }

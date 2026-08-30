@@ -133,6 +133,7 @@ describe("artifact protocol: expected type by turn kind", () => {
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.proposal_revision).toBe("proposal");
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.proposal_review).toBe("review");
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.finalization).toBe("final");
+    expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn).toBe("session_message");
     expect(Object.keys(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND)).toEqual([
       "initial_proposal",
       "proposal_revision",

@@ -69,10 +69,8 @@ describe("Phase 5 placeholders: modules still load", () => {
 });
 
 describe("Phase 5 placeholders: artifact-protocol", () => {
-  it("throws for the session_turn expected artifact type, naming P6-05", () => {
-    expect(() => EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn).toThrow(
-      "session_turn expected artifact type lands in P6-05",
-    );
+  it("maps session turns to session messages after P6-05", () => {
+    expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn).toBe("session_message");
   });
 });
 
@@ -118,30 +116,30 @@ describe("Phase 5 placeholders: context-builder", () => {
    * entry point cannot quietly produce a prompt. It throws, and the message
    * names the Phase 6 task that replaces the placeholder.
    */
-  it("cannot build a session prompt, and says which task lands it", () => {
+  it("builds the four-section session prompt implemented by P6-07", () => {
     const builder = new RoleScopedContextBuilder();
 
-    expect(() =>
+    expect(
       builder.build({
         run: sessionRun(),
         turn: sessionTurn(),
         artifacts: [],
         retryValidationErrors: [],
-      }),
-    ).toThrow(/lands in P6-0\d/);
+      }).prompt,
+    ).toContain('"type":"session_message"');
   });
 
-  it("never returns a prompt for a session turn under any retry state", () => {
+  it("places session retry feedback inside the task section", () => {
     const builder = new RoleScopedContextBuilder();
 
-    expect(() =>
+    expect(
       builder.build({
         run: sessionRun(),
         turn: { ...sessionTurn(), attemptCount: 1 },
         artifacts: [],
         retryValidationErrors: ["Expected the next number 9, received 7"],
-      }),
-    ).toThrow(/lands in P6-0\d/);
+      }).prompt,
+    ).toContain("Expected the next number 9, received 7");
   });
 });
 
