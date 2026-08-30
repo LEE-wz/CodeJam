@@ -63,6 +63,28 @@ const isTerminal = (status: CoordinationRun["status"]): boolean =>
   terminalStatuses.has(status);
 
 /**
+ * How many consecutive loop-exit reconciliations one run may take without
+ * committing a turn before it is failed as abandoned (P11-03). Every known
+ * stale path is resumable, so reaching this bound means reconciliation is not
+ * making progress and the run must be failed rather than left to spin.
+ */
+const MAX_CONSECUTIVE_RECONCILIATIONS = 3;
+
+/** Default period of the background reconciliation sweep (P11-06). */
+export const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
+
+/**
+ * What one scheduled turn did to the run, as the loop needs to see it.
+ *
+ * `committed` means the turn produced a durable artifact. `settled` means a
+ * terminal repository call was made, or the run is no longer `running` and some
+ * other actor owns its next transition. `abandoned` is the P11-01 class: the
+ * turn exited without a terminal call while the run may still be `running`, so
+ * the loop must reconcile before it may continue or stop.
+ */
+type TurnExecutionOutcome = "committed" | "settled" | "abandoned";
+
+/**
  * Structured coordination log fields. Only identifiers, enum values, counts, and
  * digests are permitted: never a prompt, raw output, or lease token.
  */
@@ -110,6 +132,13 @@ interface CoordinationServiceDependencies {
   clock: Clock;
   ids: IdGenerator;
   logger?: CoordinationLogger | undefined;
+  /**
+   * Period of the background reconciliation sweep (P11-06). Omitted means
+   * `DEFAULT_RECONCILE_INTERVAL_MS`; `0` disables the timer entirely, which is
+   * how tests keep reconciliation deterministic — they call
+   * `reconcileUnownedRuns()` directly instead of waiting for a tick.
+   */
+  reconcileIntervalMs?: number | undefined;
 }
 
 /** Durable workflow selector shared by the service loop and pure dispatch tests. */
@@ -142,6 +171,7 @@ export class CoordinationWorkflowDispatchV1 implements CoordinationWorkflowDispa
 export class CoordinationService implements CoordinationServiceContract {
   private readonly activeLoops = new Map<CoordinationRunId, Promise<void>>();
   private readonly workflowDispatch: CoordinationWorkflowDispatch;
+  private sweepTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly dependencies: CoordinationServiceDependencies) {
     this.workflowDispatch = new CoordinationWorkflowDispatchV1(
@@ -152,6 +182,84 @@ export class CoordinationService implements CoordinationServiceContract {
 
   async initialize(): Promise<void> {
     await this.dependencies.repository.interruptActiveRuns();
+    // Interruption settles everything it finds, so on a healthy boot this pass
+    // is a no-op. It exists so a run left non-terminal by any path — now or
+    // later — still ends up owned rather than stranded with its Agents held.
+    await this.reconcileUnownedRuns();
+    this.startReconcileSweep();
+  }
+
+  /** Stops the background sweep. Safe to call more than once. */
+  async shutdown(): Promise<void> {
+    if (this.sweepTimer !== undefined) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = undefined;
+    }
+  }
+
+  /**
+   * Reconcile every non-terminal run that no live loop owns (P11-06).
+   *
+   * Ownership is decided by the `activeLoops` map plus durable attempt status,
+   * never by elapsed time: a run with a live loop is skipped outright, so the
+   * sweep can never settle work that is actually in flight. On a healthy system
+   * every `running` run has a loop, and this returns an empty list.
+   */
+  async reconcileUnownedRuns(): Promise<CoordinationRunId[]> {
+    const candidates = await this.dependencies.repository.listNonTerminalRuns();
+    const reconciled: CoordinationRunId[] = [];
+
+    for (const candidate of candidates) {
+      if (this.activeLoops.has(candidate.runId)) {
+        continue;
+      }
+      try {
+        if (candidate.status === "stop_requested") {
+          // The stop path owns this run, but no loop and no in-flight request
+          // is left to finish it. `finishStopped` is idempotent and is exactly
+          // the transition `stopRun` makes next, so completing it here is safe
+          // even if a stop request is still in flight.
+          await this.dependencies.repository.finishStopped(candidate.runId);
+          reconciled.push(candidate.runId);
+          continue;
+        }
+
+        const result = await this.dependencies.repository.reconcileRun({
+          runId: candidate.runId,
+          reason: candidate.hasRunningAttempt
+            ? "no orchestration loop owned this run while an attempt was running"
+            : "no orchestration loop owned this run",
+        });
+        if (result.kind !== "reconciled" && result.kind !== "noop") {
+          continue;
+        }
+        reconciled.push(candidate.runId);
+        this.log({ runId: candidate.runId, status: result.kind }, "Coordination run reconciled");
+        // The run is schedulable again but nothing is driving it. Give it a
+        // loop; the decision source re-derives the next turn from durable state.
+        this.startLoop(candidate.runId);
+      } catch {
+        // One unreconcilable run must not stop the sweep for the others.
+        this.dependencies.logger?.error(
+          { runId: candidate.runId },
+          "Coordination reconciliation failed",
+        );
+      }
+    }
+    return reconciled;
+  }
+
+  private startReconcileSweep(): void {
+    const intervalMs = this.dependencies.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0 || this.sweepTimer !== undefined) {
+      return;
+    }
+    const timer = setInterval(() => {
+      void this.reconcileUnownedRuns().catch(() => undefined);
+    }, intervalMs);
+    // The sweep must never be the reason a process refuses to exit.
+    timer.unref?.();
+    this.sweepTimer = timer;
   }
 
   async listRuns(): Promise<CoordinationRun[]> {
@@ -480,6 +588,11 @@ export class CoordinationService implements CoordinationServiceContract {
   }
 
   private startLoop(runId: CoordinationRunId): void {
+    // Ownership is single: a run never gets a second loop, whether the caller
+    // is `startRun` or the reconciliation sweep.
+    if (this.activeLoops.has(runId)) {
+      return;
+    }
     const loop = this.runLoop(runId).catch(async (error: unknown) => {
       this.dependencies.logger?.error({ runId }, "Coordination run loop failed");
       const failure =
@@ -507,6 +620,7 @@ export class CoordinationService implements CoordinationServiceContract {
   }
 
   private async runLoop(runId: CoordinationRunId): Promise<void> {
+    let reconciliations = 0;
     while (true) {
       const details = await this.dependencies.repository.getRunDetails(runId);
       if (!details || details.run.status !== "running") {
@@ -542,6 +656,8 @@ export class CoordinationService implements CoordinationServiceContract {
         nextRevision: decision.revision,
       });
       if (scheduled.kind === "not_found") {
+        // The run was deleted between the reload and the schedule. Nothing is
+        // left to settle, and a deleted run reserves nobody.
         return;
       }
       if (scheduled.kind === "stale") {
@@ -557,11 +673,71 @@ export class CoordinationService implements CoordinationServiceContract {
         status: decision.turnKind,
       }, "Coordination turn scheduled");
 
-      const committed = await this.executeTurnWithRetries(scheduled.run, scheduled.turn);
-      if (!committed) {
+      const outcome = await this.executeTurnWithRetries(scheduled.run, scheduled.turn);
+      if (outcome === "committed") {
+        // Progress resets the reconciliation budget: the bound exists to catch
+        // a run that cannot advance, not one that occasionally loses a lease.
+        reconciliations = 0;
+        continue;
+      }
+      if (outcome === "settled") {
+        return;
+      }
+
+      reconciliations += 1;
+      if (!(await this.reconcileAbandonedLoop(runId, reconciliations))) {
         return;
       }
     }
+  }
+
+  /**
+   * Decide what an abandoned turn means for the run (P11-01 classification,
+   * P11-03).
+   *
+   * Returns `true` when the loop may continue — the run is still `running` and
+   * either nothing was stranded (`noop`) or the stranded turn and attempt have
+   * been settled (`reconciled`). Returns `false` when the loop must stop:
+   * the run is gone, some other actor owns its next transition, or it has been
+   * failed as abandoned because reconciliation stopped making progress.
+   */
+  private async reconcileAbandonedLoop(
+    runId: CoordinationRunId,
+    consecutive: number,
+  ): Promise<boolean> {
+    const details = await this.dependencies.repository.getRunDetails(runId);
+    if (!details) {
+      return false;
+    }
+    if (details.run.status !== "running") {
+      // `stop_requested` belongs to the stop path; a terminal run is settled.
+      return false;
+    }
+
+    if (consecutive > MAX_CONSECUTIVE_RECONCILIATIONS) {
+      await this.dependencies.repository.failRun({
+        runId,
+        code: "RUN_ABANDONED",
+        message: "Coordination run could not be resumed after repeated reconciliation",
+      });
+      this.dependencies.logger?.error(
+        { runId, code: "RUN_ABANDONED" },
+        "Coordination run failed as abandoned",
+      );
+      return false;
+    }
+
+    const result = await this.dependencies.repository.reconcileRun({
+      runId,
+      reason: "orchestration loop exited without settling the run",
+    });
+    if (result.kind === "reconciled" || result.kind === "noop") {
+      this.log({ runId, status: result.kind }, "Coordination run reconciled");
+      return true;
+    }
+    // `terminal`, `owned`, and `not_found` all mean another actor settled the
+    // run between the reload and this call. Stopping is the safe response.
+    return false;
   }
 
   private makeTurn(run: CoordinationRun, decision: Extract<WorkflowDecision, { kind: "schedule" }>): CoordinationTurn {
@@ -592,10 +768,19 @@ export class CoordinationService implements CoordinationServiceContract {
     };
   }
 
+  /**
+   * Run one scheduled turn, retrying within `maxAttemptsPerTurn`.
+   *
+   * Every exit is classified for the loop (P11-01). The rule is simple: an exit
+   * that made a terminal repository call, or that observed the run is no longer
+   * `running`, is `settled`; an exit that lost a lease or found its turn
+   * superseded while the run may still be `running` is `abandoned` and must be
+   * reconciled before the loop continues or stops.
+   */
   private async executeTurnWithRetries(
     scheduledRun: CoordinationRun,
     scheduledTurn: CoordinationTurn,
-  ): Promise<boolean> {
+  ): Promise<TurnExecutionOutcome> {
     let validationErrors: string[] = [];
     let lastErrorCode: CoordinationErrorCode = "AGENT_EXECUTION_FAILED";
     let lastErrorMessage = "Agent execution failed";
@@ -603,11 +788,14 @@ export class CoordinationService implements CoordinationServiceContract {
     for (let number = 1; number <= scheduledRun.policy.maxAttemptsPerTurn; number += 1) {
       const details = await this.dependencies.repository.getRunDetails(scheduledRun.id);
       if (!details || details.run.status !== "running") {
-        return false;
+        // The run is gone, terminal, or stopping. Its next transition belongs
+        // to whoever made it non-running.
+        return "settled";
       }
       const currentTurn = details.turns.find((turn) => turn.id === scheduledTurn.id);
       if (!currentTurn || currentTurn.status !== "scheduled") {
-        return false;
+        // The turn was superseded while the run stayed running: resumable.
+        return "abandoned";
       }
       const envelope = this.dependencies.contextBuilder.build({
         run: details.run,
@@ -633,7 +821,9 @@ export class CoordinationService implements CoordinationServiceContract {
         truncated: envelope.truncated,
       });
       if (begun.kind !== "started") {
-        return false;
+        // `stale` covers both "run stopped" and "turn superseded"; the
+        // reconciler reloads and tells the two apart.
+        return "abandoned";
       }
       this.log({
         runId: scheduledRun.id,
@@ -666,7 +856,7 @@ export class CoordinationService implements CoordinationServiceContract {
         lastErrorMessage = runtimeStart.message;
         validationErrors = boundedRetryFeedback([lastErrorMessage]);
         if (!(await this.finishAttempt(attempt, "failed", lastErrorCode, lastErrorMessage))) {
-          return false;
+          return "abandoned";
         }
         continue;
       }
@@ -679,7 +869,7 @@ export class CoordinationService implements CoordinationServiceContract {
       if (attached === "stale") {
         await this.dependencies.runtime.cancelAttempt(attempt.id);
         void runtimeStart.handle.completion.catch(() => undefined);
-        return false;
+        return "abandoned";
       }
 
       let outcome;
@@ -711,7 +901,9 @@ export class CoordinationService implements CoordinationServiceContract {
             artifactType: validation.artifact.type,
             status: committed.kind,
           }, "Coordination commit settled");
-          return committed.kind === "committed";
+          // A commit that lost its lease leaves the turn and attempt exactly as
+          // the reconciler expects to find them.
+          return committed.kind === "committed" ? "committed" : "abandoned";
         }
         validationErrors = boundedRetryFeedback(
           validation.errors.map((error) => error.message),
@@ -727,14 +919,14 @@ export class CoordinationService implements CoordinationServiceContract {
             validationErrors,
           ))
         ) {
-          return false;
+          return "abandoned";
         }
         continue;
       }
 
       if (outcome.kind === "cancelled") {
         if (!(await this.finishAttempt(attempt, "cancelled", "STOPPED_BY_USER", outcome.message))) {
-          return false;
+          return "abandoned";
         }
         const afterCancellation = await this.dependencies.repository.getRunDetails(
           scheduledRun.id,
@@ -746,7 +938,7 @@ export class CoordinationService implements CoordinationServiceContract {
             message: "Agent execution was cancelled unexpectedly",
           });
         }
-        return false;
+        return "settled";
       }
       lastErrorCode =
         outcome.kind === "timed_out" ? "ATTEMPT_TIMED_OUT" : "AGENT_EXECUTION_FAILED";
@@ -754,7 +946,7 @@ export class CoordinationService implements CoordinationServiceContract {
       validationErrors = boundedRetryFeedback([lastErrorMessage]);
       const status = outcome.kind === "timed_out" ? "timed_out" : "failed";
       if (!(await this.finishAttempt(attempt, status, lastErrorCode, lastErrorMessage))) {
-        return false;
+        return "abandoned";
       }
     }
 
@@ -763,7 +955,7 @@ export class CoordinationService implements CoordinationServiceContract {
       code: "MAX_ATTEMPTS_EXCEEDED",
       message: "Agent could not complete its turn: " + lastErrorMessage,
     });
-    return false;
+    return "settled";
   }
 
   private async finishAttempt(

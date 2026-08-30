@@ -504,6 +504,41 @@ button {
   margin-bottom: 14px;
 }
 
+/* P11-07: Agent recovery, shown only while an Agent is in `error`. */
+.recovery-panel {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  margin-bottom: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.recovery-panel h2 {
+  font-size: 16px;
+  margin: 3px 0 8px;
+}
+
+.recovery-panel .recovery-message {
+  margin: 0 0 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.recovery-panel .recovery-hint {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.recovery-panel button {
+  flex: 0 0 auto;
+}
+
 .settings-title,
 .modal-heading {
   display: flex;

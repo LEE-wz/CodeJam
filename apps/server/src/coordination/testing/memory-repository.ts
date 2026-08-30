@@ -7,6 +7,8 @@ import type {
   CoordinationRepository,
   CreateRunRecordInput,
   FinishAttemptInput,
+  NonTerminalRunSummary,
+  ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
   StartRunCommitResult,
@@ -293,6 +295,48 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
 
   async interruptActiveRuns(): Promise<CoordinationRunId[]> {
     return [];
+  }
+
+  async listNonTerminalRuns(): Promise<NonTerminalRunSummary[]> {
+    const summaries: NonTerminalRunSummary[] = [];
+    for (const run of this.runs.values()) {
+      if (run.status !== "running" && run.status !== "stop_requested") continue;
+      summaries.push({
+        runId: run.id,
+        status: run.status,
+        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        hasRunningAttempt: this.attempts.some(
+          (attempt) => attempt.runId === run.id && attempt.status === "running",
+        ),
+      });
+    }
+    return summaries;
+  }
+
+  /**
+   * Mirrors the durable command's decision table so in-memory workflow tests
+   * exercise the same reconciliation semantics. Events are the durable
+   * repository's concern, so none are recorded here.
+   */
+  async reconcileRun(input: {
+    runId: CoordinationRunId;
+    reason: string;
+  }): Promise<ReconcileRunResult> {
+    const run = this.runs.get(input.runId);
+    if (!run) return { kind: "not_found" };
+    if (run.status === "completed" || run.status === "failed" || run.status === "stopped") {
+      return { kind: "terminal", run: structuredClone(run) };
+    }
+    if (run.status !== "running") {
+      return { kind: "owned", run: structuredClone(run) };
+    }
+    if (run.activeTurnId === undefined) {
+      return { kind: "noop", run: structuredClone(run) };
+    }
+    this.settleActiveWork(run, "failed");
+    run.version += 1;
+    run.updatedAt = this.clock.nowIso();
+    return { kind: "reconciled", run: structuredClone(run) };
   }
 
   private settleActiveWork(run: CoordinationRun, turnStatus: "failed" | "cancelled"): void {

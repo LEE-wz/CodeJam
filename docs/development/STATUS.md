@@ -1,12 +1,16 @@
 # Session Development Status
 
-**Last audit:** 2026-08-30 (Checkpoint 10 passed; Phase 10 complete)
-**Audited checkpoint:** Phase 8 implementation `e93ffb5`, merged from `phase-8`
-**Implementation branch:** `phase-10-session-v2-surface` (base `186ad89`)
+**Last audit:** 2026-08-30 (Phase 11 implemented; Checkpoint 11 gate blocked on the Compose run)
+**Audited checkpoint:** Phase 10 implementation `0cfe11b`, merged to `main`
+**Implementation branch:** `phase11-lifecycle-reconciliation` (base `0cfe11b`, uncommitted)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 10 - Session v2 Surface, Limits, and Rename
-**Current gate:** Checkpoint 10 passed; Checkpoint 11 not started
-**Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15; Phases 11-15 `not_started`
+**Current phase:** Phase 11 - Lifecycle Reconciliation and Agent Recovery
+**Current gate:** Checkpoint 11 `implemented_unverified` - every task done and every
+suite green on host Node, but the mandatory Docker Compose `npm run check` has
+**not** been run (see the blocker below). Checkpoint 11 cannot be declared passed
+until it has.
+**Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
+Phase 11 `implemented_unverified`; Phases 12-15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -28,7 +32,7 @@ they name a past checkpoint.
 | 8 | Session UI and real rehearsal | `complete` (Checkpoint 8 verified; sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `superseded` by Phase 15 (sheet: [`phases/09-release.md`](phases/09-release.md)) |
 | 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
-| 11 | Lifecycle reconciliation and Agent recovery | `not_started` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
+| 11 | Lifecycle reconciliation and Agent recovery | `implemented_unverified` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `not_started` (sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `not_started` (sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
@@ -41,19 +45,105 @@ Session v2 mini-RFC in
 
 The session extension was adopted from the team's Relay Sessions plan. Its repository-local contract authority is [`overview-sessions.md`](overview-sessions.md). Phase 9 was formerly Phase 5; its task IDs moved from P5-xx to P9-xx.
 
-**Checkpoint 10 is complete.** Phase 10 is implemented, verified through the
-disposable Docker Compose gate, and rehearsed live with ten real Agents. `P11-01`
-is next: enumerate every `CoordinationService` exit that leaves a run
-non-terminal and classify each as resume, fail, or already-owned. That
-classification is a written deliverable and the contract the reconciler
-implements. The reservation decision `P11-05` depends on is already recorded
-(reserve per running attempt).
+**Checkpoint 10 is complete.** **Phase 11 is implemented but not yet gated.**
+`P11-01` through `P11-11` are all done, with 528 tests green on host Node
+(503 server, 25 web app + session). The stale-path classification below is the
+`P11-01` deliverable and the contract the reconciler implements.
 
-Create the Phase 11 task branch from the `main` tip that carries Phase 10.
+**Resume here.** Run the disposable Docker Compose `npm run check` from
+[`README.md`](README.md) on this branch. If it passes, mark Checkpoint 11 passed
+and set `P12-01` as the next action; if it fails, record the failure here before
+changing any code.
+
+### Blocker: the Compose gate has not been run
+
+The environment that implemented Phase 11 had Node 22 but **no container
+engine** - no `docker` binary and no `/var/run/docker.sock`. Every verification
+below therefore ran through host npm, which
+[`README.md`](README.md) rule 5 explicitly forbids as evidence. Nothing here may
+be read as Checkpoint 11 evidence until the Compose command has been run on this
+branch. This is recorded, not worked around, per the runbook's instruction to
+record the exact blocker.
 
 Docker Compose is available as `docker compose`. Baseline validation used
 `LAUNCHPAD_ENV_FILE=/dev/null` so the disposable verification service did not
 load repository-local secrets or runtime state.
+
+## Phase 11 stale-path classification (P11-01 deliverable)
+
+Every exit from `runLoop` or `executeTurnWithRetries` that did not make a
+terminal repository call, with the response the reconciler owes it. Before Phase
+11 all six `abandoned` rows were a bare `return false`: the loop returned and the
+run stayed `running` with its `activeTurnId` set and its participants reserved,
+with nothing left to drive it. That is the reported "stuck Agents" defect.
+
+| # | Exit | Condition | Class | Response |
+|---|---|---|---|---|
+| 1 | `runLoop` reload | run missing, or status not `running` | already owned | Return. Whoever made it non-running owns the next transition. |
+| 2 | `runLoop` `scheduleTurn` | `not_found` | already owned | Return. A deleted run has nothing to settle and reserves nobody. |
+| 3 | `runLoop` `scheduleTurn` | `stale` | resume | Already correct: `continue` re-derives from the reloaded run. |
+| 4 | `executeTurnWithRetries` reload | run missing, or status not `running` | already owned | `settled`. Return. |
+| 5 | `executeTurnWithRetries` reload | turn no longer `scheduled` | **resume** | `abandoned`. Reconcile, then continue. |
+| 6 | `beginAttempt` | `stale` or `not_found` | **resume** | `abandoned`. `stale` covers both "run stopped" and "turn superseded"; the reconciler reloads and tells them apart. |
+| 7 | `attachAgentRun` | `stale` | **resume** | `abandoned`. The runtime is cancelled first, then the turn is reconciled. |
+| 8 | `commitAcceptedArtifact` | anything but `committed` | **resume** | `abandoned`. The commit lost its lease; turn and attempt are left exactly as the reconciler expects. |
+| 9 | `finishAttempt` | `stale`, on any of the four retry paths | **resume** | `abandoned`. The attempt is left running with no owner. |
+| 10 | cancelled outcome | run still `running` | already correct | `failRun` is already called; `settled`. |
+| 11 | attempt ceiling reached | - | already correct | `failRun` with `MAX_ATTEMPTS_EXCEEDED`; `settled`. |
+
+**Every known stale path is resumable.** `RUN_ABANDONED` is therefore reserved
+for the residue the phase sheet anticipates: a run that has been reconciled
+`MAX_CONSECUTIVE_RECONCILIATIONS` (3) times without committing a turn is failed
+rather than left to spin. A committed turn resets that budget.
+
+## Phase 11 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P11-01 | `complete` | The classification table above. Six exits reclassified from "silent return" to `abandoned`; five to `settled`/already-correct. |
+| P11-02 | `complete` | `RUN_ABANDONED` in `CoordinationErrorCode`; `run.reconciled` in the frozen event set with a `runReconciled` factory. Both carry only allowlisted detail keys (`code`, `reason`), so `ALLOWED_EVENT_DETAIL_KEYS` is unchanged. Mini-RFC recorded in `ASSUMPTIONS_AND_DECISIONS.md`. `events.test.ts` asserts the widened frozen set and message; `redaction.test.ts` plants a lease token in the reason and proves it is replaced. |
+| P11-03 | `complete` | `executeTurnWithRetries` returns a three-way `TurnExecutionOutcome` instead of a boolean, so every exit is classified at the call site. `reconcileAbandonedLoop` reloads, returns `false` when the run is gone or owned, resumes on `reconciled`/`noop`, and fails with `RUN_ABANDONED` once the budget is spent. |
+| P11-04 | `complete` | `listNonTerminalRuns` reports `running`/`stop_requested` runs with their `activeTurnId` and whether any attempt is durably `running`. `reconcileRun` settles a stranded turn and attempt in one `JsonStore.mutate()` through the existing `settleActiveWork`, appends `run.reconciled`, bumps `version`, and leaves the run `running`. Idempotent (`noop`, no event, no version bump), refuses terminal runs, and keeps the per-run event sequence gapless - all asserted. |
+| P11-05 | `complete` | Reservation narrowed to "holds a running attempt in a non-terminal run" across `collectReservedAgentIds`, `findReservingRunId`, and `assertDatabaseAgentNotReserved`. `startRun` admission stays run-level through a separate `collectEnrolledAgentIds`, so the existing verified-handoff reservation tests pass unchanged. Advisory `getReservingRunSummary` added for display. Two-level model recorded in `ASSUMPTIONS_AND_DECISIONS.md`. |
+| P11-06 | `complete` | `initialize` reconciles after `interruptActiveRuns` (a no-op on a healthy boot) and starts a bounded sweep; `shutdown` clears it. `reconcileUnownedRuns` skips any run with a live loop, finishes `stop_requested` runs, reconciles the rest, and gives a resumable run a loop again. Interval is `COORDINATION_RECONCILE_INTERVAL_MS` (default 60,000; `0` disables). Every test injects `0` so no test depends on a wall-clock tick. |
+| P11-07 | `complete` | An Agent in `error` shows `lastError` and a `Reset to ready` control on its detail, calling the existing `POST /api/agents/:id/start`. One sentence states that resetting returns it to ready and does **not** retry the failed run. No new server route. |
+| P11-08 | `complete` | `Agent is reserved by the session "<name>"` replaces `Agent is reserved by coordination` on every refusal path, sourced from the advisory read. The error banner offers `View session` on `AGENT_RESERVED`, which opens the session surface. No lease, prompt, or run internals are exposed beyond the name already in the run index. |
+| P11-09 | `complete` | Six regression tests in `coordination/lifecycle-reconciliation.test.ts`, one per stale path: turn superseded, `beginAttempt` stale, `attachAgentRun` race, commit that loses its lease, `finishAttempt` stale, `scheduleTurn` not-found. **All six were run against a simulated pre-fix service and all six failed**, then passed unchanged on the fixed code. Deferred promises and injected repository results only - no sleeps. |
+| P11-10 | `complete` | Five invariant tests over the durable repository and a real temporary `JsonStore`. `assertReservationInvariant` recomputes "no Agent is reserved unless some non-terminal run has a running attempt for it" from raw durable state and compares it with `listReservedAgentIds`, at every settlement point of the interleaving matrix: stop during an attempt (with a late result arriving afterwards), outright attempt failure, restart during an attempt, two runs contending for one Agent, and a sweep while a live loop owns the run. The restart test proves `initialize` settles a crashed run and frees its Agents, and that a second `initialize` changes nothing byte-for-byte. |
+| P11-11 | `complete` | Six tests in `apps/web/src/App.recovery.test.tsx`: an errored Agent shows its message and resets through `startAgent`; a healthy Agent offers no control; the hint does not claim a retry; a null `lastError` falls back to a plain sentence; the reserved banner names the session, leaks no lease, and links to it; an unrelated failure offers no link. |
+
+### Phase 11 verification evidence
+
+**These ran on host Node 22, not through Docker Compose.** Per `README.md` rule 5
+they are a development signal only and are **not** Checkpoint 11 evidence. See
+the blocker above.
+
+- `npm run typecheck` (both workspaces): clean.
+- `npm run test -w @launchpad/server`: **28 files / 503 tests passed**, up from
+  485 at Checkpoint 10 (+18).
+- `npm run test -w @launchpad/web`: **3 files / 37 tests passed**, up from 31
+  (+6).
+- `npm run build`: both production builds succeeded.
+- Race and reconciliation suites (`lifecycle-reconciliation.test.ts` +
+  `repository.test.ts`, 72 tests) run **ten consecutive times: ten passes, zero
+  failures**, as the phase sheet requires before they may be called stable.
+- **Pre-fix falsification:** the service was temporarily patched so every
+  `abandoned` exit ended the loop and the sweep returned nothing - the pre-Phase-11
+  behaviour. All six `P11-09` tests failed under that patch and pass on the
+  restored code, so each one genuinely discriminates the fix.
+- No test was deleted to make a change pass. Three tests were **updated** because
+  the P11-05 decision deliberately changed the contract they asserted; each is
+  justified in `ASSUMPTIONS_AND_DECISIONS.md` and now proves the new rule.
+
+### Phase 11 checks still outstanding
+
+Both are required by the phase sheet and neither could run here:
+
+1. The disposable Docker Compose `npm run check` (no container engine available).
+2. The manual Compose-deployment check: start a session, kill the server
+   mid-attempt, restart it, and confirm **from the UI alone** that the run is
+   settled and its Agents are usable. `P11-10`'s restart test covers the same
+   transition at the service level, but not the UI evidence the sheet asks for.
 
 ## Phase 10 task ledger
 

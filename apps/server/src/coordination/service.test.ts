@@ -261,6 +261,42 @@ class MemoryRepository implements CoordinationRepository {
   async interruptActiveRuns(): Promise<string[]> {
     return [];
   }
+
+  async listNonTerminalRuns() {
+    return [...this.runs.values()]
+      .filter((run) => run.status === "running" || run.status === "stop_requested")
+      .map((run) => ({
+        runId: run.id,
+        status: run.status as "running" | "stop_requested",
+        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        hasRunningAttempt: this.attempts.some(
+          (attempt) => attempt.runId === run.id && attempt.status === "running",
+        ),
+      }));
+  }
+
+  async reconcileRun(input: { runId: string; reason: string }) {
+    const run = this.runs.get(input.runId);
+    if (!run) return { kind: "not_found" as const };
+    if (run.status === "completed" || run.status === "failed" || run.status === "stopped") {
+      return { kind: "terminal" as const, run: structuredClone(run) };
+    }
+    if (run.status !== "running") {
+      return { kind: "owned" as const, run: structuredClone(run) };
+    }
+    if (run.activeTurnId === undefined) {
+      return { kind: "noop" as const, run: structuredClone(run) };
+    }
+    const turn = this.turns.find((candidate) => candidate.id === run.activeTurnId);
+    if (turn) {
+      const attempt = this.attempts.find((candidate) => candidate.id === turn.activeAttemptId);
+      if (attempt && attempt.status === "running") attempt.status = "cancelled";
+      turn.status = "failed";
+      delete turn.activeAttemptId;
+    }
+    delete run.activeTurnId;
+    return { kind: "reconciled" as const, run: structuredClone(run) };
+  }
 }
 
 class ScriptedRuntime implements CoordinationRuntime {

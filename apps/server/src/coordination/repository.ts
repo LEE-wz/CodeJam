@@ -9,9 +9,12 @@ import type {
   CommitAcceptedArtifactInput,
   CommitAcceptedArtifactResult,
   CoordinationRepository,
+  CoordinationReservationAdvisory,
   CreateRunRecordInput,
   FinishAttemptInput,
   IdGenerator,
+  NonTerminalRunSummary,
+  ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
   StartRunCommitResult,
@@ -36,8 +39,11 @@ export type {
   CommitAcceptedArtifactInput,
   CommitAcceptedArtifactResult,
   CoordinationRepository,
+  CoordinationReservationAdvisory,
   CreateRunRecordInput,
   FinishAttemptInput,
+  NonTerminalRunSummary,
+  ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
   StartRunCommitResult,
@@ -118,9 +124,12 @@ export class DurableCoordinationRepository implements CoordinationRepository {
   }
 
   /**
-   * Agent IDs reserved by a non-terminal coordination run (Section 10.4).
-   * `AgentService` uses this to refuse an ordinary Playground turn on an Agent
-   * that Relay is currently driving. There is no separate reservation table.
+   * Agent IDs reserved by a non-terminal coordination run (Section 10.4, as
+   * narrowed by the Session v2 decision recorded for P11-05). An Agent is
+   * reserved while it has a **running attempt**, not merely while it appears in
+   * a running run, so the idle participants of a live session stay usable in the
+   * Playground. There is still no separate reservation table: the fact is
+   * derived from attempt rows.
    */
   async listReservedAgentIds(): Promise<AgentId[]> {
     return [...collectReservedAgentIds(this.store.snapshot())];
@@ -131,13 +140,19 @@ export class DurableCoordinationRepository implements CoordinationRepository {
   }
 
   async getReservingRunId(agentId: AgentId): Promise<CoordinationRunId | undefined> {
-    return this.store
-      .snapshot()
-      .coordinationRuns.find(
-        (run) =>
-          (run.status === "running" || run.status === "stop_requested") &&
-          run.participants.some((participant) => participant.agentId === agentId),
-      )?.id;
+    return findReservingRunId(this.store.snapshot(), agentId);
+  }
+
+  /**
+   * Display-only: which non-terminal run an Agent belongs to, whether or not it
+   * currently holds a running attempt. `AgentService` uses it to name the
+   * session in a refusal instead of saying "reserved by coordination". It
+   * returns the run's id and name snapshot and nothing else.
+   */
+  async getReservingRunSummary(
+    agentId: AgentId,
+  ): Promise<CoordinationReservationAdvisory | undefined> {
+    return findEnrollingRunSummary(this.store.snapshot(), agentId);
   }
 
   // ------------------------------------------------------------- commands
@@ -210,11 +225,13 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         }
       }
 
-      // Reservations are derived, not stored: an Agent is reserved while it
-      // appears in another non-terminal coordination run, or while it has an
-      // ordinary Agent Run in flight.
-      const reserved = collectReservedAgentIds(database, run.id);
-      const reservedParticipant = agentIds.find((agentId) => reserved.has(agentId));
+      // Admission is deliberately stricter than the attempt-level reservation
+      // rule above (P11-05 decision record). Reserving per running attempt is
+      // what keeps an idle participant usable in the Playground; it is not a
+      // licence for two coordination state machines to drive one Agent, so
+      // enrolment in another live run still refuses the start.
+      const enrolled = collectEnrolledAgentIds(database, run.id);
+      const reservedParticipant = agentIds.find((agentId) => enrolled.has(agentId));
       if (reservedParticipant !== undefined) {
         return {
           kind: "conflict",
@@ -676,6 +693,90 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     });
   }
 
+  /**
+   * Every run that still needs an owner, with the two facts a reconciler needs:
+   * the turn the run points at, and whether any of its attempts is still
+   * durably `running` (P11-04). `created` runs are excluded: nothing is
+   * orchestrating them, so nothing can have stranded them.
+   */
+  async listNonTerminalRuns(): Promise<NonTerminalRunSummary[]> {
+    const database = this.store.snapshot();
+    const runIdsWithRunningAttempt = new Set(
+      database.coordinationAttempts
+        .filter((attempt) => attempt.status === "running")
+        .map((attempt) => attempt.runId),
+    );
+    return database.coordinationRuns
+      .filter((run) => ACTIVE_RUN_STATUSES.has(run.status))
+      .map((run) => ({
+        runId: run.id,
+        status: run.status as "running" | "stop_requested",
+        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        hasRunningAttempt: runIdsWithRunningAttempt.has(run.id),
+      }));
+  }
+
+  /**
+   * Settle a stranded turn and attempt so an abandoned run stays schedulable
+   * (P11-04).
+   *
+   * Everything happens in one `JsonStore.mutate()`, exactly like every other
+   * command: there is no read-check-write across store calls. The settlement
+   * itself reuses `settleActiveWork`, so a reconciled turn and attempt close the
+   * same way they do when a run goes terminal — the difference is only that the
+   * run itself stays `running`.
+   *
+   * The command decides nothing about ownership. A caller must already know the
+   * run has no live loop; `CoordinationService` decides that from its
+   * `activeLoops` map. Statuses other than `running` are refused here:
+   * `completed`/`failed`/`stopped` are immutable, `stop_requested` belongs to
+   * the stop path, and `created` has no orchestration to reconcile.
+   *
+   * Idempotent: a run with no `activeTurnId` returns `noop` without appending an
+   * event or bumping the version, so running this twice changes nothing.
+   */
+  async reconcileRun(input: {
+    runId: CoordinationRunId;
+    reason: string;
+  }): Promise<ReconcileRunResult> {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
+      if (!run) {
+        return { kind: "not_found" } as const;
+      }
+      if (TERMINAL_RUN_STATUSES.has(run.status)) {
+        return { kind: "terminal", run: structuredClone(run) } as const;
+      }
+      if (run.status !== "running") {
+        return { kind: "owned", run: structuredClone(run) } as const;
+      }
+      if (run.activeTurnId === undefined) {
+        return { kind: "noop", run: structuredClone(run) } as const;
+      }
+
+      const turnId = run.activeTurnId;
+      this.settleActiveWork(
+        database,
+        run,
+        "failed",
+        "RUN_ABANDONED",
+        "orchestration exited without settling this turn",
+      );
+      run.version += 1;
+      run.updatedAt = this.clock.nowIso();
+      this.append(
+        database,
+        this.events.runReconciled({
+          runId: run.id,
+          turnId,
+          code: "RUN_ABANDONED",
+          reason: input.reason,
+        }),
+      );
+      return { kind: "reconciled", run: structuredClone(run) } as const;
+    });
+  }
+
   // -------------------------------------------------------------- helpers
 
   /** Cancel the active attempt and close the active turn of a run going terminal. */
@@ -806,20 +907,90 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
 // ------------------------------------------------------------ pure helpers
 
-const collectReservedAgentIds = (
+/**
+ * Agents that are genuinely mid-attempt: they hold a `running` attempt inside a
+ * non-terminal run (P11-05). This is the rule that refuses a Playground turn or
+ * an Agent mutation. It is deliberately narrower than enrolment, so an idle
+ * participant of a live session is not treated as busy.
+ *
+ * Exported so `AgentService` enforces the identical rule rather than its own
+ * copy of a similar one.
+ */
+export const collectReservedAgentIds = (
   database: Database,
   excludeRunId?: CoordinationRunId,
 ): Set<AgentId> => {
+  const activeRunIds = new Set<CoordinationRunId>();
+  for (const run of database.coordinationRuns) {
+    if (run.id !== excludeRunId && ACTIVE_RUN_STATUSES.has(run.status)) {
+      activeRunIds.add(run.id);
+    }
+  }
+
   const reserved = new Set<AgentId>();
+  for (const attempt of database.coordinationAttempts) {
+    if (attempt.status === "running" && activeRunIds.has(attempt.runId)) {
+      reserved.add(attempt.agentId);
+    }
+  }
+  return reserved;
+};
+
+/**
+ * Agents enrolled as participants of a non-terminal run, whether or not they
+ * are mid-attempt. This is the admission rule `startRun` uses: it keeps two
+ * coordination state machines from claiming one Agent, which reserving per
+ * running attempt alone would not prevent.
+ */
+export const collectEnrolledAgentIds = (
+  database: Database,
+  excludeRunId?: CoordinationRunId,
+): Set<AgentId> => {
+  const enrolled = new Set<AgentId>();
   for (const run of database.coordinationRuns) {
     if (run.id === excludeRunId || !ACTIVE_RUN_STATUSES.has(run.status)) {
       continue;
     }
     for (const participant of run.participants) {
-      reserved.add(participant.agentId);
+      enrolled.add(participant.agentId);
     }
   }
-  return reserved;
+  return enrolled;
+};
+
+/** The non-terminal run in which this Agent currently holds a running attempt. */
+export const findReservingRunId = (
+  database: Database,
+  agentId: AgentId,
+): CoordinationRunId | undefined => {
+  const activeRunIds = new Set(
+    database.coordinationRuns
+      .filter((run) => ACTIVE_RUN_STATUSES.has(run.status))
+      .map((run) => run.id),
+  );
+  return database.coordinationAttempts.find(
+    (attempt) =>
+      attempt.agentId === agentId &&
+      attempt.status === "running" &&
+      activeRunIds.has(attempt.runId),
+  )?.runId;
+};
+
+/**
+ * Display-only: the non-terminal run this Agent is enrolled in, with its name
+ * snapshot, so a refusal can say which session is responsible. Never returns a
+ * lease, prompt, turn, or attempt.
+ */
+export const findEnrollingRunSummary = (
+  database: Database,
+  agentId: AgentId,
+): CoordinationReservationAdvisory | undefined => {
+  const run = database.coordinationRuns.find(
+    (candidate) =>
+      ACTIVE_RUN_STATUSES.has(candidate.status) &&
+      candidate.participants.some((participant) => participant.agentId === agentId),
+  );
+  return run ? { runId: run.id, name: run.name } : undefined;
 };
 
 /**

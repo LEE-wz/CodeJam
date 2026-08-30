@@ -36,6 +36,17 @@ function Spinner() {
   return <span className="spinner" aria-label="Loading" />;
 }
 
+/** An error plus the machine-readable code the banner needs to offer an action. */
+interface WorkspaceError {
+  message: string;
+  code?: string | undefined;
+}
+
+const describeError = (reason: unknown): WorkspaceError =>
+  reason instanceof ApiError
+    ? { message: reason.message, code: reason.code }
+    : { message: reason instanceof Error ? reason.message : String(reason) };
+
 export default function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -47,7 +58,7 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<WorkspaceError | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
   const [workspaceView, setWorkspaceView] = useState<"agents" | "session">("agents");
@@ -92,7 +103,7 @@ export default function App() {
         setAuthRequired(required);
         if (!required) await bootstrap();
       })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      .catch((reason) => setError(describeError(reason)));
     return () => {
       mountedRef.current = false;
     };
@@ -112,12 +123,12 @@ export default function App() {
         setActiveRun(latest);
         if (latest && ["queued", "running"].includes(latest.status)) {
           void pollRun(latest.id, selectedId).catch((reason) =>
-            setError(reason instanceof Error ? reason.message : String(reason)),
+            setError(describeError(reason)),
           );
         }
       })
       .catch((reason) =>
-        setError(reason instanceof Error ? reason.message : String(reason)),
+        setError(describeError(reason)),
       );
   }, [refreshMessages, selectedId]);
 
@@ -147,7 +158,7 @@ export default function App() {
       setShowCreate(false);
       setForm(emptyForm);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(describeError(reason));
     } finally {
       setBusy(false);
     }
@@ -163,7 +174,7 @@ export default function App() {
       await refreshAgents();
       setShowSettings(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(describeError(reason));
     } finally {
       setBusy(false);
     }
@@ -181,7 +192,27 @@ export default function App() {
       }
       await refreshAgents();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(describeError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * P11-07: an Agent left in `error` after a failed Codex run blocks every
+   * future session, because starting a run demands `ready` from every
+   * participant. `POST /api/agents/:id/start` is the existing transition back
+   * to `ready`; no new route is needed.
+   */
+  const recoverAgent = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.startAgent(selected.id);
+      await refreshAgents();
+    } catch (reason) {
+      setError(describeError(reason));
     } finally {
       setBusy(false);
     }
@@ -198,7 +229,7 @@ export default function App() {
       await api.deleteAgent(selected.id);
       await refreshAgents();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(describeError(reason));
     } finally {
       setBusy(false);
     }
@@ -242,7 +273,7 @@ export default function App() {
       );
       await pollRun(result.run.id, selected.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(describeError(reason));
       setActiveRun(null);
       await refreshAgents();
     }
@@ -259,9 +290,9 @@ export default function App() {
       setAuthInput("");
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) {
-        setError("The access token is not valid.");
+        setError({ message: "The access token is not valid." });
       } else {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(describeError(reason));
       }
     } finally {
       setBusy(false);
@@ -275,7 +306,7 @@ export default function App() {
           <div className="brand-mark">A</div>
           <span className="eyebrow">Agent Launchpad</span>
           <h1>Connecting to the control plane</h1>
-          {error ? <div className="error-banner" role="alert">{error}</div> : <Spinner />}
+          {error ? <div className="error-banner" role="alert">{error.message}</div> : <Spinner />}
         </section>
       </main>
     );
@@ -289,7 +320,7 @@ export default function App() {
           <span className="eyebrow">Agent Launchpad</span>
           <h1>Enter the access token</h1>
           <p>This shared demo token is configured by the platform operator.</p>
-          {error && <div className="error-banner" role="alert">{error}</div>}
+          {error && <div className="error-banner" role="alert">{error.message}</div>}
           <label>
             Access token
             <input
@@ -402,7 +433,18 @@ export default function App() {
 
         {error && (
           <div className="error-banner" role="alert">
-            <span>{error}</span>
+            <span>{error.message}</span>
+            {error.code === "AGENT_RESERVED" && (
+              <button
+                className="button button-ghost"
+                onClick={() => {
+                  setWorkspaceView("session");
+                  setError(null);
+                }}
+              >
+                View session
+              </button>
+            )}
             <button onClick={() => setError(null)}>×</button>
           </div>
         )}
@@ -443,6 +485,29 @@ export default function App() {
                 </button>
               </div>
             </header>
+
+            {selected.status === "error" && (
+              <div className="recovery-panel" role="status">
+                <div>
+                  <span className="eyebrow">Agent needs attention</span>
+                  <h2>This Agent stopped with an error</h2>
+                  <p className="recovery-message">
+                    {selected.lastError ?? "The last run failed without a message."}
+                  </p>
+                  <p className="recovery-hint">
+                    Resetting returns the Agent to ready so it can take part in runs and
+                    sessions again. It does not retry the failed run.
+                  </p>
+                </div>
+                <button
+                  className="button button-primary"
+                  onClick={recoverAgent}
+                  disabled={busy}
+                >
+                  {busy ? <Spinner /> : "Reset to ready"}
+                </button>
+              </div>
+            )}
 
             {showSettings && (
               <form className="settings-panel" onSubmit={saveAgent}>
