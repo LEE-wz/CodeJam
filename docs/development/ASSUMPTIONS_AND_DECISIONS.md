@@ -1,6 +1,6 @@
 # Relay Assumptions and Resolved Questions
 
-**Last audited:** 2026-08-29  
+**Last audited:** 2026-08-30  
 **Baseline commit:** `655fba5`
 **Accepted contract commit:** `ea469b2` (`relay/contracts-v1`)
 **Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
@@ -80,12 +80,14 @@ misleading timestamps, artifact type filtering, and exclusion of uncommitted,
 mismatched, and cross-run records. The full Docker Compose `npm run check` must
 pass.
 
-### Phase 1 implementation decisions awaiting confirmation
+### Phase 1 implementation decisions (confirmed)
 
-**Status:** Recorded on 2026-08-29 for P1-06 to P1-17. Each sits where the frozen
-contract is silent. None changes a frozen type, route, or persisted shape, so
-none required a mini-RFC; all are cheap to change before Phase 2 persists
-artifacts, and expensive afterwards. Confirm or correct them before Checkpoint 2.
+**Status:** Recorded on 2026-08-29 for P1-06 to P1-17. **Confirmed unchanged by
+the user on 2026-08-30 at the Phase 2 sign-off, before P2-01.** Each sits where
+the frozen contract is silent. None changes a frozen type, route, or persisted
+shape, so none required a mini-RFC. `sizeChars` was the one that becomes
+expensive to change once Phase 2 persists artifacts; it is settled below and in
+the Phase 2 handoff decision table.
 
 | Decision | Choice made | Why | Reversal cost |
 |---|---|---|---|
@@ -108,6 +110,23 @@ here:
 - `CoordinationTurn.lastValidationErrors` records validator messages only. A
   runtime timeout or failure surfaces through the attempt's `errorCode` and
   `errorMessage` and through the failed run's message, not through that field.
+
+### Phase 2 handoff decisions
+
+**Status:** Decided by the user on 2026-08-30, before P2-01, in answer to the
+four open items in [`PHASE_2_HANDOFF.md`](./PHASE_2_HANDOFF.md) sections 1 and
+2.1. None of the four requires a mini-RFC: no frozen type, route, or field is
+added, removed, or changed by any of them.
+
+| Handoff item | Decision | Consequence for Phase 2 |
+|---|---|---|
+| §1.1 `CoordinationArtifact.sizeChars` | **Length of the raw Agent output measured against `outputMaxChars`** — Phase 1 behaviour is confirmed, not changed | `DatabaseV2` stores the raw-output length. Only the parsed payload is persisted, so this remains the sole surviving record of the model response size. No Phase 1 code or test changes. |
+| §1.2 `truncated` context flag | **Event detail only.** P2-05 emits `truncated` in the `attempt.started` event details | Satisfies overview Section 11.6 ("attempt metadata **or** event details") with no contract change and no persisted attempt field. `CoordinationAttempt` gains no `truncated` field, so `DatabaseV2` is unaffected. Phase 4's timeline is the consumer. |
+| §1.3 `attempt.outputDigest` | **Populate it.** The digest of the raw Agent output is written when an attempt settles with output, in P2-09/P2-11 | The frozen field keeps a producer and `DatabaseV2` gets no permanently-null column. It mirrors the existing `promptDigest` and gives attempt→output evidence without persisting raw output. |
+| §2.1 `attempt.stale_ignored` | **Event only.** The repository appends an `attempt.stale_ignored` event referencing the refused attempt; the attempt row keeps the status it settled as | The frozen `FinishAttemptInput.status` union is not extended, so a caller that lost its lease never writes to an attempt it does not hold. Accepted cost: the `stale_ignored` member of `CoordinationAttemptStatus` stays unwritten, and Phase 4 reads the evidence from the event stream. |
+
+Handoff §2.2 (`PromptEnvelope.includedArtifactIds`) is **still open**. It does not
+affect persisted shape and is decided at P2-09, as the handoff allows.
 
 ### Extra events endpoint
 

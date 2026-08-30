@@ -1,28 +1,39 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-29 17:52 UTC
-**Audited commit:** `91cdbd1` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
-**Implementation branch:** `phase1-checkpoint-1-signoff` (Phase 1 work on task branches chained from `phase1-p1-06-artifact-parsing-order`, base `356c1e5`)
-**Current phase:** Phase 1 — In-Memory Walking Skeleton (complete)
-**Current gate:** Checkpoint 1 verified
-**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 not started and not authorised
+**Last audit:** 2026-08-30 02:10 UTC
+**Audited commit:** `d81635a` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
+**Implementation branch:** `phase2-p2-01-database-v2` (base `d81635a` on `main`)
+**Current phase:** Phase 2 — Durable Backend and Evidence Ledger (in progress)
+**Current gate:** Checkpoint 2 (not reached)
+**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 authorised and started
 
 ## Resume here
 
-Phase 1 is closed. Three items gate the start of Phase 2, and none of them is
-implementation work:
+Phase 2 is authorised and under way. All three Phase 1 exit gates are closed:
 
-1. Confirm or correct the nine Phase 1 implementation decisions recorded in
-   [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md). `sizeChars`
-   is the one that becomes expensive once P2-01 persists artifacts.
-2. Fast-forward the integration branch to the verified Phase 1 tip so P2-01 can
-   satisfy its entry criterion of branching from the completed checkpoint.
-3. Give explicit sign-off to begin Phase 2. P2-01 is the next task ID.
+1. **Nine Phase 1 implementation decisions confirmed** unchanged by the user on
+   2026-08-30, including `sizeChars`.
+2. **Integration branch already at the Phase 1 tip.** `main` (`d81635a`) is
+   content-identical to the verified tip `f1be1b7`; `git diff f1be1b7 d81635a`
+   is empty. No fast-forward was needed.
+3. **Phase 2 signed off** by the user on 2026-08-30.
 
-[`PHASE_2_HANDOFF.md`](./PHASE_2_HANDOFF.md) states each decision, its options,
-and its deadline for whoever implements Phase 2. Carry the four deferred items in
-**Phase 1 handoff to Phase 2** below into the Phase 2 task list before starting
-P2-01.
+The four open handoff decisions (§1.1, §1.2, §1.3, §2.1) were also answered
+before P2-01 and are recorded in
+[`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) under
+**Phase 2 handoff decisions**. None required a mini-RFC.
+
+Next executable actions:
+
+1. **P2-05** — pure event factories for all 17 frozen event types, including the
+   `truncated` detail on `attempt.started` and the `attempt.stale_ignored`
+   event decided above.
+2. **P2-06/P2-07** — allowlist redactor and its leakage tests.
+3. **P2-08/P2-09** — the durable repository's read model and atomic
+   create/start/schedule/begin commands.
+
+Still open, by design: handoff §2.2 (`PromptEnvelope.includedArtifactIds`) is
+decided at P2-09; it does not affect persisted shape.
 
 Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
 
@@ -86,6 +97,14 @@ will depend on it.
 All Phase 1 evidence is the single Docker Compose `npm run check` recorded below;
 no task was promoted on a host-only or focused run.
 
+## Phase 2 task ledger
+
+| Tasks | Status | Evidence |
+|---|---|---|
+| P2-01–P2-04 | `complete` | Overview Section 17 mini-sprint 3A implemented as one unit, because `DatabaseV2` cannot compile without the store that loads it. `DatabaseV1`/`DatabaseV2`/`AnyDatabase` and optional `AgentRunCorrelation` fields added; `parseDatabaseDocument` parses v1 explicitly and migrates additively by spread, so unknown top-level and per-record fields survive; new databases are created at v2; future/malformed/unparseable documents are rejected before any write. 11 store tests. Compose `npm run check` passed: 14 files / 247 tests. |
+| P2-05–P2-22 | `not_started` | — |
+| P2-19 | `complete` (verify-only) | Confirmed as the handoff predicted: `routes.test.ts` asserts `GET /api/coordination-runs/:id/events` returns `404`. No implementation was required. |
+
 ## Implemented inventory
 
 | Area | Evidence | Status | Notes |
@@ -119,7 +138,12 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 2
 
-- Database v2, explicit v1 migration, real repository, atomic leases/events, redaction, reservations, restart settlement, composition-root wiring, and race/API integration suites.
+- Database v2 and explicit v1 migration are **done** (P2-01–P2-04). P2-19 is
+  verified as already satisfied.
+- Remaining: event factories and redaction (P2-05–P2-07), the real atomic
+  repository and its race suite (P2-08–P2-14), API validation/injection tests
+  and composition wiring (P2-15–P2-18), and restart settlement plus the
+  reservation helper and evidence-timeline check (P2-20–P2-22).
 
 ### Phase 3
 
@@ -165,6 +189,9 @@ no task was promoted on a host-only or focused run.
 | 2026-08-29 | `ea15e37` | P1-06 final scoped Docker Compose `npm run check` | **Passed** (user-run): 12 server test files with 87 tests, both builds. P1-06 is `complete` on this evidence. |
 | 2026-08-29 17:40 UTC | `f3caed5` | P1-07–P1-17 Docker Compose `npm run check` | **Not run.** No container engine is reachable from the environment the work was done in: the shell holding the checkout has no Docker, Podman, or Colima, and the alternative host is blocked from pulling `node:22-bookworm-slim` (403). Per the runbook these tasks therefore stay `implemented_unverified`; the check must be run on a host with Docker before any promotion. **Superseded by the passing gate recorded below.** |
 | 2026-08-29 17:43:51 UTC | `f3caed5` | **Checkpoint 1 gate** — final scoped Docker Compose `npm run check` | **Passed:** server and web typechecks, 14 server test files with 237 tests, web build, and server build. Image built from `node:22-bookworm-slim`; `npm ci` continues to report 1 moderate and 5 high audit findings held for release review. This is the sole completion evidence for P1-07–P1-17. |
+| 2026-08-30 02:06 UTC | `d81635a` | Phase 2 baseline Docker Compose `npm run check` on branch `phase2-p2-01-database-v2` | **Passed** before any edit: server/web typechecks, 14 server test files with 237 tests, web build, and server build. Establishes the green baseline the Phase 2 work starts from. |
+| 2026-08-30 02:09 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 focused Docker Compose typecheck and `store.test.ts` | **Passed:** server typecheck plus 11 store tests covering empty v2 startup, realistic v1 migration with field/timestamp preservation, unknown-field preservation, v2 round-trip with coordination collections and Agent Run correlation, and non-overwriting rejection of future, malformed, and unparseable documents. |
+| 2026-08-30 02:10 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 14 server test files with 247 tests, web build, and server build. Sole completion evidence for P2-01–P2-04. |
 | 2026-08-29 17:40 UTC | `f3caed5` | Non-authoritative pre-check | 14 server test files, 237 tests, both builds pass under Node 22.23.2 / npm 10.9.8 from a clean `npm ci --include=dev` over the same source snapshot the Compose command copies, run outside the checkout. Recorded only to predict the Compose result. **This is not completion evidence and does not satisfy any gate.** |
 
 ## Manual Phase 0 verification report
@@ -210,7 +237,8 @@ no task was promoted on a host-only or focused run.
 | Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
 | Current Agent cancellation is keyed by Agent ID | Could cancel unrelated later work after races. | Implement run-scoped cancellation in Phase 3 only after Phase 2 correctness gates. |
 | ~~Docker unreachable from the environment used for P1-07–P1-17~~ | Resolved. The gate was run on a host with Docker and passed; the tasks were promoted on that evidence. | Closed 2026-08-29. Any future assistant-run work must route the gate to a host with a container engine rather than substituting a host runner. |
-| Phase 1 implementation decisions not yet confirmed | Nine choices were made where the frozen contract is silent; `sizeChars` becomes costly to change once Phase 2 persists artifacts. | Review the decision table in `ASSUMPTIONS_AND_DECISIONS.md` before starting P2-01. |
+| ~~Phase 1 implementation decisions not yet confirmed~~ | Resolved. All nine were confirmed unchanged on 2026-08-30 before P2-01, together with the four Phase 2 handoff decisions. | Closed 2026-08-30. |
+| `stale_ignored` attempt status has no producer | By the confirmed §2.1 decision, evidence lives in the `attempt.stale_ignored` event, so the `CoordinationAttemptStatus` member stays unwritten. Phase 4 must read it from the event stream, not the attempt row. | Accepted. Revisit only if the Phase 4 timeline cannot render it from events. |
 
 ## Decision log summary
 
@@ -224,7 +252,9 @@ no task was promoted on a host-only or focused run.
 - Frozen contract commit is `ea469b2`, tagged `relay/contracts-v1`.
 - Approved P1-01 mini-RFC adds committed turns to `WorkflowView`; selectors order by `turn.sequence`, never artifact array position or timestamps.
 - Approved P1-05 mini-RFC freezes numeric artifact field/array limits while retaining the separate raw-output cap for P1-06.
-- Nine Phase 1 implementation decisions are recorded in `ASSUMPTIONS_AND_DECISIONS.md`; they change no frozen type, route, or persisted shape, and await confirmation before Phase 2.
+- Nine Phase 1 implementation decisions are recorded in `ASSUMPTIONS_AND_DECISIONS.md`; they change no frozen type, route, or persisted shape, and were confirmed unchanged on 2026-08-30.
+- Four Phase 2 handoff decisions settled on 2026-08-30: `sizeChars` stays the raw-output length; `truncated` is an `attempt.started` event detail only; `outputDigest` is populated at commit; `attempt.stale_ignored` is emitted as an event without extending the `finishAttempt` status union. None is a mini-RFC.
+- `DatabaseV2` migration is additive by spread, so unknown fields in an existing v1 file are preserved rather than dropped.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 
