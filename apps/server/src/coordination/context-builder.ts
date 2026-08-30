@@ -118,6 +118,13 @@ const TASK_INSTRUCTIONS: Readonly<Record<CoordinationTurnKind, string>> = {
     "Assess the proposal below for required-section coverage, internal consistency, feasibility, and alignment with the objective. Approve only if no blocking issue remains; otherwise reject and list each blocking issue.",
   finalization:
     "Turn the approved proposal into one polished final response. Do not add workflow decisions, approvals, or commitments that the approved material does not support.",
+  // PLACEHOLDER (Phase 5 scope amendment). A getter, not an IIFE: an IIFE in an
+  // object literal evaluates at module load and would throw on import, taking
+  // the server and every test with it. This throws only if something actually
+  // asks for a session instruction, which nothing in Phase 5 does.
+  get session_turn(): string {
+    throw new Error("session_turn instruction lands in P6-07");
+  },
 };
 
 const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
@@ -131,12 +138,20 @@ const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
     '"feedback":"<string>"}',
   ].join(""),
   final: '{"schemaVersion":1,"type":"final","title":"<string>","content":"<string>"}',
+  // PLACEHOLDER (Phase 5 scope amendment).
+  get session_message(): string {
+    throw new Error("session_message output shape lands in P6-07");
+  },
 };
 
 const OUTPUT_LIMITS: Readonly<Record<ArtifactType, string>> = {
   proposal: `summary <= ${ARTIFACT_SCHEMA_LIMITS.proposalSummaryChars} characters; 1-${ARTIFACT_SCHEMA_LIMITS.proposalSections} sections; each title <= ${ARTIFACT_SCHEMA_LIMITS.titleChars} and content <= ${ARTIFACT_SCHEMA_LIMITS.proposalSectionContentChars} characters.`,
   review: `0-${ARTIFACT_SCHEMA_LIMITS.reviewIssues} issues; each message <= ${ARTIFACT_SCHEMA_LIMITS.reviewIssueMessageChars} and feedback <= ${ARTIFACT_SCHEMA_LIMITS.reviewFeedbackChars} characters. A rejecting review lists at least one issue; an approving review lists none.`,
   final: `title <= ${ARTIFACT_SCHEMA_LIMITS.titleChars} and content <= ${ARTIFACT_SCHEMA_LIMITS.finalContentChars} characters.`,
+  // PLACEHOLDER (Phase 5 scope amendment).
+  get session_message(): string {
+    throw new Error("session_message output limit lands in P6-07");
+  },
 };
 
 const buildContractSection = (run: CoordinationRun, turn: CoordinationTurn): string => {
@@ -164,6 +179,11 @@ const ROLE_VISIBILITY: Readonly<Record<CoordinationTurnKind, readonly ArtifactTy
   proposal_review: ["proposal"],
   proposal_revision: ["proposal", "review"],
   finalization: ["proposal", "review"],
+  // PLACEHOLDER (Phase 5 scope amendment). The real whitelist is the cumulative
+  // transcript (overview-sessions.md Section 5), built in P6-07.
+  get session_turn(): readonly ArtifactType[] {
+    throw new Error("session_turn artifact visibility lands in P6-07");
+  },
 };
 
 /**

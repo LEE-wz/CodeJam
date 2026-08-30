@@ -6,12 +6,13 @@ export type CoordinationEventId = string;
 export type AgentId = string;
 export type AgentRunId = string;
 
-export type CoordinationRole = "planner" | "critic" | "finalizer";
+export type CoordinationRole = "planner" | "critic" | "finalizer" | "participant";
 export type CoordinationPhase =
   | "drafting"
   | "reviewing"
   | "revising"
   | "finalizing"
+  | "sessioning"
   | "done";
 
 export type CoordinationRunStatus =
@@ -26,7 +27,8 @@ export type CoordinationTurnKind =
   | "initial_proposal"
   | "proposal_revision"
   | "proposal_review"
-  | "finalization";
+  | "finalization"
+  | "session_turn";
 
 export type CoordinationTurnStatus =
   | "scheduled"
@@ -44,8 +46,24 @@ export type CoordinationAttemptStatus =
   | "cancelled"
   | "stale_ignored";
 
-export type ArtifactType = "proposal" | "review" | "final";
+export type ArtifactType = "proposal" | "review" | "final" | "session_message";
 export type ReviewDecision = "approve" | "reject";
+
+/**
+ * Which workflow drives a run. The backend selects the decision source from
+ * this value; an Agent can never change it. `verified_handoff_v1` is the
+ * existing Planner -> Critic -> Finaliser pipeline and remains the default for
+ * every create request that does not name a workflow.
+ */
+export type CoordinationWorkflowKind = "verified_handoff_v1" | "shared_session_v1";
+
+/**
+ * Which rules a shared session turn is validated against. `countdown` requires
+ * each message to be the exact next integer; `free_chat` accepts any bounded
+ * non-empty message and never judges its substance (overview-sessions.md
+ * Sections 6.1 and 6.5).
+ */
+export type SessionProtocol = "countdown" | "free_chat";
 
 export type CoordinationErrorCode =
   | "VALIDATION_FAILED"
@@ -73,13 +91,22 @@ export interface CoordinationParticipant {
 }
 
 export interface CoordinationPolicy {
-  workflow: "verified_handoff_v1";
+  workflow: CoordinationWorkflowKind;
   maxRevisions: number;
   maxTurns: number;
   maxAttemptsPerTurn: number;
   perAttemptTimeoutMs: number;
   contextMaxChars: number;
   outputMaxChars: number;
+  /**
+   * Shared-session runs only. Absent on verified-handoff runs.
+   */
+  sessionProtocol?: SessionProtocol;
+  /**
+   * Countdown sessions only: the first number the participants must publish.
+   * Absent on free-chat and verified-handoff runs.
+   */
+  sessionStartValue?: number;
 }
 
 export const DEFAULT_COORDINATION_POLICY: CoordinationPolicy = {
@@ -97,6 +124,16 @@ export interface RequiredSection {
   title: string;
 }
 
+/**
+ * Durable state a shared session run carries between turns. Countdown runs hold
+ * the next integer the workflow will accept; the repository decrements it in the
+ * same atomic mutation that commits the message. Free-chat runs have no shared
+ * state and omit this object entirely (overview-sessions.md Section 6.5).
+ */
+export interface CoordinationSharedState {
+  nextExpectedNumber: number;
+}
+
 export interface CoordinationRun {
   id: CoordinationRunId;
   name: string;
@@ -112,6 +149,8 @@ export interface CoordinationRun {
   latestProposalArtifactId?: CoordinationArtifactId;
   latestReviewArtifactId?: CoordinationArtifactId;
   finalArtifactId?: CoordinationArtifactId;
+  /** Countdown sessions only. Absent on free-chat and verified-handoff runs. */
+  sharedState?: CoordinationSharedState;
   version: number;
   errorCode?: CoordinationErrorCode;
   errorMessage?: string;
@@ -192,7 +231,34 @@ export interface FinalPayload {
   content: string;
 }
 
-export type ArtifactPayload = ProposalPayload | ReviewPayload | FinalPayload;
+/**
+ * One participant's contribution to a shared session transcript.
+ *
+ * `done` is the free-chat completion signal. It is advisory: an Agent may
+ * declare that it considers the shared objective met, but the Agent never ends
+ * the run. `SharedSessionWorkflowV1` completes a free-chat run only when every
+ * participant's most recent committed message carries `done: true` -- unanimous
+ * consent across one full round -- or at `maxTurns`, or on user stop, whichever
+ * comes first. A later message from the same participant without the flag
+ * clears that participant's signal. The rule is computed from committed
+ * artifacts by backend code, so the trust boundary in overview.md Section 5.1
+ * is unchanged: Agents supply input, the state machine decides.
+ *
+ * `done` is rejected on countdown messages, where the numeric validator is the
+ * sole authority on completion (P6-05 cross-field rule).
+ */
+export interface SessionMessagePayload {
+  schemaVersion: 1;
+  type: "session_message";
+  content: string;
+  done?: boolean;
+}
+
+export type ArtifactPayload =
+  | ProposalPayload
+  | ReviewPayload
+  | FinalPayload
+  | SessionMessagePayload;
 
 export interface CoordinationArtifactBase {
   id: CoordinationArtifactId;
@@ -207,7 +273,11 @@ export interface CoordinationArtifactBase {
 export type CoordinationArtifact =
   | (CoordinationArtifactBase & { type: "proposal"; payload: ProposalPayload })
   | (CoordinationArtifactBase & { type: "review"; payload: ReviewPayload })
-  | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload });
+  | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload })
+  | (CoordinationArtifactBase & {
+      type: "session_message";
+      payload: SessionMessagePayload;
+    });
 
 export type CoordinationEventType =
   | "run.created"
@@ -264,6 +334,8 @@ export interface RoleAgentSelection {
 }
 
 export interface CreateCoordinationRunRequest {
+  /** Optional and defaulted, so existing clients keep working unchanged. */
+  workflow?: "verified_handoff_v1" | undefined;
   name: string;
   objective: string;
   requiredSections: RequiredSection[];
@@ -276,6 +348,43 @@ export interface CreateCoordinationRunRequest {
       }
     | undefined;
 }
+
+/**
+ * Create body for a shared session run. `agents` is ordered: the array order is
+ * the round-robin turn order (overview-sessions.md Section 7). Session runs
+ * accept no `requiredSections` and no `maxRevisions`.
+ */
+export interface CreateSessionRunRequest {
+  workflow: "shared_session_v1";
+  name: string;
+  objective: string;
+  agents: AgentId[];
+  policy?:
+    | {
+        sessionProtocol?: SessionProtocol | undefined;
+        sessionStartValue?: number | undefined;
+        maxTurns?: number | undefined;
+        perAttemptTimeoutMs?: number | undefined;
+      }
+    | undefined;
+}
+
+/** Either create body. The service discriminates on `workflow`. */
+export type CreateRunRequest = CreateCoordinationRunRequest | CreateSessionRunRequest;
+
+/** Frozen session limits, referenced by the routes, the service, and the UI. */
+export const SESSION_LIMITS = {
+  minParticipants: 2,
+  maxParticipants: 6,
+  minStartValue: 2,
+  maxStartValue: 12,
+  defaultStartValue: 10,
+  minFreeChatTurns: 3,
+  maxFreeChatTurns: 12,
+  defaultFreeChatTurns: 6,
+  messageMinChars: 1,
+  messageMaxChars: 500,
+} as const;
 
 export interface ListCoordinationRunsResponse {
   runs: CoordinationRun[];

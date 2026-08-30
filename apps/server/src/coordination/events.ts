@@ -63,6 +63,10 @@ const ROLE_LABELS: Record<CoordinationRole, string> = {
   planner: "Planner",
   critic: "Critic",
   finalizer: "Finaliser",
+  // PLACEHOLDER (Phase 5 scope amendment).
+  get participant(): string {
+    throw new Error("participant role label lands in P6-01");
+  },
 };
 
 export const roleLabel = (role: CoordinationRole): string => ROLE_LABELS[role];
@@ -72,6 +76,10 @@ const TURN_KIND_LABELS: Record<CoordinationTurnKind, string> = {
   proposal_revision: "proposal revision",
   proposal_review: "proposal review",
   finalization: "finalization",
+  // PLACEHOLDER (Phase 5 scope amendment).
+  get session_turn(): string {
+    throw new Error("session_turn label lands in P6-01");
+  },
 };
 
 export interface CoordinationEventFactory {

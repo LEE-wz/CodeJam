@@ -3,7 +3,7 @@ import type {
   WorkflowDecision,
   WorkflowView,
 } from "./contracts.js";
-import type { ArtifactType, CoordinationArtifact } from "./types.js";
+import type { ArtifactType, CoordinationArtifact, CoordinationRole } from "./types.js";
 
 export type {
   VerifiedHandoffWorkflow,
@@ -129,7 +129,12 @@ const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
     proposal_revision: { role: "planner", type: "proposal" },
     proposal_review: { role: "critic", type: "review" },
     finalization: { role: "finalizer", type: "final" },
-  } as const;
+    // PLACEHOLDER (Phase 5 scope amendment). Session runs never reach this
+    // verified-handoff guard; P6-01 gives them their own workflow.
+    get session_turn(): { role: CoordinationRole; type: ArtifactType } {
+      throw new Error("session_turn verified-state guard lands in P6-01");
+    },
+  };
   for (const turn of turns) {
     if (turn.status !== "committed") continue;
     const artifact = turn.outputArtifactId
