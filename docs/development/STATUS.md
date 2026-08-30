@@ -49,6 +49,7 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 
 | Item | Status | Deadline |
 |---|---|---|
+| `leaseToken` is exposed by the detail response | Open. `CoordinationAttempt.leaseToken` is a required field of the frozen type, `CoordinationRunDetails.attempts` is `CoordinationAttempt[]`, and `GetCoordinationRunResponse extends CoordinationRunDetails`, so `GET /api/coordination-runs/:id` returns lease tokens to any authenticated client. **Not exploitable today**: no route accepts a lease token as input, so it is information exposure rather than privilege escalation, and events and logs remain clean. Found by the manual Phase 2 smoke run, not by any automated test. Options: strip `leaseToken` in the detail read model by mini-RFC, or accept it and document it. | **Before Phase 4 renders the detail response**, since the UI would ship lease tokens to the browser |
 | Additive mini-RFC for `truncated` / `outputDigest` inputs | Implemented, awaiting confirmation | Before Phase 3 sign-off |
 | Handoff §2.2 `PromptEnvelope.includedArtifactIds` | Open. The context builder returns it and the service still drops it; `turn.inputArtifactIds` carries nearly the same evidence. Either surface it in an event detail or remove it by mini-RFC. | No persisted-shape impact, so it may be settled in Phase 3 |
 
@@ -273,6 +274,7 @@ no task was promoted on a host-only or focused run.
 | Shared ChatGPT context inaccessible in this environment | Possible decisions outside `overview.md` were not audited. | Copy any missing decisions into `ASSUMPTIONS_AND_DECISIONS.md`; overview remains current authority. |
 | Code ahead of gates | Merged code can create false confidence about completion. | Retain `implemented_unverified` until required phase evidence passes. |
 | Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
+| Detail response exposes lease tokens | The frozen `CoordinationAttempt` carries `leaseToken`, so the detail route returns it. No input path consumes a lease token, so nothing is forgeable today, but Phase 4 would place it in browser-visible state. | Decide before P4 renders attempts; see **Outstanding decisions**. |
 | Current Agent cancellation is keyed by Agent ID | Could cancel unrelated later work after races. | Implement run-scoped cancellation in Phase 3 only after Phase 2 correctness gates. |
 | ~~Docker unreachable from the environment used for P1-07–P1-17~~ | Resolved. The gate was run on a host with Docker and passed; the tasks were promoted on that evidence. | Closed 2026-08-29. Any future assistant-run work must route the gate to a host with a container engine rather than substituting a host runner. |
 | ~~Phase 1 implementation decisions not yet confirmed~~ | Resolved. All nine were confirmed unchanged on 2026-08-30 before P2-01, together with the four Phase 2 handoff decisions. | Closed 2026-08-30. |
