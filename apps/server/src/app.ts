@@ -136,20 +136,6 @@ export async function createApp(
     await registerCoordinationRoutes(app, coordination);
   }
 
-  if (config.nodeEnv === "production") {
-    const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
-    await app.register(fastifyStatic, {
-      root: webRoot,
-      prefix: "/",
-    });
-    app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith("/api/")) {
-        return reply.code(404).send({ error: "API route not found" });
-      }
-      return reply.sendFile("index.html");
-    });
-  }
-
   app.setErrorHandler((error, request, reply) => {
     const appError = error instanceof Error ? error : new Error(String(error));
     const validationError = error instanceof z.ZodError;
@@ -182,6 +168,24 @@ export async function createApp(
       ...(validationError ? { details: error.issues } : {}),
     });
   });
+
+  // Registered after `setErrorHandler` on purpose. Fastify's not-found context
+  // captures whatever error handler is installed at the time `setNotFoundHandler`
+  // runs, so registering it first made production 404s bypass the frozen
+  // `ApiErrorResponse` envelope and fall back to Fastify's default serializer.
+  if (config.nodeEnv === "production") {
+    const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
+    await app.register(fastifyStatic, {
+      root: webRoot,
+      prefix: "/",
+    });
+    app.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith("/api/")) {
+        return reply.code(404).send({ error: "API route not found" });
+      }
+      return reply.sendFile("index.html");
+    });
+  }
 
   return app;
 }

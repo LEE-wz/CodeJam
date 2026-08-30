@@ -10,6 +10,7 @@ import type {
   VerifiedHandoffWorkflow,
   WorkflowDecision,
 } from "./contracts.js";
+import { createHash } from "node:crypto";
 import { CoordinationError } from "./errors.js";
 import { ARTIFACT_SCHEMA_LIMITS, SECTION_KEY_PATTERN } from "./schemas.js";
 import {
@@ -54,9 +55,37 @@ const boundedRetryFeedback = (messages: string[]): string[] =>
 const isTerminal = (status: CoordinationRun["status"]): boolean =>
   terminalStatuses.has(status);
 
-interface CoordinationLogger {
-  error(context: { runId: CoordinationRunId }, message: string): void;
+/**
+ * Structured coordination log fields. Only identifiers, enum values, counts, and
+ * digests are permitted: never a prompt, raw output, or lease token.
+ */
+export interface CoordinationLogContext {
+  runId: CoordinationRunId;
+  turnId?: string;
+  attemptId?: string;
+  role?: string;
+  agentId?: string;
+  sequence?: number;
+  attemptNumber?: number;
+  status?: string;
+  code?: string;
+  artifactType?: string;
+  promptDigest?: string;
+  outputDigest?: string;
+  truncated?: boolean;
 }
+
+export interface CoordinationLogger {
+  info?(context: CoordinationLogContext, message: string): void;
+  error(context: CoordinationLogContext, message: string): void;
+}
+
+/**
+ * Digest of the raw Agent output, written to `attempt.outputDigest` on commit
+ * per the confirmed handoff decision 1.3. The output itself is never stored.
+ */
+const digestOutput = (rawOutput: string): string =>
+  "sha256:" + createHash("sha256").update(rawOutput, "utf8").digest("hex");
 
 interface CoordinationServiceDependencies {
   agentDirectory: CoordinationAgentDirectory;
@@ -227,6 +256,7 @@ export class CoordinationService implements CoordinationServiceContract {
       throw new CoordinationError(409, result.code, result.message);
     }
 
+    this.log({ runId: result.run.id, status: result.run.status }, "Coordination run started");
     this.startLoop(result.run.id);
     return result.run;
   }
@@ -254,7 +284,20 @@ export class CoordinationService implements CoordinationServiceContract {
     if (!stopped) {
       throw new CoordinationError(404, "NOT_FOUND", "Coordination run not found");
     }
+    this.log(
+      { runId: id, status: stopped.status, code: stopped.errorCode ?? "STOPPED_BY_USER" },
+      "Coordination run stopped",
+    );
     return stopped;
+  }
+
+  /**
+   * Structured log line. The context type admits only identifiers, enum values,
+   * counts, and digests, so a prompt, raw output, or lease token cannot be
+   * logged even by mistake.
+   */
+  private log(context: CoordinationLogContext, message: string): void {
+    this.dependencies.logger?.info?.(context, message);
   }
 
   private startLoop(runId: CoordinationRunId): void {
@@ -325,6 +368,15 @@ export class CoordinationService implements CoordinationServiceContract {
       if (scheduled.kind === "stale") {
         continue;
       }
+
+      this.log({
+        runId,
+        turnId: scheduled.turn.id,
+        sequence: scheduled.turn.sequence,
+        role: scheduled.turn.role,
+        agentId: scheduled.turn.agentId,
+        status: decision.turnKind,
+      }, "Coordination turn scheduled");
 
       const committed = await this.executeTurnWithRetries(scheduled.run, scheduled.turn);
       if (!committed) {
@@ -397,10 +449,21 @@ export class CoordinationService implements CoordinationServiceContract {
         runId: scheduledRun.id,
         turnId: scheduledTurn.id,
         attempt,
+        truncated: envelope.truncated,
       });
       if (begun.kind !== "started") {
         return false;
       }
+      this.log({
+        runId: scheduledRun.id,
+        turnId: scheduledTurn.id,
+        attemptId: attempt.id,
+        attemptNumber: number,
+        role: currentTurn.role,
+        agentId: currentTurn.agentId,
+        promptDigest: envelope.promptDigest,
+        truncated: envelope.truncated,
+      }, "Coordination attempt started");
 
       let runtimeStart;
       try {
@@ -458,7 +521,15 @@ export class CoordinationService implements CoordinationServiceContract {
             attemptId: attempt.id,
             leaseToken: attempt.leaseToken,
             artifact: validation.artifact,
+            outputDigest: digestOutput(outcome.rawOutput),
           });
+          this.log({
+            runId: scheduledRun.id,
+            turnId: scheduledTurn.id,
+            attemptId: attempt.id,
+            artifactType: validation.artifact.type,
+            status: committed.kind,
+          }, "Coordination commit settled");
           return committed.kind === "committed";
         }
         validationErrors = boundedRetryFeedback(

@@ -1,55 +1,62 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 02:25 UTC
+**Last audit:** 2026-08-30 02:34 UTC
 **Audited commit:** `d81635a` (contracts frozen at `ea469b2`, amended by the approved P1-01 and P1-05 mini-RFCs)
-**Implementation branch:** `phase2-p2-08-durable-repository` (chained from `phase2-p2-05-events-redaction`, base `d81635a` on `main`)
-**Current phase:** Phase 2 — Durable Backend and Evidence Ledger (in progress)
-**Current gate:** Checkpoint 2 (not reached)
-**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 authorised and started
+**Implementation branch:** `phase2-p2-15-api-composition` (chained from `phase2-p2-08-durable-repository`, base `d81635a` on `main`)
+**Current phase:** Phase 2 — Durable Backend and Evidence Ledger (complete)
+**Current gate:** Checkpoint 2 verified
+**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 `complete`; Phase 3 not started and not authorised
 
 ## Resume here
 
-Phase 2 is authorised and under way. All three Phase 1 exit gates are closed:
+**Phase 2 is complete and Checkpoint 2 is verified.** Every gate condition in
+[`phases/02-durable-backend.md`](./phases/02-durable-backend.md) has evidence:
 
-1. **Nine Phase 1 implementation decisions confirmed** unchanged by the user on
-   2026-08-30, including `sizeChars`.
-2. **Integration branch already at the Phase 1 tip.** `main` (`d81635a`) is
-   content-identical to the verified tip `f1be1b7`; `git diff f1be1b7 d81635a`
-   is empty. No fast-forward was needed.
-3. **Phase 2 signed off** by the user on 2026-08-30.
+| Gate condition | Evidence |
+|---|---|
+| Migration, lease, concurrent-start, stop/commit, restart, and terminal-immutability tests pass | 11 store tests and 51 repository tests; the race suite passed 10 consecutive runs, then 8 more alongside the API suite, with no flakes |
+| Create/start/detail/stop work over HTTP against the real repository | 26 Fastify-injection tests over the real durable stack |
+| Detail response contains ordered turns, attempts, artifacts, and redacted events | P2-22 timeline assertions across six fixtures |
+| Composition root can start with a scripted runtime | The built server was booted in a disposable container and answered health, list, detail, and the removed `/events` route correctly |
+| Full existing server regression suite passes | Compose `npm run check`, exit code 0: 18 files / 362 tests, both builds |
+| No real Agent connected prematurely | The runtime is still `ScriptedCoordinationRuntime`; `AgentService` is untouched |
 
-The four open handoff decisions (§1.1, §1.2, §1.3, §2.1) were also answered
-before P2-01 and are recorded in
-[`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) under
-**Phase 2 handoff decisions**. None required a mini-RFC.
+Three things need your attention before Phase 3 begins:
 
-Next executable actions:
+1. **Confirm the additive mini-RFC** in `ASSUMPTIONS_AND_DECISIONS.md` that adds
+   `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`.
+   Both are the only route by which the handoff decisions §1.2 and §1.3 you
+   already confirmed can reach the repository, and both are optional, so no
+   existing caller or Phase 1 fixture changed.
+2. **Note the production defect found and fixed** during P2-16 — see
+   **Defects found in Phase 2** below. It was invisible in test mode.
+3. **Decide handoff §2.2** (`PromptEnvelope.includedArtifactIds`): still unused
+   by the service. It affects no persisted shape, so it can also be settled in
+   Phase 3. See **Outstanding decisions**.
 
-1. **P2-15/P2-16** — strict create-input validation, UUID params, policy
-   ranges, and safe error envelopes, verified through Fastify injection for
-   list/create/detail/start/stop including auth, `404`, `409`, and body limit.
-2. **P2-17/P2-18** — construct the real workflow, protocol, context builder,
-   and `DurableCoordinationRepository` in `index.ts` with the scripted runtime,
-   initialise coordination after `AgentService`, pass it into `createApp`, and
-   add structured logs carrying identifiers only.
-3. **P2-22** — confirm the detail response reads as a coherent evidence
-   timeline for the normal, reject, retry, stopped, interrupted, and failed
-   fixtures.
-
-One item needs your confirmation, not a decision: the additive mini-RFC in
-`ASSUMPTIONS_AND_DECISIONS.md` that adds `BeginAttemptInput.truncated?` and
-`CommitAcceptedArtifactInput.outputDigest?`. Both are the only way to deliver
-the handoff decisions §1.2 and §1.3 you already confirmed; both are optional,
-so no existing caller or Phase 1 fixture changed.
-
-Still open, by design: handoff §2.2 (`PromptEnvelope.includedArtifactIds`) is
-decided at P2-09; it does not affect persisted shape.
-
-Do not connect Relay to real Agents until the Phase 2 correctness and race gates pass.
+Then sign off Phase 3. `P3-01` is the next task ID, and Phase 3 is the point at
+which real Agents may finally be connected.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
+## Defects found in Phase 2
+
+| Defect | How it was found | Resolution |
+|---|---|---|
+| Production 404s bypassed the frozen `ApiErrorResponse` envelope | Booting the real composition root (P2-17) returned `{"statusCode":404,"code":"NOT_FOUND","error":"Not Found",...}` where the injection tests returned `{"error":{"code":"NOT_FOUND",...}}`. Fastify's not-found context captures whichever error handler is installed when `setNotFoundHandler` runs, and `app.ts` registered the not-found handler **before** `setErrorHandler`. Only `NODE_ENV=production` registers a not-found handler, so no test-mode check could ever have caught it. | `setErrorHandler` now runs before the production static/not-found block, with a comment recording why the order matters. A regression test builds the app in production mode and asserts the frozen envelope; it provides a minimal web bundle when the real one has not been built yet and removes only what it created. |
+
+## Outstanding decisions
+
+| Item | Status | Deadline |
+|---|---|---|
+| Additive mini-RFC for `truncated` / `outputDigest` inputs | Implemented, awaiting confirmation | Before Phase 3 sign-off |
+| Handoff §2.2 `PromptEnvelope.includedArtifactIds` | Open. The context builder returns it and the service still drops it; `turn.inputArtifactIds` carries nearly the same evidence. Either surface it in an event detail or remove it by mini-RFC. | No persisted-shape impact, so it may be settled in Phase 3 |
+
 ## Last checkpoint
+
+Checkpoint 2 is complete. The real JSON store, durable repository, event ledger,
+and HTTP surface carry the full asynchronous lifecycle with only the runtime
+scripted. The composition root was booted for real, not merely typechecked.
 
 Checkpoint 1 is complete. The real workflow, artifact protocol, and role-scoped
 context builder drive the real `CoordinationService` against an in-memory
@@ -115,8 +122,11 @@ no task was promoted on a host-only or focused run.
 | P2-05–P2-07 | `complete` | Overview Section 19 mini-sprint 5A. Pure factories for all 17 frozen event types return an identity-free `CoordinationEventDraft`, because Section 10.3 requires the per-run sequence to be allocated inside the repository's own `mutate()`. Details are redacted **inside** the factory, so a caller cannot append an unredacted event by forgetting a step. `truncated` rides on `attempt.started` and `attempt.stale_ignored` exists as an event, per the confirmed handoff decisions. The redactor is a key allowlist plus secret-pattern stripping that runs before truncation. 38 tests. Compose `npm run check` passed: 16 files / 285 tests. |
 | P2-08–P2-14 | `complete` | `DurableCoordinationRepository`. Every command runs in exactly one `JsonStore.mutate()`; there is no read-check-write across store calls. Reads are deterministic (newest-first cap 50 with insertion-order tie-break; detail sorted by turn sequence then attempt number, never array position) and return deep copies. `startRun` checks created status, distinctness, Agent existence/readiness, derived coordination reservations, and in-flight ordinary Agent Runs together. Commit checks run status, both active pointers, attempt status, and the opaque lease as one condition. A losing caller writes nothing but an `attempt.stale_ignored` event. 51 tests, including concurrent same-run starts, concurrent overlapping-participant starts, disjoint starts, wrong/superseded lease, timeout-then-successful-retry, stop-versus-commit, duplicate completion, terminal overwrite prevention, per-run event numbering, and a leakage check. |
 | P2-20, P2-21 | `complete` | `interruptActiveRuns()` settles run, turn, and attempt and appends `run.interrupted` then `run.failed` with `SERVER_RESTARTED`, which is what releases the derived reservations; it is idempotent and leaves created/terminal runs alone. `listReservedAgentIds()`/`isAgentReserved()` expose the Section 10.4 derived reservation for `AgentService`; tests prove release after stopped and interrupted. Wiring into `AgentService` and `index.ts` remains P2-17. |
-| P2-15–P2-18, P2-22 | `not_started` | — |
-| P2-19 | `complete` (verify-only) | Confirmed as the handoff predicted: `routes.test.ts` asserts `GET /api/coordination-runs/:id/events` returns `404`. No implementation was required. |
+| P2-15, P2-16 | `complete` | The frozen route surface already carried strict schemas, UUID params, and policy ranges; P2-15 verified them rather than reimplementing. P2-16 adds 26 Fastify-injection tests over the **real** durable stack: auth required on all five routes, create/list/detail/start/stop statuses, `DUPLICATE_AGENT` on repeated Agents, duplicate section keys, four policy-range rejections, unknown-field rejection, `404` for a missing Agent and an unknown run, `400` for a non-UUID param, `409` for `AGENT_NOT_READY` and `AGENT_RESERVED`, `413` for an oversized body proven not to reach the service, and a safe `500` that leaks no stack or source path. |
+| P2-17 | `complete` | `index.ts` constructs the real `VerifiedHandoffWorkflowV1`, `VerifiedHandoffArtifactProtocol`, `RoleScopedContextBuilder`, and `DurableCoordinationRepository` over the real `JsonStore`, with a UUID id generator, a system clock, an `AgentService`-backed Agent directory, and the scripted runtime as the deliberate Phase 2 placeholder. Coordination initialises after `AgentService`. Verified by booting the built server in a disposable container: `/api/health` `200`, authenticated `/api/coordination-runs` `200 {"runs":[]}`, unknown run `404` in the frozen envelope, removed `/events` route `404`, and a freshly created database written at `"version": 2` with all five coordination collections. |
+| P2-18 | `complete` | `CoordinationLogContext` admits only identifiers, enum values, counts, digests, and the truncation flag, so a prompt, raw output, or lease token cannot be logged even by mistake. Logs are emitted at run start, turn schedule, attempt start, commit settlement, and stop, and asserted to contain no prompt or objective text. |
+| P2-19 | `complete` (verify-only) | Confirmed as the handoff predicted, in two places: `routes.test.ts` asserts `404`, and the live boot probe returned `404` for `/events`. |
+| P2-22 | `complete` | The detail response is exercised as an evidence timeline over the real stack for six fixtures — normal, reject/revise/approve, invalid-then-retry, failed, stopped, and restart-interrupted — asserting ordered turns, per-turn attempt ordering, artifact order, the exact event-type sequence, gapless per-run event numbering, and `outputDigest` on every committed attempt. |
 
 ## Implemented inventory
 
@@ -162,6 +172,9 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 3
 
+- Not authorised yet. `AgentService` now has a reservation source to consume
+  (`listReservedAgentIds`/`isAgentReserved`), and `index.ts` has one clearly
+  marked seam to replace: the `ScriptedCoordinationRuntime` placeholder.
 - Backward-compatible Agent execution handle, correlated run cancellation, reservation enforcement, real runtime gateway, timeout settlement, real smoke flow, and timing evidence.
 
 ### Phase 4
@@ -209,6 +222,11 @@ no task was promoted on a host-only or focused run.
 | 2026-08-30 02:22 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 focused Docker Compose typecheck and `repository.test.ts` | **Passed:** server typecheck plus 51 repository tests. |
 | 2026-08-30 02:24 UTC | `phase2-p2-08-durable-repository` | Race suite repeated ten times through Docker Compose | **Passed 10/10, no flakes.** Required by the phase sheet before the lease/race gate can be considered met. Races are driven by `Promise.all` over the store's serialised mutation queue and by explicit state sequencing — no sleeps anywhere in the suite. |
 | 2026-08-30 02:25 UTC | `phase2-p2-08-durable-repository` | P2-08–P2-14/P2-20/P2-21 final scoped Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 17 server test files with 336 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high audit findings held for release review (P5-16). Sole completion evidence for these tasks. |
+| 2026-08-30 02:29 UTC | `phase2-p2-15-api-composition` | P2-15/P2-16/P2-22 focused Docker Compose typecheck and `api.test.ts` | **Passed:** 25 tests over the real durable stack. Two initial failures were test defects, not product defects: the service correctly returns the frozen `DUPLICATE_AGENT` code where the test expected `VALIDATION_FAILED`, and a temp-directory cleanup raced a still-running background loop. Both were corrected without weakening an assertion. |
+| 2026-08-30 02:31 UTC | `phase2-p2-15-api-composition` | Race and API suites repeated eight times through Docker Compose | **Passed 8/8, no flakes.** |
+| 2026-08-30 02:32 UTC | `phase2-p2-15-api-composition` | **P2-17 live composition-root boot** in a disposable container | **Passed:** the built server started, `/api/health` returned `200`, authenticated `/api/coordination-runs` returned `200 {"runs":[]}`, an unknown run returned `404` in the frozen envelope, the removed `/events` route returned `404`, and the new database was written at `"version": 2` with all five coordination collections. Run against container-local temporary data directories; real `data/`, `workspaces/`, and `codex-home/` were never mounted or touched. |
+| 2026-08-30 02:32 UTC | `phase2-p2-15-api-composition` | Production error-envelope reproduction | **Failed, then fixed.** Production returned Fastify's default 404 serialization instead of the frozen `ApiErrorResponse`. Root cause and fix recorded under **Defects found in Phase 2**. Re-verified: both `test` and `production` now return `{"error":{"code":"NOT_FOUND","message":"Coordination run not found"}}`. |
+| 2026-08-30 02:34 UTC | `phase2-p2-15-api-composition` | **Checkpoint 2 gate** — final scoped Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 18 server test files with 362 tests, web build, and server build. Sole completion evidence for P2-15–P2-19 and P2-22, and the Checkpoint 2 gate. |
 | 2026-08-30 02:06 UTC | `d81635a` | Phase 2 baseline Docker Compose `npm run check` on branch `phase2-p2-01-database-v2` | **Passed** before any edit: server/web typechecks, 14 server test files with 237 tests, web build, and server build. Establishes the green baseline the Phase 2 work starts from. |
 | 2026-08-30 02:09 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 focused Docker Compose typecheck and `store.test.ts` | **Passed:** server typecheck plus 11 store tests covering empty v2 startup, realistic v1 migration with field/timestamp preservation, unknown-field preservation, v2 round-trip with coordination collections and Agent Run correlation, and non-overwriting rejection of future, malformed, and unparseable documents. |
 | 2026-08-30 02:10 UTC | `phase2-p2-01-database-v2` | P2-01–P2-04 final scoped Docker Compose `npm run check` | **Passed:** server/web typechecks, 14 server test files with 247 tests, web build, and server build. Sole completion evidence for P2-01–P2-04. |
@@ -275,6 +293,7 @@ no task was promoted on a host-only or focused run.
 - Nine Phase 1 implementation decisions are recorded in `ASSUMPTIONS_AND_DECISIONS.md`; they change no frozen type, route, or persisted shape, and were confirmed unchanged on 2026-08-30.
 - Four Phase 2 handoff decisions settled on 2026-08-30: `sizeChars` stays the raw-output length; `truncated` is an `attempt.started` event detail only; `outputDigest` is populated at commit; `attempt.stale_ignored` is emitted as an event without extending the `finishAttempt` status union. None is a mini-RFC.
 - `DatabaseV2` migration is additive by spread, so unknown fields in an existing v1 file are preserved rather than dropped.
+- `app.ts` must register `setErrorHandler` before the production static/not-found block; the reverse order silently breaks the frozen error envelope in production only.
 - An additive mini-RFC adds `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`, the only route by which the confirmed §1.2 and §1.3 decisions can reach the repository. Both are optional; no frozen domain type, event type, route, or persisted shape changed. **Awaiting user confirmation.**
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
