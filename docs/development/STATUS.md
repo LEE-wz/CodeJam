@@ -1,11 +1,11 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 (Phase 5 session contracts implemented)
-**Audited base:** `1c51170` (`main`, session phase sheets merged)
-**Implementation branch:** `phase5-p5-01-session-contracts` (base `1c51170`)
-**Current phase:** Phase 5 — Session Contracts and Freeze
-**Current gate:** Checkpoint 5 verified (2026-08-30, commit `2fe14eb`)
-**Overall state:** Phases 0–5 `complete`; Phases 6–8 deferred to teammates by the team decision at P5-01; Phase 9 (release) not started
+**Last audit:** 2026-08-30 (P6-01 shared-session workflow routing complete)
+**Audited base:** `d932a0c` (`main`, Phase 6–9 handoff consolidation)
+**Implementation branch:** `phase6-p6-01-session-workflow` (base `d932a0c`)
+**Current phase:** Phase 6 — Session Core in Memory
+**Current gate:** Checkpoint 6 in progress; P6-01 complete at `a916d5c`
+**Overall state:** Phases 0–5 `complete`; Phase 6 `in_progress`; Phases 7–9 not started
 
 ## Nine-phase plan
 
@@ -17,7 +17,7 @@
 | 3 | Real Agent runtime and recovery | `complete` |
 | 4 | End-to-end UI and evidence experience | `complete` |
 | 5 | Session contracts and freeze | `complete` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
-| 6 | Session core in memory | `not_started` (sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
+| 6 | Session core in memory | `in_progress` (P6-01 complete; sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
 | 7 | Durable session backend and API | `not_started` (sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
 | 8 | Session UI and real rehearsal | `not_started` (sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `not_started` (sheet: [`phases/09-release.md`](phases/09-release.md)) |
@@ -26,31 +26,41 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 
 ## Resume here
 
-**Phase 5 is complete and Checkpoint 5 is verified.** The frozen session
-contract commit is `2fe14eb`, gate-verified on 2026-08-30 with a clean working
-tree, so the tree the gate tarred is exactly that commit.
+**P6-01 is complete at `a916d5c`; Checkpoint 6 remains open.** The shared
+session workflow now routes deterministically, completes countdown and free-chat
+runs under the frozen rules, rejects inconsistent durable state, and supplies
+the selected round-robin Agent identity to turn construction.
 
-The next task ID is **`P6-01`**, and it belongs to whoever picks up Phase 6.
-Before they write routing:
+The next task ID is **`P6-02`**. Replace `CoordinationService.workflowFor` with
+an implementation of the existing `CoordinationWorkflowDispatch.forRun`
+contract. Keep the orchestration loop and verified-handoff behavior unchanged.
+Then run focused dispatch tests and the full Docker Compose check.
 
-1. **The free-chat unanimity rule is confirmed.** The whole team confirmed it
-   on 2026-08-30, together with the final-artifact-pointer rule (the last
-   committed session message). P6-01 encodes both; see
-   `ASSUMPTIONS_AND_DECISIONS.md`.
-2. Read the **Phase 6 handoff notes** in full. Items 2 and 3 describe defects
-   the compiler will not surface.
-3. Create a Phase 6 task branch from the current `main` tip (frozen contract
-   `2fe14eb` plus the consolidation pass).
-
-Nine loud placeholders mark the work: every one throws with the task ID that
-replaces it, so `grep -rn "lands in P6-" apps/server/src/coordination/` lists
-all of them.
+The P6-01 implementation exposed and resolved one frozen-contract omission:
+schedule decisions could name only a role, but every session member has the
+same `participant` role. The user approved an additive optional `agentId` on
+schedule decisions. The mini-RFC and required follow-on evidence are recorded
+in `ASSUMPTIONS_AND_DECISIONS.md`.
 
 Outstanding decision for the team, not for Phase 6: whether to create a
 convenience tag on `2fe14eb`. None was created. The immutable commit reference
 is sufficient, and the Phase 0 experience — documentation claiming a
 `relay/contracts-v1` tag that never existed — argues for deciding explicitly
 rather than assuming.
+
+## Phase 6 task ledger
+
+| Task | Status | Evidence |
+|---|---|---|
+| P6-01 | `complete` | `SharedSessionWorkflowV1` validates session state and committed transcript provenance, schedules by committed-turn round robin, emits chronological transcript artifact IDs, completes countdown at 1, completes free chat on unanimous latest `done` signals or the turn limit, uses the last message as final artifact, and fails countdown turn exhaustion safely. The verified workflow now explicitly rejects session turns; participant/session event labels no longer throw. Approved mini-RFC adds optional schedule `agentId`, and service turn construction uses it without changing verified decisions. Four new focused workflow tests plus updated contract/placeholder tests pass. Full Compose gate passed: 24 server files / 403 tests, 2 web files / 12 tests, typechecks, and both builds (415 tests total). |
+| P6-02 | `not_started` | Next: adopt `CoordinationWorkflowDispatch.forRun` in the service. |
+
+### P6-01 verification
+
+- Focused Compose test: 3 files / 26 tests passed after correcting two test-only fixture mistakes (a missing import and the event-factory argument shape).
+- Required full command: `docker compose build launchpad`, followed by the standard disposable `docker compose run ... npm ci --include=dev && npm run check` command from the runbook.
+- Final result: passed on the exact implementation tree committed as `a916d5c`; 403 server tests, 12 web tests, both typechecks, and both builds.
+- Known dependency audit findings remain 1 moderate and 5 high, deferred to P9-17 as already recorded. No dependency versions changed.
 
 ## Phase 5 task ledger
 
