@@ -5,12 +5,12 @@
 
 ## Entry criteria
 
-Preflight status on `pre-phase4-cleanup`: the Phase 3 checkpoint is
-stable, API strings are frozen, and the reusable lease-free fixture matrix is
-in `apps/server/src/coordination/testing/phase4-response-fixtures.ts`. The
-automated/web-browser test split is recorded in
-[`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md). These are
-preconditions only; no `P4-*` task is complete yet.
+Implementation status on `phase-4`: the Phase 3 checkpoint is stable, API
+strings remain frozen, and the reusable lease-free fixture matrix in
+`apps/server/src/coordination/testing/phase4-response-fixtures.ts` now drives
+the web evidence tests. The automated and real-browser gates described in
+[`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md) have both
+passed.
 
 - A Phase 4 task branch has been created from the completed real-runtime checkpoint.
 - The Phase 4 paths in [`../FILESYSTEM_MAP.md`](../FILESYSTEM_MAP.md) have been reviewed and server internals remain out of scope except as read-only API references.
@@ -34,31 +34,31 @@ If an API envelope, UI state, polling rule, accessibility expectation, or file b
 
 ### Client contracts and form
 
-- [ ] **P4-01** Add an API-facing coordination type subset; keep it aligned with response envelopes without importing server internals.
-- [ ] **P4-02** Add list/create/detail/start/stop calls using existing bearer/auth and error conventions.
-- [ ] **P4-03** Build fields for name, objective, required sections, Planner/Critic/Finaliser selectors, and optional safe policy controls.
-- [ ] **P4-04** Validate exactly three distinct ready Agents, unique section keys, input bounds, and policy ranges client-side while retaining server authority.
-- [ ] **P4-05** Preserve form input on errors and make create→start two visible operations. Automatic start occurs only after successful create.
+- [x] **P4-01** Add an API-facing coordination type subset; keep it aligned with response envelopes without importing server internals.
+- [x] **P4-02** Add list/create/detail/start/stop calls using existing bearer/auth and error conventions.
+- [x] **P4-03** Build fields for name, objective, required sections, Planner/Critic/Finaliser selectors, and optional safe policy controls.
+- [x] **P4-04** Validate exactly three distinct ready Agents, unique section keys, input bounds, and policy ranges client-side while retaining server authority.
+- [x] **P4-05** Preserve form input on errors and make create→start two visible operations. Automatic start occurs only after successful create.
 
 ### Detail, timeline, and artifacts
 
-- [ ] **P4-06** Display run status/phase/revision, role mappings, limits, and actionable terminal errors.
-- [ ] **P4-07** Render events ordered and grouped by turn, with attempts nested and retry versus revision visually distinct.
-- [ ] **P4-08** Render proposal/review/final artifacts, including clear approve/reject state, as escaped text. Do not use raw HTML.
-- [ ] **P4-09** Provide safe empty/loading/error/long-content states and stable labels/colors for status, role, and event types.
+- [x] **P4-06** Display run status/phase/revision, role mappings, limits, and actionable terminal errors.
+- [x] **P4-07** Render events ordered and grouped by turn, with attempts nested and retry versus revision visually distinct.
+- [x] **P4-08** Render proposal/review/final artifacts, including clear approve/reject state, as escaped text. Do not use raw HTML.
+- [x] **P4-09** Provide safe empty/loading/error/long-content states and stable labels/colors for status, role, and event types.
 
 ### Polling and stop
 
-- [ ] **P4-10** Poll detail every 1–2 seconds only while active; ensure one timer/request chain and clean up on terminal state, selection change, and unmount.
-- [ ] **P4-11** Add stop with pending/disabled state and reconcile the returned terminal status without multiplying requests.
-- [ ] **P4-12** Test or manually prove normal, rejection, retry, timeout, stopped, interrupted, failed, and completed views.
+- [x] **P4-10** Poll detail every 1–2 seconds only while active; ensure one timer/request chain and clean up on terminal state, selection change, and unmount.
+- [x] **P4-11** Add stop with pending/disabled state and reconcile the returned terminal status without multiplying requests.
+- [x] **P4-12** Test or manually prove normal, rejection, retry, timeout, stopped, interrupted, failed, and completed views.
 
 ### App integration and accessibility
 
-- [ ] **P4-13** Integrate minimally through the single `App.tsx` owner and preserve all current Agent/Playground features.
-- [ ] **P4-14** Verify keyboard operation, associated labels, focus/error behavior, contrast, and screen-reader-meaningful status text.
-- [ ] **P4-15** Verify laptop judge resolution and narrow responsive layout; cut animation/filtering before core evidence.
-- [ ] **P4-16** Run one real end-to-end create/start/poll/complete flow and one stop flow from the browser.
+- [x] **P4-13** Integrate minimally through the single `App.tsx` owner and preserve all current Agent/Playground features.
+- [x] **P4-14** Verify keyboard operation, associated labels, focus/error behavior, contrast, and screen-reader-meaningful status text.
+- [x] **P4-15** Verify laptop judge resolution and narrow responsive layout; cut animation/filtering before core evidence.
+- [x] **P4-16** Run one real end-to-end create/start/poll/complete flow and one stop flow from the browser.
 
 ## Requirements and boundaries
 

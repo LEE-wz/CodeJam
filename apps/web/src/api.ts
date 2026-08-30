@@ -4,8 +4,11 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
+    public readonly fieldErrors?: Record<string, string[]>,
   ) {
     super(message);
+    this.name = "ApiError";
   }
 }
 
@@ -15,7 +18,15 @@ export function setAuthToken(token: string): void {
   authToken = token.trim();
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+interface ErrorEnvelope {
+  error?: string | {
+    code?: string;
+    message?: string;
+    fieldErrors?: Record<string, string[]>;
+  };
+}
+
+export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers = {
     ...(options?.body ? { "Content-Type": "application/json" } : {}),
     ...(authToken ? { Authorization: "Bearer " + authToken } : {}),
@@ -25,9 +36,13 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
     headers,
   });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await response.json().catch(() => ({}))) as T & ErrorEnvelope;
   if (!response.ok) {
-    throw new ApiError(data.error ?? "Request failed", response.status);
+    const structured = typeof data.error === "object" ? data.error : undefined;
+    const message = typeof data.error === "string"
+      ? data.error
+      : structured?.message ?? "Request failed";
+    throw new ApiError(message, response.status, structured?.code, structured?.fieldErrors);
   }
   return data;
 }

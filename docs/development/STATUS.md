@@ -1,44 +1,33 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 (Phase 4 preflight cleanup)
-**Audited base:** `12d4612` on `main`
-**Implementation branch:** `pre-phase4-cleanup` (base `12d4612`)
-**Current phase:** Phase 4 preflight — cleanup only; implementation not started
-**Current gate:** Checkpoint 3 verified
-**Overall state:** Phase 0 `complete`; Phase 1 `complete`; Phase 2 `complete`; Phase 3 `complete`; Phase 4 preflight complete, implementation not started or authorised
+**Last audit:** 2026-08-30 05:18 UTC
+**Audited base:** `e899b52` (the `pre-phase4-cleanup` tip)
+**Implementation branch:** `phase-4` (base `e899b52`)
+**Current phase:** Phase 4 — complete
+**Current gate:** Checkpoint 4 verified
+**Overall state:** Phases 0–4 `complete`; Phase 5 not started
 
 ## Resume here
 
-**Phase 3 is complete and Checkpoint 3 is verified.** The real
-`AgentServiceCoordinationRuntime` is now the composition-root runtime. The
-Playground compatibility wrapper, correlations, run-scoped cancellation,
-reservations, timeout recovery, and cleanup are covered by automated tests and
-real-provider rehearsals.
+**Phase 4 is complete and Checkpoint 4 is verified.** Relay is integrated into
+the existing web app: users can configure three distinct ready Agents, create
+and explicitly start a run, observe ordered evidence and artifacts, stop active
+runs, and understand terminal outcomes without reading server logs.
 
-| Phase 3 gate condition | Evidence |
+| Phase 4 gate condition | Evidence |
 |---|---|
-| Existing AgentService/Playground behavior passes | Eight AgentService tests cover normal send, failure recovery, concurrency, compatibility, correlations, cancellation, and reservations |
-| Runtime success/failure/timeout/cancel/late cleanup passes | Six gateway tests with fake execution control; active maps and timers settle to zero |
-| Real full workflow and valid artifacts | Three fresh real Planner → Critic → Finaliser workflows completed, each with three first-attempt commits |
-| Reservation conflict and release | Live competing Playground sends returned structured `409 AGENT_RESERVED`; automated tests prove terminal release across mutable Agent operations |
-| Default timeout is feasible | Per-turn range 12.919–59.585 seconds; default remains 120 seconds with no timeout mini-RFC |
-| Scoped cancellation cannot stop later work | Regression test cancels one Agent Run by ID, starts a later run, and proves the stale run ID cannot target it |
-| Full regression gate | Docker Compose `npm run check` passed on the Phase 3 checkpoint: 20 files / 374 tests, both builds |
+| Client contracts and create flow | Web-owned response types and list/create/detail/start/stop calls reuse existing bearer and structured-error behavior; the form validates role uniqueness, readiness, section keys, limits, and policy ranges while preserving input |
+| Evidence experience | Run metadata, role mappings, events grouped by turn, nested attempts, retries/revisions, and escaped proposal/review/final artifacts render for all seven fixture scenarios |
+| Polling and stop | One 1.5-second request chain cleans up on terminal state, selection change, and unmount; stop has pending/disabled state; a browser-discovered post-start polling defect has a regression test |
+| Accessibility and responsive layout | Associated labels, error focus, meaningful terminal/status text, keyboard operation, and narrow layout passed; 390-pixel audit found no horizontal overflow or unlabeled inputs |
+| Real browser evidence | Disposable Compose completed one real three-role run and one real stop flow; completion reached 15 events and the stop flow displayed cancellation and stale-result evidence |
+| Full regression gate | Docker Compose `npm run check` passed: 21 server files / 377 tests, 2 web files / 12 tests, and both builds (389 tests total) |
 
-Phase 2 follow-up is also closed: unexpected `500` values are no longer logged
-or returned, public detail attempts exclude `leaseToken`, the additive
-`truncated`/`outputDigest` inputs are approved, and the redundant
-`PromptEnvelope.includedArtifactIds` field is removed by mini-RFC.
-
-The preflight cleanup now provides a redacted response-fixture matrix for
-completed, rejection/revision, retry, timeout, stopped, failed, and interrupted
-runs; its validation test rejects internal capabilities and secret-bearing
-content. The web testing strategy is recorded below, and the stale Phase 2 smoke
-message about public lease exposure is corrected.
-
-`P4-01` is the next task ID. Before implementation, explicitly authorise Phase
-4 and decide whether the missing optional `relay/contracts-v1` Git tag should be
-created. The immutable contract reference `ea469b2` already satisfies P0-11.
+`P5-01` is the next task ID. Phase 5 should freeze the demo scope, prepare the
+documentation and templates, rehearse the submission flow and fallback, then
+perform the dependency/security and clean-release checks. The optional
+`relay/contracts-v1` convenience tag remains a release-time decision; immutable
+commit `ea469b2` already satisfies P0-11.
 
 For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md`, clarify uncertainties before acting, run every test through Docker Compose, and require a passing Docker Compose `npm run check` before marking implementation complete.
 
@@ -57,6 +46,14 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 | Optional contract tag is absent | The accepted contract is immutably recorded as `ea469b2`, but neither the local nor remote repository has `relay/contracts-v1`. | Decide before release whether to create/push the convenience tag; no tag was created during cleanup. |
 
 ## Last checkpoint
+
+Checkpoint 4 is complete. The existing application owns a single Relay
+workspace that consumes only the public API read model, never renders lease
+capabilities or raw HTML, and presents run, turn, attempt, event, decision, and
+artifact evidence. Controlled tests cover every required fixture state and
+polling/stop behavior. Real browser flows passed in disposable Compose storage
+at laptop and narrow viewport sizes; repository runtime data was not mounted or
+touched.
 
 Checkpoint 3 is complete. The production composition root calls real Agents
 through `AgentService`, while the service retains ownership of ordinary Agent
@@ -148,6 +145,15 @@ no task was promoted on a host-only or focused run.
 | P3-16, P3-17 | `complete` | Three fresh real Planner → Critic → Finaliser runs completed with valid proposal/review/final artifacts and one attempt per role. During every active run, a competing Critic Playground send returned structured `409 AGENT_RESERVED`; automated coverage proves the same reservation releases after terminal settlement. |
 | P3-18 | `complete` | Three successful disposable-Compose rehearsals used the configured local-process runtime profile. Redacted run fingerprints: `9b487919`, `6191748d`, `f753a107`. Total times: 87.549s, 108.157s, 56.905s (range 56.905–108.157s). Per-turn times: 26.273/14.760/46.428s; 59.585/24.617/23.461s; 22.809/12.919/20.860s (range 12.919–59.585s). Every attempt completed below the unchanged 120s timeout, so the default is feasible. |
 
+## Phase 4 task ledger
+
+| Tasks | Status | Evidence |
+|---|---|---|
+| P4-01–P4-05 | `complete` | Web-owned public coordination types and API functions; validated create form with exactly three distinct ready Agents, unique section keys, bounded policy controls, preserved input, structured field errors, and explicit create then start. |
+| P4-06–P4-09 | `complete` | Detail renders status/phase/revision, roles, limits, actionable terminal summaries, ordered per-turn evidence, nested attempts, retries/revisions, and escaped artifacts across safe empty/loading/error/long-content states. |
+| P4-10–P4-12 | `complete` | A single 1.5-second polling chain cleans up correctly; stop reconciles terminal state without duplicate requests; seven redacted fixture scenarios and error envelopes have automated coverage. |
+| P4-13–P4-16 | `complete` | Minimal `App.tsx` integration preserves Agent/Playground ownership; labels, error focus, keyboard and responsive checks pass; disposable real-browser completion and stop flows passed. |
+
 ## Implemented inventory
 
 | Area | Evidence | Status | Notes |
@@ -167,6 +173,7 @@ no task was promoted on a host-only or focused run.
 | Shared Phase 1 fakes | `coordination/testing/memory-repository.ts`, `testing/fakes.ts` | `complete` | P1-13/P1-15: scripted runtime gains deferred, manually resolvable completions plus start waiters for race tests; the in-memory repository enforces lease, active-attempt, and status checks and returns deep copies so callers must reload. |
 | Walking-skeleton evidence | `coordination/walking-skeleton.test.ts` | `complete` | P1-15–P1-17: the real workflow, protocol, and context builder drive normal, reject/revise/approve, invalid→retry→success, invalid twice, timeout→retry, failure twice, start-failure, revision-limit, turn-limit, duplicate-start, stop-during-deferred, and late-result cases with no disk, HTTP, timers, or model. |
 | Service/API tests | `coordination/service.test.ts`, `coordination/routes.test.ts` | `complete` | Create-validation coverage added in P1-14; walking-skeleton coverage now uses real components rather than test-local stubs. |
+| Relay web workspace | `apps/web/src/RelayWorkspace.tsx`, `coordination-api.ts`, `coordination-types.ts` | `complete` | Create/start, list/detail, polling/stop, grouped evidence and escaped artifacts are integrated through `App.tsx`; Vitest/RTL tests cover all fixture states and request lifecycle behavior. |
 
 ## Outstanding by phase
 
@@ -184,22 +191,26 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 3
 
-- Complete. No Phase 3 tasks remain. `P4-01` is next after explicit Phase 4
-  authorisation.
+- Complete. No Phase 3 tasks remain.
 
 ### Phase 4
 
-- Web types/API, create form, run detail/timeline/artifacts, polling/stop, accessibility/responsiveness, and real browser verification.
-- Preflight cleanup is complete: response fixtures and their safety/consistency tests exist, the test strategy is recorded, and checkpoint metadata is reconciled. No `P4-*` implementation task has been marked complete.
+- Complete. No Phase 4 tasks remain. Checkpoint 4 passed through automated
+  fixture/request-lifecycle tests, the full Compose gate, and real browser
+  completion and stop flows.
 
 ### Phase 5
 
-- Product documentation set, README integration, Agent/demo templates, rehearsal/fallback, clean release verification, security inspection, and submission commit.
+- Not started. `P5-01` is next: product documentation set, README integration,
+  Agent/demo templates, rehearsal/fallback, clean release verification,
+  security inspection, and submission commit.
 
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-30 05:18 UTC | `phase-4` working tree | Phase 4 final Docker Compose `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, 2 web test files with 12 tests, web build, and server build. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
+| 2026-08-30 05:05–05:16 UTC | `phase-4` working tree | Phase 4 real browser completion, stop, accessibility, and responsive evidence | **Passed:** a disposable Compose deployment completed a real Planner → Critic → Finaliser run while the UI advanced automatically to 15 events and all three artifacts. A second run stopped as `STOPPED_BY_USER` with request/cancel/stopped/stale evidence. Layout passed at 1440×900 and 390×844; the narrow audit found no horizontal overflow or unlabeled inputs. The initial live flow exposed a post-start polling reset defect; an explicit polling epoch fixed it and a regression test now proves detail polling resumes after start. |
 | 2026-08-30 04:51 UTC | `pre-phase4-cleanup` working tree | Phase 4 preflight Docker Compose image build and full `npm run check` | **Passed (exit code 0):** server/web typechecks, 21 server test files with 377 tests, web build, and server build. The new three-test fixture suite covers all seven required UI scenarios, gapless evidence, consistent run IDs, and forbidden capability/secret strings. `npm ci` continues to report 1 moderate and 5 high findings deferred to P5-16. |
 | 2026-08-30 03:36 UTC | `phase3-p3-01-real-runtime` working tree | Initial P3-01–P3-13 focused Compose suites | **Failed:** 84/85 tests passed; the scoped-cancellation test attempted to resolve the second deferred runner before it had started. The deterministic test waited for runner admission before resolving it; no product assertion was weakened. |
 | 2026-08-30 03:38 UTC | `phase3-p3-01-real-runtime` working tree | P3-01–P3-13 focused Compose typecheck and tests | **Passed:** server typecheck plus 15 tests — eight AgentService regressions, six runtime gateway race/cleanup tests, and one complete three-role real-boundary integration test. |
@@ -293,7 +304,7 @@ no task was promoted on a host-only or focused run.
 | ~~Current Agent cancellation is keyed by Agent ID~~ | Resolved by `cancelRun(agentRunId)` plus an active-run ownership guard; the provider's Agent-keyed primitive is invoked only while that exact run still owns the Agent. | Closed 2026-08-30; stale-run regression passes. |
 | ~~Docker unreachable from the environment used for P1-07–P1-17~~ | Resolved. The gate was run on a host with Docker and passed; the tasks were promoted on that evidence. | Closed 2026-08-29. Any future assistant-run work must route the gate to a host with a container engine rather than substituting a host runner. |
 | ~~Phase 1 implementation decisions not yet confirmed~~ | Resolved. All nine were confirmed unchanged on 2026-08-30 before P2-01, together with the four Phase 2 handoff decisions. | Closed 2026-08-30. |
-| `stale_ignored` attempt status has no producer | By the confirmed §2.1 decision, evidence lives in the `attempt.stale_ignored` event, so the `CoordinationAttemptStatus` member stays unwritten. Phase 4 must read it from the event stream, not the attempt row. | Accepted. Revisit only if the Phase 4 timeline cannot render it from events. |
+| `stale_ignored` attempt status has no producer | By the confirmed §2.1 decision, evidence lives in the `attempt.stale_ignored` event, so the `CoordinationAttemptStatus` member stays unwritten. | Accepted. Phase 4 successfully renders the event-stream evidence in the stopped flow; revisit only if the contract changes. |
 | Optional `relay/contracts-v1` tag is absent | Older status text incorrectly implied the convenience tag existed. The immutable commit remains sufficient for the contract gate. | Recorded during Phase 4 preflight. Create/push a tag only after an explicit decision. |
 
 ## Decision log summary
@@ -314,7 +325,8 @@ no task was promoted on a host-only or focused run.
 - `app.ts` must register `setErrorHandler` before the production static/not-found block; the reverse order silently breaks the frozen error envelope in production only.
 - The approved additive mini-RFC adds `BeginAttemptInput.truncated?` and `CommitAcceptedArtifactInput.outputDigest?`, the only route by which the confirmed §1.2 and §1.3 decisions can reach the repository.
 - Approved Phase 2 follow-up mini-RFCs remove redundant `PromptEnvelope.includedArtifactIds` and exclude `leaseToken` only from the public attempt read model, leaving durable lease enforcement unchanged.
-- Phase 4 uses fixture-driven automated component tests for all required UI states, with browser verification reserved for the real normal and stop flows; details are recorded in `ASSUMPTIONS_AND_DECISIONS.md`.
+- Phase 4 uses fixture-driven automated component tests for all required UI states, with browser verification for the real normal and stop flows; both gates passed and details are recorded in `ASSUMPTIONS_AND_DECISIONS.md`.
+- Active detail polling uses a monotonic epoch to restart after the explicit start transition, avoiding dependence on React batching when the selected run ID is unchanged.
 
 See [`ASSUMPTIONS_AND_DECISIONS.md`](./ASSUMPTIONS_AND_DECISIONS.md) for full rationale.
 

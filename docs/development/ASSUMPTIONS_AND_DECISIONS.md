@@ -1,7 +1,7 @@
 # Relay Assumptions and Resolved Questions
 
 **Last audited:** 2026-08-30  
-**Current implementation base:** `12d4612`; Phase 4 preflight branch `pre-phase4-cleanup`
+**Current implementation base:** `e899b52`; Phase 4 branch `phase-4`
 **Accepted contract commit:** immutable reference `ea469b2` (optional `relay/contracts-v1` tag is absent)
 **Contract authority:** Sections 4 and 6–11 of [`overview.md`](./overview.md)
 
@@ -217,20 +217,21 @@ explicit decision before release.
 
 ### Phase 4 web testing strategy
 
-**Status:** Recorded during the 2026-08-30 Phase 4 preflight cleanup.
+**Status:** Implemented and verified on 2026-08-30 during Phase 4.
 
-Phase 4 will add Vitest plus React Testing Library with a jsdom environment to
-the web workspace when the first UI behavior is implemented. Automated tests
-will render the redacted fixture matrix and cover completed,
+Phase 4 adds Vitest plus React Testing Library with a jsdom environment to the
+web workspace. Automated tests render the redacted fixture matrix and cover completed,
 rejection/revision, retry, timeout, stopped, failed, and interrupted states.
-Polling tests will use controlled timers and requests to prove one request chain
-and cleanup on terminal state, selection change, and unmount. The web test
-script will join the root `npm run check` gate when introduced.
+Polling tests use controlled timers and requests to prove one request chain and
+cleanup on terminal state, selection change, and unmount. The web test script
+is part of the root `npm run check` gate.
 
-Browser verification remains required for one real create/start/poll/complete
-flow and one stop flow (P4-16), plus keyboard, responsive, and legibility checks.
-Fixture tests supplement that evidence; they do not replace the real browser
-gate. No web test dependency is added during preflight cleanup.
+Browser verification passed for one real create/start/poll/complete flow and
+one stop flow (P4-16), plus keyboard, responsive, and legibility checks at
+1440×900 and 390×844. Fixture tests supplement that evidence; they do not
+replace the real browser gate. The live normal flow exposed a post-start polling
+reset defect; an explicit polling epoch fixed it and a regression test now
+covers that transition.
 
 ### Shared conversation availability
 

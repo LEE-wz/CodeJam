@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
+import { RelayWorkspace } from "./RelayWorkspace";
 import type { Agent, AgentRun, Message, SystemInfo } from "./types";
 
 const starterPrompts = [
@@ -49,6 +50,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<"agents" | "relay">("agents");
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
@@ -141,6 +143,7 @@ export default function App() {
       const { agent } = await api.createAgent(form);
       await refreshAgents();
       setSelectedId(agent.id);
+      setWorkspaceView("agents");
       setShowCreate(false);
       setForm(emptyForm);
     } catch (reason) {
@@ -331,6 +334,15 @@ export default function App() {
           <span>＋</span> Create Agent
         </button>
 
+        <button
+          className={"relay-nav-button " + (workspaceView === "relay" ? "selected" : "")}
+          onClick={() => setWorkspaceView("relay")}
+          aria-current={workspaceView === "relay" ? "page" : undefined}
+        >
+          <span className="relay-nav-icon">⇄</span>
+          <span><strong>Relay</strong><small>Verified handoffs</small></span>
+        </button>
+
         <div className="sidebar-label">
           <span>Your Agents</span>
           <span>{agents.length}</span>
@@ -340,7 +352,10 @@ export default function App() {
             <button
               className={"agent-card " + (agent.id === selectedId ? "selected" : "")}
               key={agent.id}
-              onClick={() => setSelectedId(agent.id)}
+              onClick={() => {
+                setSelectedId(agent.id);
+                setWorkspaceView("agents");
+              }}
             >
               <div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div>
               <div className="agent-card-copy">
@@ -392,7 +407,9 @@ export default function App() {
           </div>
         )}
 
-        {selected ? (
+        {workspaceView === "relay" ? (
+          <RelayWorkspace agents={agents} />
+        ) : selected ? (
           <>
             <header className="agent-header">
               <div>
