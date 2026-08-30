@@ -63,6 +63,9 @@ export const harness = (
     runtime,
     clock,
     ids,
+    // No test may depend on a wall-clock tick: the reconciliation sweep is
+    // driven explicitly where it is under test (P11-06).
+    reconcileIntervalMs: 0,
   });
   return { service, repository, runtime, clock, ids };
 };

@@ -82,6 +82,12 @@ export type CoordinationErrorCode =
   | "MAX_TURNS_EXCEEDED"
   | "SERVER_RESTARTED"
   | "STOPPED_BY_USER"
+  /**
+   * A run whose orchestration loop exited without a terminal repository call and
+   * could not be safely resumed (Phase 11, P11-02). It names an abandoned run,
+   * never an Agent fault: the Agents behaved, the loop lost its claim on the run.
+   */
+  | "RUN_ABANDONED"
   | "INTERNAL_ERROR";
 
 export interface CoordinationParticipant {
@@ -296,7 +302,13 @@ export type CoordinationEventType =
   | "run.stopped"
   | "run.completed"
   | "run.failed"
-  | "run.interrupted";
+  | "run.interrupted"
+  /**
+   * A non-terminal run whose stranded turn and attempt were settled so the run
+   * stays schedulable (Phase 11, P11-02). Additive: it never replaces a terminal
+   * event, and a run may carry several across its life.
+   */
+  | "run.reconciled";
 
 export type CoordinationEventActor =
   | { type: "system" }

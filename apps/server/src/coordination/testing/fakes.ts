@@ -12,7 +12,9 @@ import type {
   CoordinationRuntime,
   CreateRunRecordInput,
   FinishAttemptInput,
+  NonTerminalRunSummary,
   PromptEnvelope,
+  ReconcileRunResult,
   RuntimeExecutionInput,
   RuntimeOutcome,
   RuntimeStartResult,
@@ -144,6 +146,17 @@ export class FakeCoordinationRepository implements CoordinationRepository {
 
   async interruptActiveRuns(): Promise<CoordinationRunId[]> {
     return notImplemented("FakeCoordinationRepository.interruptActiveRuns");
+  }
+
+  async listNonTerminalRuns(): Promise<NonTerminalRunSummary[]> {
+    return notImplemented("FakeCoordinationRepository.listNonTerminalRuns");
+  }
+
+  async reconcileRun(_input: {
+    runId: CoordinationRunId;
+    reason: string;
+  }): Promise<ReconcileRunResult> {
+    return notImplemented("FakeCoordinationRepository.reconcileRun");
   }
 }
 

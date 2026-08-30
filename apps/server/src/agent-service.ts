@@ -9,6 +9,11 @@ import type {
   CoordinationReservationSource,
   StartAgentExecutionRequest,
 } from "./coordination/contracts.js";
+import {
+  collectReservedAgentIds,
+  findEnrollingRunSummary,
+  findReservingRunId,
+} from "./coordination/repository.js";
 import type {
   Agent,
   AgentRun,
@@ -21,6 +26,16 @@ import type {
 import { WorkspaceManager } from "./workspace.js";
 
 const now = () => new Date().toISOString();
+
+/**
+ * Refusal text for an Agent a coordination run is currently driving (P11-08).
+ * It names the session so the user knows where to look, and carries nothing
+ * else: no lease, no prompt, no turn or attempt internals.
+ */
+const reservedMessage = (sessionName?: string): string =>
+  sessionName
+    ? `Agent is reserved by the session "${sessionName}"`
+    : "Agent is reserved by coordination";
 
 export class AgentService {
   private readonly activeExecutions = new Map<
@@ -236,16 +251,17 @@ export class AgentService {
       if (storedAgent.status === "busy") {
         throw new HttpError(409, "This Agent is already running");
       }
-      const reservingRunId = database.coordinationRuns.find(
-        (coordinationRun) =>
-          (coordinationRun.status === "running" ||
-            coordinationRun.status === "stop_requested") &&
-          coordinationRun.participants.some(
-            (participant) => participant.agentId === input.agentId,
-          ),
-      )?.id;
+      // The attempt-level rule (P11-05): an Agent is reserved while it holds a
+      // running attempt, not merely while it is enrolled in a live run. By the
+      // time coordination reaches here its own attempt is already durably
+      // `running`, so the ownership check below still matches exactly one run.
+      const reservingRunId = findReservingRunId(database, input.agentId);
       if (input.source === "playground" && reservingRunId) {
-        throw new HttpError(409, "Agent is reserved by coordination", "AGENT_RESERVED");
+        throw new HttpError(
+          409,
+          reservedMessage(findEnrollingRunSummary(database, input.agentId)?.name),
+          "AGENT_RESERVED",
+        );
       }
       if (
         input.source === "coordination" &&
@@ -408,18 +424,18 @@ export class AgentService {
 
   private async assertAgentNotReserved(agentId: string): Promise<void> {
     if (await this.reservations?.getReservingRunId(agentId)) {
-      throw new HttpError(409, "Agent is reserved by coordination", "AGENT_RESERVED");
+      const summary = await this.reservations?.getReservingRunSummary?.(agentId);
+      throw new HttpError(409, reservedMessage(summary?.name), "AGENT_RESERVED");
     }
   }
 
   private assertDatabaseAgentNotReserved(database: Database, agentId: string): void {
-    const reserved = database.coordinationRuns.some(
-      (run) =>
-        (run.status === "running" || run.status === "stop_requested") &&
-        run.participants.some((participant) => participant.agentId === agentId),
-    );
-    if (reserved) {
-      throw new HttpError(409, "Agent is reserved by coordination", "AGENT_RESERVED");
+    if (collectReservedAgentIds(database).has(agentId)) {
+      throw new HttpError(
+        409,
+        reservedMessage(findEnrollingRunSummary(database, agentId)?.name),
+        "AGENT_RESERVED",
+      );
     }
   }
 

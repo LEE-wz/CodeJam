@@ -562,3 +562,65 @@ carries its own required test matrix.
 | Coordinator identity (P14-03) | Deferred to Phase 14 entry | Recorded there before `P14-03` starts |
 | API and module naming (P10-08) | The product renames to Session; `/api/coordination-runs` and the server-side `coordination*` modules keep their names | Deliberate divergence between product name and API path, to avoid ~1,100 lines of test churn for no user-visible gain |
 | Phase 9 | Superseded by Phase 15 | Releasing the pre-v2 feature set would document a product that no longer exists |
+
+## Mini-RFC: Phase 11 lifecycle reconciliation (approved, P11-02)
+
+**Current contract.** `overview.md` Section 7.2 freezes the coordination event
+set and Section 10.4 derives Agent reservations from run membership. Neither
+describes a run whose orchestration loop has exited without a terminal
+transition, because the frozen design assumed every loop exit was terminal.
+
+**Blocker.** It is not. `P11-01` enumerates six exits in
+`CoordinationService` that returned without a terminal repository call. Each one
+left the run `running` with its `activeTurnId` set and its participants
+reserved, with nothing left to drive it — the reported "stuck Agents" defect.
+Neither the error-code enum nor the event set could express the outcome.
+
+**Approved additions.** Both are additive; no stored shape changes and no
+migration is required.
+
+| # | Addition | Where | Why |
+|---|---|---|---|
+| 1 | `RUN_ABANDONED` joins `CoordinationErrorCode` | `types.ts` | Names a run whose loop exited and could not be resumed. It is not an Agent fault, so no existing code fits. |
+| 2 | `run.reconciled` joins the frozen event set | `types.ts`, `events.ts` | Records that a stranded turn and attempt were settled while the run stayed schedulable. It never replaces a terminal event, and one run may carry several. |
+
+**Redaction.** `run.reconciled` carries only `code` and `reason`, both already on
+the `ALLOWED_EVENT_DETAIL_KEYS` allowlist, so the allowlist itself is unchanged.
+The event's `reason` passes through `defaultRedactor` inside the factory like
+every other event, proven by a test that plants a lease token in the reason and
+asserts it is replaced.
+
+### Reservation model as implemented (P11-05)
+
+The recorded Session v2 answer is "reserve per running attempt". Implementing it
+literally everywhere would also have allowed one Agent to be enrolled in two
+concurrently live coordination runs, which the decision's stated consequence
+("idle participants stay usable in the Playground") never asked for and which
+would put two state machines on one Agent. The rule is therefore implemented at
+two levels, both in `repository.ts`:
+
+| Level | Helper | Governs | Rule |
+|---|---|---|---|
+| Attempt | `collectReservedAgentIds`, `findReservingRunId` | Playground turns, Agent edit/start/stop/delete | Reserved while the Agent holds a `running` attempt in a non-terminal run |
+| Run | `collectEnrolledAgentIds` | `startRun` participant admission | Refused while the Agent is a participant of another non-terminal run |
+
+This satisfies the phase sheet's requirement that `startRun` "keep refusing an
+Agent that is genuinely mid-attempt" — it refuses strictly more — and it is why
+the existing verified-handoff reservation tests in `api.test.ts` pass unchanged.
+Two repository/agent-service tests that asserted the old whole-run rule were
+updated and now prove the new one; the justification is this entry.
+
+`getReservingRunSummary` is a separate, display-only read. It is enrolment-shaped
+on purpose: a user whose Agent is refused wants the session named whether or not
+that Agent happens to be mid-attempt at that instant. It returns the run id and
+name snapshot and nothing else.
+
+### `stop_requested` runs are settled by the sweep
+
+`reconcileRun` refuses any run that is not `running`: terminal runs are
+immutable, and a `stop_requested` run belongs to the stop path. That leaves one
+gap — a `stop_requested` run whose `stopRun` call died before `finishStopped`
+would hold its reservations forever. The Phase 11 sweep closes it by calling
+`finishStopped`, which is idempotent and is exactly the transition `stopRun`
+would have made next, so racing an in-flight stop request is harmless. Recorded
+here because it extends `P11-06` beyond the sweep's literal wording.

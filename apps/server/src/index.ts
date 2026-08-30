@@ -97,6 +97,7 @@ const coordination = new CoordinationService({
   clock,
   ids,
   logger,
+  reconcileIntervalMs: config.coordinationReconcileIntervalMs,
 });
 
 // Coordination initialises after AgentService so that ordinary Agent Runs are
@@ -109,6 +110,7 @@ requestLogger = app.log;
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "Shutting down");
+  await coordination.shutdown();
   await app.close();
   process.exit(0);
 };

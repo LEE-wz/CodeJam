@@ -593,20 +593,56 @@ describe("startRun readiness and reservations", () => {
     ]);
   });
 
-  it("exposes derived reservations and releases them when the run goes terminal", async () => {
+  /**
+   * Updated for the P11-05 decision (recorded in ASSUMPTIONS_AND_DECISIONS.md):
+   * an Agent is reserved while it holds a **running attempt**, not while it
+   * merely appears in a running run. The previous version of this test asserted
+   * the whole-run rule that decision replaced.
+   */
+  it("reserves only the Agent that holds a running attempt, and releases it on settlement", async () => {
     const harness = await createHarness();
     await harness.repository.createRun({ run: runRecord() });
     expect(await harness.repository.listReservedAgentIds()).toEqual([]);
 
-    await harness.repository.startRun("run-1");
-    expect((await harness.repository.listReservedAgentIds()).sort()).toEqual(
-      [PLANNER_AGENT.id, CRITIC_AGENT.id, FINALIZER_AGENT.id].sort(),
-    );
-    expect(await harness.repository.isAgentReserved(CRITIC_AGENT.id)).toBe(true);
+    const started = await harness.repository.startRun("run-1");
+    if (started.kind !== "started") throw new Error("run did not start");
+
+    // A started run alone reserves nobody: its participants are idle, so they
+    // stay usable in the Playground.
+    expect(await harness.repository.listReservedAgentIds()).toEqual([]);
+    expect(await harness.repository.isAgentReserved(PLANNER_AGENT.id)).toBe(false);
+
+    await harness.repository.scheduleTurn({
+      runId: "run-1",
+      expectedRunVersion: started.run.version,
+      turn: turnRecord(),
+      nextPhase: "drafting",
+      nextRevision: 0,
+    });
+    await harness.repository.beginAttempt({
+      runId: "run-1",
+      turnId: "turn-1",
+      attempt: attemptRecord(),
+    });
+
+    // Exactly the Agent mid-attempt is reserved; the other two are not.
+    expect(await harness.repository.listReservedAgentIds()).toEqual([PLANNER_AGENT.id]);
+    expect(await harness.repository.isAgentReserved(PLANNER_AGENT.id)).toBe(true);
+    expect(await harness.repository.isAgentReserved(CRITIC_AGENT.id)).toBe(false);
+    expect(await harness.repository.getReservingRunId(PLANNER_AGENT.id)).toBe("run-1");
+    expect(await harness.repository.getReservingRunId(CRITIC_AGENT.id)).toBeUndefined();
+
+    // The advisory read stays enrolment-shaped: it names the session for every
+    // participant, whether or not that participant is mid-attempt.
+    expect(await harness.repository.getReservingRunSummary(CRITIC_AGENT.id)).toEqual({
+      runId: "run-1",
+      name: "Launch plan review",
+    });
 
     await harness.repository.finishStopped("run-1");
     expect(await harness.repository.listReservedAgentIds()).toEqual([]);
-    expect(await harness.repository.isAgentReserved(CRITIC_AGENT.id)).toBe(false);
+    expect(await harness.repository.isAgentReserved(PLANNER_AGENT.id)).toBe(false);
+    expect(await harness.repository.getReservingRunSummary(PLANNER_AGENT.id)).toBeUndefined();
   });
 });
 
@@ -1181,6 +1217,142 @@ describe("terminal commands", () => {
     expect(
       await harness.repository.failRun({ runId: "missing", code: "INTERNAL_ERROR", message: "x" }),
     ).toBeUndefined();
+  });
+});
+
+// -------------------------------------- P11-04 reconciliation repository
+
+describe("listNonTerminalRuns", () => {
+  it("reports only non-terminal runs, with their active turn and attempt state", async () => {
+    const harness = await createHarness();
+    expect(await harness.repository.listNonTerminalRuns()).toEqual([]);
+
+    // A `created` run has no orchestration, so nothing can have stranded it.
+    await harness.repository.createRun({ run: runRecord() });
+    expect(await harness.repository.listNonTerminalRuns()).toEqual([]);
+
+    const started = await harness.repository.startRun("run-1");
+    if (started.kind !== "started") throw new Error("run did not start");
+    expect(await harness.repository.listNonTerminalRuns()).toEqual([
+      { runId: "run-1", status: "running", hasRunningAttempt: false },
+    ]);
+
+    await harness.repository.scheduleTurn({
+      runId: "run-1",
+      expectedRunVersion: started.run.version,
+      turn: turnRecord(),
+      nextPhase: "drafting",
+      nextRevision: 0,
+    });
+    await harness.repository.beginAttempt({
+      runId: "run-1",
+      turnId: "turn-1",
+      attempt: attemptRecord(),
+    });
+    expect(await harness.repository.listNonTerminalRuns()).toEqual([
+      {
+        runId: "run-1",
+        status: "running",
+        activeTurnId: "turn-1",
+        hasRunningAttempt: true,
+      },
+    ]);
+
+    await harness.repository.requestStop("run-1");
+    expect(await harness.repository.listNonTerminalRuns()).toMatchObject([
+      { runId: "run-1", status: "stop_requested" },
+    ]);
+
+    await harness.repository.finishStopped("run-1");
+    expect(await harness.repository.listNonTerminalRuns()).toEqual([]);
+  });
+});
+
+describe("reconcileRun", () => {
+  it("settles the stranded turn and attempt but leaves the run schedulable", async () => {
+    const harness = await createHarness();
+    await runWithRunningAttempt(harness);
+    const before = await harness.repository.getRunDetails("run-1");
+
+    const result = await harness.repository.reconcileRun({
+      runId: "run-1",
+      reason: "orchestration loop exited without settling the run",
+    });
+
+    expect(result.kind).toBe("reconciled");
+    const details = await harness.repository.getRunDetails("run-1");
+    // The run is still running and has no active turn: schedulable again.
+    expect(details?.run.status).toBe("running");
+    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.version).toBe((before?.run.version ?? 0) + 1);
+    expect(details?.turns[0]?.status).toBe("failed");
+    expect(details?.attempts[0]).toMatchObject({
+      status: "cancelled",
+      errorCode: "RUN_ABANDONED",
+    });
+    // Settling the attempt is what releases the derived reservation.
+    expect(await harness.repository.listReservedAgentIds()).toEqual([]);
+
+    const events = await eventTypes(harness);
+    expect(events.filter((type) => type === "run.reconciled")).toHaveLength(1);
+    // The per-run sequence stays gapless.
+    const sequences = (await harness.repository.getRunDetails("run-1"))?.events.map(
+      (event) => event.sequence,
+    );
+    expect(sequences).toEqual(sequences?.map((_value, index) => index + 1));
+  });
+
+  it("is idempotent: a run with nothing stranded is a no-op", async () => {
+    const harness = await createHarness();
+    await runWithRunningAttempt(harness);
+    await harness.repository.reconcileRun({ runId: "run-1", reason: "first" });
+
+    const afterFirst = await harness.repository.getRunDetails("run-1");
+    const second = await harness.repository.reconcileRun({ runId: "run-1", reason: "second" });
+
+    expect(second.kind).toBe("noop");
+    const afterSecond = await harness.repository.getRunDetails("run-1");
+    // No version bump, no duplicate event, no state change whatsoever.
+    expect(afterSecond?.run.version).toBe(afterFirst?.run.version);
+    expect(afterSecond?.events).toEqual(afterFirst?.events);
+  });
+
+  it("never re-opens a terminal run and refuses a run the stop path owns", async () => {
+    const harness = await createHarness();
+    await runWithRunningAttempt(harness);
+    await harness.repository.requestStop("run-1");
+
+    // `stop_requested` belongs to the stop path, not to reconciliation.
+    const owned = await harness.repository.reconcileRun({ runId: "run-1", reason: "stopping" });
+    expect(owned.kind).toBe("owned");
+
+    await harness.repository.finishStopped("run-1");
+    const snapshot = await harness.repository.getRunDetails("run-1");
+
+    const terminal = await harness.repository.reconcileRun({ runId: "run-1", reason: "after" });
+    expect(terminal.kind).toBe("terminal");
+    expect(await harness.repository.getRunDetails("run-1")).toEqual(snapshot);
+  });
+
+  it("returns not_found for an unknown run", async () => {
+    const harness = await createHarness();
+    expect(await harness.repository.reconcileRun({ runId: "missing", reason: "x" })).toEqual({
+      kind: "not_found",
+    });
+  });
+
+  it("records no lease token in the reconciliation event", async () => {
+    const harness = await createHarness();
+    await runWithRunningAttempt(harness);
+    await harness.repository.reconcileRun({ runId: "run-1", reason: "loop exited" });
+
+    const details = await harness.repository.getRunDetails("run-1");
+    const event = details?.events.find((candidate) => candidate.type === "run.reconciled");
+    expect(event).toMatchObject({
+      turnId: "turn-1",
+      details: { code: "RUN_ABANDONED", reason: "loop exited" },
+    });
+    expect(JSON.stringify(event)).not.toContain("lease-0001");
   });
 });
 

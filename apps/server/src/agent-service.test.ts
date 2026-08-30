@@ -8,7 +8,11 @@ import { JsonStore } from "./store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { CoordinationReservationSource } from "./coordination/contracts.js";
-import type { CoordinationRun } from "./coordination/types.js";
+import type {
+  CoordinationAttempt,
+  CoordinationRun,
+  CoordinationTurn,
+} from "./coordination/types.js";
 
 class FakeRunner implements AgentRunner {
   async run(request: RunnerRequest): Promise<RunnerResult> {
@@ -67,10 +71,19 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
   return (await makeHarness(runner)).service;
 }
 
+/**
+ * Seeds a live coordination run holding `agentId`.
+ *
+ * Since P11-05, reservation is derived from a **running attempt** rather than
+ * from enrolment, so the fixture also seeds the running turn and attempt that
+ * the real orchestration commits (through `beginAttempt`) before it ever calls
+ * `startExecution`. Pass `withRunningAttempt: false` to seed enrolment alone.
+ */
 async function reserveAgent(
   store: JsonStore,
   agentId: string,
   runId = "coordination-run-1",
+  { withRunningAttempt = true }: { withRunningAttempt?: boolean } = {},
 ): Promise<void> {
   const timestamp = new Date().toISOString();
   const run: CoordinationRun = {
@@ -100,8 +113,40 @@ async function reserveAgent(
     createdAt: timestamp,
     updatedAt: timestamp,
     startedAt: timestamp,
+    ...(withRunningAttempt ? { activeTurnId: "turn-1" } : {}),
   };
-  await store.mutate((database) => database.coordinationRuns.push(run));
+  const turn: CoordinationTurn = {
+    id: "turn-1",
+    runId,
+    sequence: 1,
+    role: "planner",
+    agentId,
+    kind: "initial_proposal",
+    status: "running",
+    attemptCount: 1,
+    activeAttemptId: "attempt-1",
+    inputArtifactIds: [],
+    lastValidationErrors: [],
+    createdAt: timestamp,
+    startedAt: timestamp,
+  };
+  const attempt: CoordinationAttempt = {
+    id: "attempt-1",
+    runId,
+    turnId: "turn-1",
+    number: 1,
+    agentId,
+    leaseToken: "lease-0001",
+    status: "running",
+    createdAt: timestamp,
+  };
+  await store.mutate((database) => {
+    database.coordinationRuns.push(run);
+    if (withRunningAttempt) {
+      database.coordinationTurns.push(turn);
+      database.coordinationAttempts.push(attempt);
+    }
+  });
 }
 
 describe("Agent lifecycle", () => {

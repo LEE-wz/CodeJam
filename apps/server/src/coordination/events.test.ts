@@ -137,6 +137,12 @@ const allDrafts = (): CoordinationEventDraft[] => [
     reason: "turn ceiling reached",
   }),
   events.runInterrupted({ runId: RUN_ID, code: "SERVER_RESTARTED" }),
+  events.runReconciled({
+    runId: RUN_ID,
+    turnId: TURN_ID,
+    code: "RUN_ABANDONED",
+    reason: "orchestration loop exited without settling the run",
+  }),
 ];
 
 const FROZEN_EVENT_TYPES: CoordinationEventType[] = [
@@ -157,6 +163,7 @@ const FROZEN_EVENT_TYPES: CoordinationEventType[] = [
   "run.completed",
   "run.failed",
   "run.interrupted",
+  "run.reconciled",
 ];
 
 describe("coordination event factories", () => {
@@ -184,6 +191,7 @@ describe("coordination event factories", () => {
       "run.completed: Run completed.",
       "run.failed: Run failed: MAX_TURNS_EXCEEDED.",
       "run.interrupted: Run interrupted by a server restart.",
+      "run.reconciled: Run reconciled after an orchestration exit.",
     ]);
   });
 

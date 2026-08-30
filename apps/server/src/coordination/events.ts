@@ -215,6 +215,17 @@ export interface CoordinationEventFactory {
     runId: CoordinationRunId;
     code: CoordinationErrorCode;
   }): CoordinationEventDraft;
+
+  /**
+   * A stranded turn and attempt were settled so the run stays schedulable
+   * (P11-02). `turnId` names the turn that was cleared, when there was one.
+   */
+  runReconciled(input: {
+    runId: CoordinationRunId;
+    turnId?: CoordinationTurnId | undefined;
+    code: CoordinationErrorCode;
+    reason: string;
+  }): CoordinationEventDraft;
 }
 
 /**
@@ -480,6 +491,18 @@ export const createCoordinationEventFactory = (
         actor: SYSTEM,
         message: "Run interrupted by a server restart.",
         details: { code },
+      }),
+
+    runReconciled: ({ runId, turnId, code, reason }) =>
+      draft({
+        runId,
+        ...(turnId === undefined ? {} : { turnId }),
+        type: "run.reconciled",
+        actor: SYSTEM,
+        // The message names no lease, prompt, or raw output: reconciliation is a
+        // backend bookkeeping step, and its evidence stays at that level.
+        message: "Run reconciled after an orchestration exit.",
+        details: { code, reason },
       }),
   };
 };

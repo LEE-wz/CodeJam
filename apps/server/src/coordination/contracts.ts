@@ -220,6 +220,34 @@ export interface FinishAttemptInput {
   validationErrors?: string[];
 }
 
+/**
+ * A run that is not terminal, plus the two facts a reconciler needs to decide
+ * whether anything is stranded: which turn the run still points at, and whether
+ * any attempt of the run is durably `running` (P11-04).
+ */
+export interface NonTerminalRunSummary {
+  runId: CoordinationRunId;
+  status: "running" | "stop_requested";
+  activeTurnId?: CoordinationTurnId;
+  hasRunningAttempt: boolean;
+}
+
+/**
+ * Outcome of one reconciliation pass over a single run (P11-04).
+ *
+ * `reconciled` settled a stranded turn and attempt and left the run `running`
+ * and schedulable. `noop` found nothing to settle, which is what makes the
+ * command idempotent. `owned` means another actor is responsible for the run's
+ * next transition (a `stop_requested` run belongs to the stop path). `terminal`
+ * and `not_found` are both "there is nothing to reconcile here".
+ */
+export type ReconcileRunResult =
+  | { kind: "reconciled"; run: CoordinationRun }
+  | { kind: "noop"; run: CoordinationRun }
+  | { kind: "owned"; run: CoordinationRun }
+  | { kind: "terminal"; run: CoordinationRun }
+  | { kind: "not_found" };
+
 export interface CoordinationRepository {
   listRuns(limit?: number): Promise<CoordinationRun[]>;
   getRunDetails(id: CoordinationRunId): Promise<CoordinationRunDetails | undefined>;
@@ -248,6 +276,20 @@ export interface CoordinationRepository {
     message: string;
   }): Promise<CoordinationRun | undefined>;
   interruptActiveRuns(): Promise<CoordinationRunId[]>;
+  /**
+   * Every run that is neither terminal nor `created`. The reconciler pairs this
+   * with its own `activeLoops` map to decide which runs have no owner.
+   */
+  listNonTerminalRuns(): Promise<NonTerminalRunSummary[]>;
+  /**
+   * Settle a stranded turn and attempt in one mutation, leaving the run
+   * `running` and schedulable. Idempotent on a run that needs nothing, and it
+   * never re-opens a terminal run.
+   */
+  reconcileRun(input: {
+    runId: CoordinationRunId;
+    reason: string;
+  }): Promise<ReconcileRunResult>;
 }
 
 export interface RuntimeExecutionInput {
@@ -313,6 +355,24 @@ export interface AgentExecutionControl {
   cancelRun(agentRunId: AgentRunId): Promise<boolean>;
 }
 
+/**
+ * Display-only description of the run an Agent is enrolled in (P11-05, P11-08).
+ * It carries the run's id and its name snapshot and nothing else: no lease, no
+ * prompt, no turn or attempt internals.
+ */
+export interface CoordinationReservationAdvisory {
+  runId: CoordinationRunId;
+  name: string;
+}
+
 export interface CoordinationReservationSource {
   getReservingRunId(agentId: AgentId): Promise<CoordinationRunId | undefined>;
+  /**
+   * Optional so existing compositions and test doubles keep working. When
+   * present, the reservation message can name the session instead of being
+   * opaque.
+   */
+  getReservingRunSummary?(
+    agentId: AgentId,
+  ): Promise<CoordinationReservationAdvisory | undefined>;
 }

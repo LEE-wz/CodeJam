@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createCoordinationEventFactory } from "./events.js";
 import {
   ALLOWED_EVENT_DETAIL_KEYS,
   MAX_EVENT_DETAIL_ARRAY_ITEMS,
   MAX_EVENT_DETAIL_CHARS,
+  REDACTION_PLACEHOLDER,
   TRUNCATION_MARKER,
   defaultRedactor,
 } from "./redaction.js";
@@ -146,5 +148,24 @@ describe("defaultRedactor.eventDetails", () => {
     const backwards = defaultRedactor.eventDetails({ code: "c", agentId: "a", role: "critic" });
     expect(Object.keys(forwards)).toEqual(["agentId", "code", "role"]);
     expect(Object.keys(backwards)).toEqual(Object.keys(forwards));
+  });
+});
+
+// ------------------------------------------------------ P11-02 new event
+
+describe("run.reconciled redaction", () => {
+  it("keeps only allowlisted details and strips a lease token from the reason", () => {
+    const draft = createCoordinationEventFactory().runReconciled({
+      runId: "run-1",
+      turnId: "turn-1",
+      code: "RUN_ABANDONED",
+      reason: "loop exited holding leaseToken=abcd-1234-secret",
+    });
+
+    expect(Object.keys(draft.details).sort()).toEqual(["code", "reason"]);
+    expect(draft.details.code).toBe("RUN_ABANDONED");
+    expect(draft.details.reason).not.toContain("abcd-1234-secret");
+    expect(draft.details.reason).toContain(REDACTION_PLACEHOLDER);
+    expect(draft.message).toBe("Run reconciled after an orchestration exit.");
   });
 });
