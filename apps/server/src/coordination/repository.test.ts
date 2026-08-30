@@ -14,6 +14,13 @@ import {
   REJECTING_REVIEW_PAYLOAD,
   VALID_PROPOSAL_PAYLOAD,
 } from "./testing/fixtures.js";
+import {
+  PARTICIPANT_ONE,
+  PARTICIPANT_THREE,
+  PARTICIPANT_TWO,
+  countdownPayload,
+  freeChatPayload,
+} from "./testing/session-fixtures.js";
 import { DEFAULT_COORDINATION_POLICY } from "./types.js";
 import type {
   CoordinationArtifact,
@@ -110,6 +117,82 @@ const proposalArtifact = (overrides: Partial<CoordinationArtifact> = {}): Coordi
     ...overrides,
   }) as CoordinationArtifact;
 
+const sessionRunRecord = (overrides: Partial<CoordinationRun> = {}): CoordinationRun => ({
+  id: "run-session",
+  name: "Countdown session",
+  objective: "Count down from 2 to 1 together.",
+  requiredSections: [],
+  participants: [PARTICIPANT_ONE, PARTICIPANT_TWO, PARTICIPANT_THREE].map((agent) => ({
+    role: "participant" as const,
+    agentId: agent.id,
+    agentNameSnapshot: agent.name,
+  })),
+  policy: {
+    ...DEFAULT_COORDINATION_POLICY,
+    workflow: "shared_session_v1",
+    maxRevisions: 0,
+    maxTurns: 2,
+    sessionProtocol: "countdown",
+    sessionStartValue: 2,
+  },
+  status: "created",
+  phase: "sessioning",
+  revision: 0,
+  nextTurnSequence: 1,
+  sharedState: { nextExpectedNumber: 2 },
+  version: 1,
+  createdAt: "2026-08-29T00:00:00.000Z",
+  updatedAt: "2026-08-29T00:00:00.000Z",
+  ...overrides,
+});
+
+const sessionTurnRecord = (overrides: Partial<CoordinationTurn> = {}): CoordinationTurn => ({
+  id: "turn-session-1",
+  runId: "run-session",
+  sequence: 1,
+  role: "participant",
+  agentId: PARTICIPANT_ONE.id,
+  kind: "session_turn",
+  status: "scheduled",
+  attemptCount: 0,
+  inputArtifactIds: [],
+  lastValidationErrors: [],
+  createdAt: "2026-08-29T00:00:00.000Z",
+  ...overrides,
+});
+
+const sessionAttemptRecord = (
+  overrides: Partial<CoordinationAttempt> = {},
+): CoordinationAttempt => ({
+  id: "attempt-session-1",
+  runId: "run-session",
+  turnId: "turn-session-1",
+  number: 1,
+  agentId: PARTICIPANT_ONE.id,
+  leaseToken: "lease-session-0001",
+  status: "running",
+  promptDigest: "sha256:session-prompt",
+  createdAt: "2026-08-29T00:00:00.000Z",
+  ...overrides,
+});
+
+const sessionArtifact = (
+  content: string,
+  overrides: Partial<CoordinationArtifact> = {},
+): CoordinationArtifact =>
+  ({
+    id: "artifact-session-1",
+    runId: "run-session",
+    turnId: "turn-session-1",
+    createdByRole: "participant",
+    createdByAgentId: PARTICIPANT_ONE.id,
+    sizeChars: content.length,
+    createdAt: "2026-08-29T00:00:00.000Z",
+    type: "session_message",
+    payload: countdownPayload(Number(content)),
+    ...overrides,
+  }) as CoordinationArtifact;
+
 const agentRunRow = (id: string, agentId: string, status: AgentRun["status"]): AgentRun => ({
   id,
   agentId,
@@ -140,6 +223,9 @@ const createHarness = async (): Promise<Harness> => {
       agentRow(PLANNER_AGENT.id, PLANNER_AGENT.name),
       agentRow(CRITIC_AGENT.id, CRITIC_AGENT.name),
       agentRow(FINALIZER_AGENT.id, FINALIZER_AGENT.name),
+      agentRow(PARTICIPANT_ONE.id, PARTICIPANT_ONE.name),
+      agentRow(PARTICIPANT_TWO.id, PARTICIPANT_TWO.name),
+      agentRow(PARTICIPANT_THREE.id, PARTICIPANT_THREE.name),
     );
   });
   const repository = new DurableCoordinationRepository({
@@ -176,6 +262,27 @@ const runWithRunningAttempt = async (harness: Harness) => {
   if (begun.kind !== "started") {
     throw new Error(`expected the attempt to start, got ${begun.kind}`);
   }
+  return { started, scheduled, begun };
+};
+
+const sessionWithRunningAttempt = async (harness: Harness) => {
+  await harness.repository.createRun({ run: sessionRunRecord() });
+  const started = await harness.repository.startRun("run-session");
+  if (started.kind !== "started") throw new Error("expected session run to start");
+  const scheduled = await harness.repository.scheduleTurn({
+    runId: "run-session",
+    expectedRunVersion: started.run.version,
+    turn: sessionTurnRecord(),
+    nextPhase: "sessioning",
+    nextRevision: 0,
+  });
+  if (scheduled.kind !== "scheduled") throw new Error("expected session turn to schedule");
+  const begun = await harness.repository.beginAttempt({
+    runId: "run-session",
+    turnId: "turn-session-1",
+    attempt: sessionAttemptRecord(),
+  });
+  if (begun.kind !== "started") throw new Error("expected session attempt to start");
   return { started, scheduled, begun };
 };
 
@@ -1192,5 +1299,168 @@ describe("event ledger integrity", () => {
     );
     expect(database.coordinationTurns[0]?.status).toBe("committed");
     expect(database.coordinationAttempts[0]?.outputDigest).toBe("sha256:output");
+  });
+});
+
+// -------------------------------------- P7 shared-session durability gate
+
+describe("durable shared-session commits and races", () => {
+  it("commits a countdown message and decrements shared state in the same durable mutation", async () => {
+    const harness = await createHarness();
+    await sessionWithRunningAttempt(harness);
+
+    const result = await harness.repository.commitAcceptedArtifact({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attemptId: "attempt-session-1",
+      leaseToken: "lease-session-0001",
+      artifact: sessionArtifact("2"),
+      outputDigest: "sha256:session-output",
+    });
+    expect(result).toMatchObject({
+      kind: "committed",
+      run: { sharedState: { nextExpectedNumber: 1 } },
+    });
+
+    const reloaded = new JsonStore((harness.store as unknown as { filePath: string }).filePath);
+    await reloaded.initialize();
+    const persistedRun = reloaded.snapshot().coordinationRuns.find(
+      (run) => run.id === "run-session",
+    );
+    expect(persistedRun).toMatchObject({ sharedState: { nextExpectedNumber: 1 } });
+    expect(persistedRun?.activeTurnId).toBeUndefined();
+    expect(reloaded.snapshot().coordinationArtifacts).toHaveLength(1);
+    expect(reloaded.snapshot().coordinationEvents.map((event) => event.type)).toEqual([
+      "run.created",
+      "run.started",
+      "turn.scheduled",
+      "attempt.started",
+      "turn.committed",
+    ]);
+  });
+
+  it("persists a free-chat message without creating or changing countdown state", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({
+      run: sessionRunRecord({
+        policy: {
+          ...DEFAULT_COORDINATION_POLICY,
+          workflow: "shared_session_v1",
+          maxRevisions: 0,
+          maxTurns: 3,
+          sessionProtocol: "free_chat",
+        },
+        sharedState: undefined,
+      }),
+    });
+    const started = await harness.repository.startRun("run-session");
+    if (started.kind !== "started") throw new Error("expected free-chat run to start");
+    await harness.repository.scheduleTurn({
+      runId: "run-session",
+      expectedRunVersion: started.run.version,
+      turn: sessionTurnRecord(),
+      nextPhase: "sessioning",
+      nextRevision: 0,
+    });
+    await harness.repository.beginAttempt({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attempt: sessionAttemptRecord(),
+    });
+
+    const committed = await harness.repository.commitAcceptedArtifact({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attemptId: "attempt-session-1",
+      leaseToken: "lease-session-0001",
+      artifact: sessionArtifact("ready", {
+        payload: freeChatPayload("Ready to close the checklist.", true),
+      }),
+    });
+    expect(committed).toMatchObject({ kind: "committed", run: { sharedState: undefined } });
+  });
+
+  it("fences a superseded session attempt and a stop-racing result without mutating the transcript", async () => {
+    const harness = await createHarness();
+    await sessionWithRunningAttempt(harness);
+    await harness.repository.finishAttempt({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attemptId: "attempt-session-1",
+      leaseToken: "lease-session-0001",
+      status: "invalid_output",
+      errorCode: "INVALID_AGENT_OUTPUT",
+      errorMessage: "wrong number",
+    });
+    await harness.repository.beginAttempt({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attempt: sessionAttemptRecord({
+        id: "attempt-session-2",
+        number: 2,
+        leaseToken: "lease-session-0002",
+      }),
+    });
+    expect(await harness.repository.commitAcceptedArtifact({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attemptId: "attempt-session-1",
+      leaseToken: "lease-session-0001",
+      artifact: sessionArtifact("2", { id: "artifact-late-retry" }),
+    })).toEqual({ kind: "stale" });
+
+    await harness.repository.requestStop("run-session");
+    await harness.repository.finishStopped("run-session");
+    expect(await harness.repository.commitAcceptedArtifact({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attemptId: "attempt-session-2",
+      leaseToken: "lease-session-0002",
+      artifact: sessionArtifact("2", { id: "artifact-late-stop" }),
+    })).toEqual({ kind: "stale" });
+
+    const details = await harness.repository.getRunDetails("run-session");
+    expect(details?.run).toMatchObject({ status: "stopped", sharedState: { nextExpectedNumber: 2 } });
+    expect(details?.artifacts).toEqual([]);
+    expect(details?.events.map((event) => event.sequence)).toEqual(
+      details?.events.map((_event, index) => index + 1),
+    );
+    expect(details?.events.filter((event) => event.type === "attempt.stale_ignored")).toHaveLength(2);
+  });
+
+  it("allows exactly one of two concurrent session commits and releases reservations on restart", async () => {
+    const harness = await createHarness();
+    await sessionWithRunningAttempt(harness);
+    const commit = () => harness.repository.commitAcceptedArtifact({
+      runId: "run-session",
+      turnId: "turn-session-1",
+      attemptId: "attempt-session-1",
+      leaseToken: "lease-session-0001",
+      artifact: sessionArtifact("2"),
+    });
+    const results = await Promise.all([commit(), commit()]);
+    expect(results.map((result) => result.kind).sort()).toEqual(["committed", "stale"]);
+
+    // Schedule the next session turn, then prove restart settlement uses the
+    // same terminal path and derived-reservation release as verified runs.
+    const details = await harness.repository.getRunDetails("run-session");
+    if (!details) throw new Error("expected session details");
+    const next = await harness.repository.scheduleTurn({
+      runId: "run-session",
+      expectedRunVersion: details.run.version,
+      turn: sessionTurnRecord({
+        id: "turn-session-2",
+        sequence: 2,
+        agentId: PARTICIPANT_TWO.id,
+        inputArtifactIds: ["artifact-session-1"],
+      }),
+      nextPhase: "sessioning",
+      nextRevision: 0,
+    });
+    expect(next.kind).toBe("scheduled");
+    expect(await harness.repository.interruptActiveRuns()).toEqual(["run-session"]);
+    expect((await harness.repository.getRunDetails("run-session"))?.run)
+      .toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
+    expect(await harness.repository.listReservedAgentIds()).toEqual([]);
   });
 });

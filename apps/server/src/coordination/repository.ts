@@ -19,6 +19,8 @@ import type {
 import type {
   AgentId,
   AgentRunId,
+  ArtifactType,
+  CoordinationArtifact,
   CoordinationAttempt,
   CoordinationAttemptId,
   CoordinationErrorCode,
@@ -404,6 +406,15 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
       const now = this.clock.nowIso();
       const artifact = structuredClone(input.artifact);
+
+      // A countdown commit carries the next durable value forward in this same
+      // mutation as the artifact, attempt, turn, and event. The protocol has
+      // already checked the exact expected value; this defensive check keeps a
+      // malformed direct repository call from corrupting shared state.
+      const nextExpectedNumber = nextCountdownValue(run, artifact);
+      if (nextExpectedNumber === "invalid") {
+        return { kind: "stale" } as const;
+      }
       database.coordinationArtifacts.push(artifact);
 
       attempt.status = "succeeded";
@@ -424,6 +435,9 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       }
       if (artifact.type === "review") {
         run.latestReviewArtifactId = artifact.id;
+      }
+      if (typeof nextExpectedNumber === "number" && run.sharedState) {
+        run.sharedState.nextExpectedNumber = nextExpectedNumber;
       }
       run.version += 1;
       run.updatedAt = now;
@@ -566,6 +580,9 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       }
 
       const now = this.clock.nowIso();
+      const finalArtifact = database.coordinationArtifacts.find(
+        (artifact) => artifact.id === input.finalArtifactId && artifact.runId === run.id,
+      );
       run.status = "completed";
       run.phase = "done";
       run.finalArtifactId = input.finalArtifactId;
@@ -574,7 +591,11 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       run.updatedAt = now;
       this.append(
         database,
-        this.events.runCompleted({ runId: run.id, artifactId: input.finalArtifactId }),
+        this.events.runCompleted({
+          runId: run.id,
+          artifactId: input.finalArtifactId,
+          artifactType: finalArtifact?.type,
+        }),
       );
       return structuredClone(run);
     });
@@ -735,7 +756,6 @@ export class DurableCoordinationRepository implements CoordinationRepository {
           reason: input.errorMessage,
         });
       case "failed":
-      default:
         return this.events.attemptFailed({
           ...base,
           code: input.errorCode,
@@ -802,15 +822,41 @@ const collectReservedAgentIds = (
   return reserved;
 };
 
-const expectedArtifactTypeForTurn = (turn: CoordinationTurn): "proposal" | "review" | "final" => {
-  switch (turn.kind) {
-    case "proposal_review":
-      return "review";
-    case "finalization":
-      return "final";
-    default:
-      return "proposal";
+/**
+ * A turn's output type is backend-owned. `satisfies` makes this deliberately
+ * exhaustive: adding a new turn kind without deciding its durable output is a
+ * compile error rather than a silent fallthrough to a proposal.
+ */
+const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND = {
+  initial_proposal: "proposal",
+  proposal_revision: "proposal",
+  proposal_review: "review",
+  finalization: "final",
+  session_turn: "session_message",
+} as const satisfies Readonly<Record<CoordinationTurn["kind"], ArtifactType>>;
+
+const expectedArtifactTypeForTurn = (turn: CoordinationTurn): ArtifactType =>
+  EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
+
+/**
+ * Returns the state update that belongs in a successful countdown commit.
+ * `undefined` means this is not a countdown session; `invalid` is never
+ * persisted and leaves the active lease untouched for ordinary validation.
+ */
+const nextCountdownValue = (
+  run: CoordinationRun,
+  artifact: CoordinationArtifact,
+): number | undefined | "invalid" => {
+  if (
+    artifact.type !== "session_message" ||
+    run.policy.workflow !== "shared_session_v1" ||
+    run.policy.sessionProtocol !== "countdown"
+  ) {
+    return undefined;
   }
+
+  const value = Number(artifact.payload.content);
+  return Number.isInteger(value) && run.sharedState ? value - 1 : "invalid";
 };
 
 /**

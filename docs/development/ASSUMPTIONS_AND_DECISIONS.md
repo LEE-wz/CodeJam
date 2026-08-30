@@ -7,6 +7,17 @@
 
 This file closes questions that can be answered from the checked-out code and isolates the few items that require measurement or a team contract change.
 
+## Checkpoint 7 clarification
+
+**Recorded:** 2026-08-30 for P7-07. The Phase 7 sheet says both to preserve
+coordination initialisation "exactly as today" and to keep a "scripted runtime
+only." These phrases conflict after the completed Phase 3 production root,
+which already uses `AgentServiceCoordinationRuntime`. P7-07 therefore preserves
+that existing Phase 3 wiring and adds only session workflow/protocol dispatch;
+the Phase 7 test matrix uses `ScriptedCoordinationRuntime`, and Phase 7 adds no
+new real-Agent or provider connection. This is a clarification of the existing
+P7-07 boundary, not a contract or runtime-seam change.
+
 ## Resolved Sprint 0 questions
 
 | Question | Answer | Consequence |

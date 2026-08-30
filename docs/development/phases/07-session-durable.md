@@ -25,18 +25,18 @@ If atomicity, event data, reservation semantics, API validation, or allowed file
 
 ### Atomic repository
 
-- [ ] **P7-01** Implement the commit case for `session_message`. For countdown runs, on accepting a message with value `n`, set `run.sharedState.nextExpectedNumber = n - 1` in the same `JsonStore.mutate()` that settles the attempt and turn, stores the immutable artifact, updates pointers and version, and appends events. For free-chat runs the same mutation stores the artifact and settles the attempt and turn with no shared-state update. The lease and status checks are byte-for-byte the existing ones; no new race semantics are introduced. The free-chat unanimity rule is computed from committed artifacts at decision time; the repository stores no additional state for it.
-- [ ] **P7-02** Convert `expectedArtifactTypeForTurn` to an exhaustive typed map keyed by `CoordinationTurnKind` with no `default` branch, and add the `session_turn → "session_message"` case. The map's type must make omitting a future turn kind a compile error, so this silent-default class can never recur. Sweep every remaining exhaustive switch over `CoordinationRole`, `CoordinationPhase`, `CoordinationTurnKind`, and `ArtifactType` (including the workflow expected-output map and event guards) and add the missing cases without changing existing behavior.
-- [ ] **P7-03** Add race and restart tests using deferred promises, not sleeps: wrong lease is stale; a previous attempt cannot commit after a retry starts; stop-versus-commit; duplicate completion; concurrent commits; restart interruption settles active session runs with `SERVER_RESTARTED`; per-run event sequence stays gapless.
+- [x] **P7-01** Implement the commit case for `session_message`. For countdown runs, on accepting a message with value `n`, set `run.sharedState.nextExpectedNumber = n - 1` in the same `JsonStore.mutate()` that settles the attempt and turn, stores the immutable artifact, updates pointers and version, and appends events. For free-chat runs the same mutation stores the artifact and settles the attempt and turn with no shared-state update. The lease and status checks are byte-for-byte the existing ones; no new race semantics are introduced. The free-chat unanimity rule is computed from committed artifacts at decision time; the repository stores no additional state for it.
+- [x] **P7-02** Convert `expectedArtifactTypeForTurn` to an exhaustive typed map keyed by `CoordinationTurnKind` with no `default` branch, and add the `session_turn → "session_message"` case. The map's type must make omitting a future turn kind a compile error, so this silent-default class can never recur. Sweep every remaining exhaustive switch over `CoordinationRole`, `CoordinationPhase`, `CoordinationTurnKind`, and `ArtifactType` (including the workflow expected-output map and event guards) and add the missing cases without changing existing behavior.
+- [x] **P7-03** Add race and restart tests using deferred promises, not sleeps: wrong lease is stale; a previous attempt cannot commit after a retry starts; stop-versus-commit; duplicate completion; concurrent commits; restart interruption settles active session runs with `SERVER_RESTARTED`; per-run event sequence stays gapless.
 
 ### API and composition
 
-- [ ] **P7-04** Implement the create-body union in `coordination/routes.ts`: `workflow` optional and defaulting to `"verified_handoff_v1"`; the session variant validates an ordered `agents` array of 2..6 distinct IDs, `sessionProtocol` (`"countdown"` default, `"free_chat"`), countdown `sessionStartValue` 2..12 with `maxTurns >= sessionStartValue`, free-chat `maxTurns` 3..12 with `sessionStartValue` forbidden, absent or empty `requiredSections`, and rejection of `maxRevisions`. The verified body shape is accepted unchanged.
-- [ ] **P7-05** Mirror every session rule in the service create path so HTTP validation is never the only enforcement.
-- [ ] **P7-06** Add Fastify injection tests for the session surface: create `201`, start `202`, detail with `sharedState` and without leases; every session and protocol validation `400`; `404` unknown Agent; `409` `AGENT_NOT_READY` and `AGENT_RESERVED`; `413` oversized body; auth required; safe `500`.
-- [ ] **P7-07** Wire the composition root in `index.ts`: construct `SharedSessionWorkflowV1` and pass it to `CoordinationService` as the `sessionWorkflow` dependency (the dispatch contract adopted in P6-02 then resolves session runs to it), and initialize coordination exactly as today. No new dependencies are added.
-- [ ] **P7-08** Add evidence-timeline fixture tests: the detail response for normal countdown, wrong-number retry, free-chat completion (at `maxTurns` and on a unanimous `done` round), stopped, and interrupted session fixtures is ordered and coherent, with every event type in the frozen set.
-- [ ] **P7-09** Verify reservation inheritance with tests: a session run reserves all of its participants through the existing derived reservation; reservations release on terminal settlement; two runs with overlapping participants cannot both start; verified-path reservation tests remain green.
+- [x] **P7-04** Implement the create-body union in `coordination/routes.ts`: `workflow` optional and defaulting to `"verified_handoff_v1"`; the session variant validates an ordered `agents` array of 2..6 distinct IDs, `sessionProtocol` (`"countdown"` default, `"free_chat"`), countdown `sessionStartValue` 2..12 with `maxTurns >= sessionStartValue`, free-chat `maxTurns` 3..12 with `sessionStartValue` forbidden, absent or empty `requiredSections`, and rejection of `maxRevisions`. The verified body shape is accepted unchanged.
+- [x] **P7-05** Mirror every session rule in the service create path so HTTP validation is never the only enforcement.
+- [x] **P7-06** Add Fastify injection tests for the session surface: create `201`, start `202`, detail with `sharedState` and without leases; every session and protocol validation `400`; `404` unknown Agent; `409` `AGENT_NOT_READY` and `AGENT_RESERVED`; `413` oversized body; auth required; safe `500`.
+- [x] **P7-07** Wire the composition root in `index.ts`: construct `SharedSessionWorkflowV1` and pass it to `CoordinationService` as the `sessionWorkflow` dependency (the dispatch contract adopted in P6-02 then resolves session runs to it), and initialize coordination exactly as today. No new dependencies are added.
+- [x] **P7-08** Add evidence-timeline fixture tests: the detail response for normal countdown, wrong-number retry, free-chat completion (at `maxTurns` and on a unanimous `done` round), stopped, and interrupted session fixtures is ordered and coherent, with every event type in the frozen set.
+- [x] **P7-09** Verify reservation inheritance with tests: a session run reserves all of its participants through the existing derived reservation; reservations release on terminal settlement; two runs with overlapping participants cannot both start; verified-path reservation tests remain green.
 
 ## Requirements and invariants
 
@@ -78,3 +78,14 @@ Phase 7 is complete only when:
 ## Handoff to Phase 8
 
 Record a durable fake-runtime session demonstration and a redacted completed session fixture, and set `P8-01` as the next task. If any lease/race test is flaky, remain in Phase 7.
+
+## Checkpoint 7 record
+
+Completed in implementation commit `8775c00` on
+`codex/phase7-durable-session-backend`. The final disposable Compose check
+passed on 2026-08-30: 27 server files / 474 tests, 2 web files / 12 tests,
+both typechecks, and both production builds. The host exposes the
+`docker-compose` compatibility binary, so the documented Compose commands were
+run through it with `LAUNCHPAD_ENV_FILE=/dev/null` because no local `.env`
+exists. The test matrix uses `ScriptedCoordinationRuntime`; no new Agent or
+provider integration was introduced.

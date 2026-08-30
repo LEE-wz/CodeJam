@@ -1,11 +1,12 @@
 # Relay Development Status
 
-**Last audit:** 2026-08-30 (Phase 6 in-memory session core complete)
-**Audited base:** `50de8cb` (P6-01 checkpoint documentation)
-**Implementation branch:** `phase6-complete-session-core` (base `50de8cb`)
-**Current phase:** Phase 6 — Session Core in Memory
-**Current gate:** Checkpoint 6 verified (2026-08-30, commit `82f5c85`)
-**Overall state:** Phases 0–6 `complete`; Phases 7–9 not started
+**Last audit:** 2026-08-30 (Checkpoint 7 verified)
+**Audited base:** `cc6f43c` (verified Phase 6 checkpoint record)
+**Implementation branch:** `codex/phase7-durable-session-backend` (base `cc6f43c`)
+**Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
+**Current phase:** Phase 7 — Durable Session Backend and API
+**Current gate:** Checkpoint 7 verified by the full Docker Compose check
+**Overall state:** Phases 0–7 `complete`; Phases 8–9 not started
 
 ## Nine-phase plan
 
@@ -18,7 +19,7 @@
 | 4 | End-to-end UI and evidence experience | `complete` |
 | 5 | Session contracts and freeze | `complete` (sheet: [`phases/05-session-contracts.md`](phases/05-session-contracts.md)) |
 | 6 | Session core in memory | `complete` (Checkpoint 6: `82f5c85`; sheet: [`phases/06-session-core.md`](phases/06-session-core.md)) |
-| 7 | Durable session backend and API | `not_started` (sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
+| 7 | Durable session backend and API | `complete` (Checkpoint 7 verified; sheet: [`phases/07-session-durable.md`](phases/07-session-durable.md)) |
 | 8 | Session UI and real rehearsal | `not_started` (sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `not_started` (sheet: [`phases/09-release.md`](phases/09-release.md)) |
 
@@ -26,17 +27,44 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 
 ## Resume here
 
-**Phase 6 is complete and Checkpoint 6 is verified at `82f5c85`.** The pure
-workflow, protocol dispatch, strict session parser, transcript context, complete
-create validation, and real in-memory orchestration loop now cover countdown
-and free chat. A deterministic 10-to-1 run completes without persistence, HTTP,
-timers, or a real Agent; retry, exhaustion, timeout, stop, late-result, turn-limit,
-and unanimous-`done` paths are all proven.
+**Phase 7 is complete on `codex/phase7-durable-session-backend`.** The branch
+adds atomic countdown-state commits to `DurableCoordinationRepository`, exhaustive
+turn-kind output maps, a session/verified create-body union, composition wiring
+for both workflows and both artifact protocols, and durable repository/API
+timeline coverage. The next implementation phase is P8-01 (session UI and real
+rehearsal); no Phase 8 code has been started.
 
-The next task ID is **`P7-01`**. Create a Phase 7 task branch from the Phase 6
-checkpoint, read `phases/07-session-durable.md`, freeze the session fixtures used
-by persistence/API tests, and do not claim durable session support until the
-Phase 7 race gates pass.
+Docker is available through the `docker-compose` compatibility binary rather
+than the absent `docker compose` subcommand. Validation used
+`LAUNCHPAD_ENV_FILE=/dev/null` solely to avoid loading the repository's absent
+local `.env`; no host npm result or secret-bearing environment was used.
+
+## Phase 7 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P7-01 | `complete` | Session-message commits derive and atomically store the next countdown value alongside artifact, turn, attempt, pointers, version, and event; free chat leaves shared state absent. |
+| P7-02 | `complete` | Durable expected-output handling is a typed exhaustive `CoordinationTurnKind → ArtifactType` map; the verified workflow map is exhaustive too. |
+| P7-03 | `complete` | Durable session tests cover retry fencing, stop-versus-commit, concurrent commits, restart interruption, reservation release, and gapless event sequences. |
+| P7-04 | `complete` | Routes accept the workflow union, default omitted workflow to verified handoff, and enforce session participant/protocol/policy constraints. |
+| P7-05 | `complete` | Service-side session create validation remains the non-HTTP enforcement layer and is exercised by the new API path. |
+| P7-06 | `complete` | Fastify injection coverage includes session create/start/detail, validation failures, missing participants, readiness, reservation, auth, oversized bodies, and safe errors. |
+| P7-07 | `complete` | `index.ts` registers `SharedSessionWorkflowV1` and dispatches to `SharedSessionArtifactProtocol` while retaining verified-handoff wiring. |
+| P7-08 | `complete` | Durable detail tests cover countdown, wrong-number retry, free-chat cap/unanimity, stop/race, restart, ordered events, and session final-artifact evidence. |
+| P7-09 | `complete` | Session tests prove ready checks, overlapping-run reservation rejection, and reservation release after terminal/restart settlement. |
+
+### Checkpoint 7 verification
+
+- The focused durable repository and API suites passed after adding the session
+  scenarios; the final API-only confirmation passed all 42 tests.
+- Required full command: the disposable Compose invocation of `npm ci
+  --include=dev && npm run check`, using `docker-compose` and
+  `LAUNCHPAD_ENV_FILE=/dev/null` as described above.
+- Final result: 27 server files / 474 tests, 2 web files / 12 tests, both
+  typechecks, and both production builds passed.
+- New Phase 7 tests use the scripted coordination runtime; no new real Agent or
+  provider integration was introduced. Existing dependency audit findings remain
+  1 moderate and 5 high, deferred to P9-17; dependency versions did not change.
 
 Outstanding decision for the team, not for Phase 6: whether to create a
 convenience tag on `2fe14eb`. None was created. The immutable commit reference

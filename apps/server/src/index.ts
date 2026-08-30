@@ -3,7 +3,11 @@ import path from "node:path";
 import { AgentService } from "./agent-service.js";
 import { createApp } from "./app.js";
 import { loadConfig, writeCodexConfig } from "./config.js";
-import { VerifiedHandoffArtifactProtocol } from "./coordination/artifact-protocol.js";
+import {
+  CoordinationArtifactProtocolDispatchV1,
+  SharedSessionArtifactProtocol,
+  VerifiedHandoffArtifactProtocol,
+} from "./coordination/artifact-protocol.js";
 import { RoleScopedContextBuilder } from "./coordination/context-builder.js";
 import type {
   Clock,
@@ -15,6 +19,7 @@ import { DurableCoordinationRepository } from "./coordination/repository.js";
 import { AgentServiceCoordinationRuntime } from "./coordination/runtime-gateway.js";
 import { CoordinationService } from "./coordination/service.js";
 import type { CoordinationLogContext, CoordinationLogger } from "./coordination/service.js";
+import { SharedSessionWorkflowV1 } from "./coordination/session-workflow.js";
 import { VerifiedHandoffWorkflowV1 } from "./coordination/workflow.js";
 import { createRunner } from "./runner-factory.js";
 import { JsonStore } from "./store.js";
@@ -73,12 +78,21 @@ const logger: CoordinationLogger = {
   error: (context, message) => requestLogger?.error(context, message),
 };
 
+const verifiedWorkflow = new VerifiedHandoffWorkflowV1();
+const sessionWorkflow = new SharedSessionWorkflowV1();
+const verifiedArtifactProtocol = new VerifiedHandoffArtifactProtocol({ clock, ids });
+const sessionArtifactProtocol = new SharedSessionArtifactProtocol({ clock, ids });
+
 const coordination = new CoordinationService({
   agentDirectory,
   repository,
-  workflow: new VerifiedHandoffWorkflowV1(),
+  workflow: verifiedWorkflow,
+  sessionWorkflow,
   contextBuilder: new RoleScopedContextBuilder(),
-  artifactProtocol: new VerifiedHandoffArtifactProtocol({ clock, ids }),
+  artifactProtocol: new CoordinationArtifactProtocolDispatchV1(
+    verifiedArtifactProtocol,
+    sessionArtifactProtocol,
+  ),
   runtime: new AgentServiceCoordinationRuntime(service),
   clock,
   ids,

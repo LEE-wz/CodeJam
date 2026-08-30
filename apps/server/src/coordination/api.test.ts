@@ -9,7 +9,11 @@ import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { JsonStore } from "../store.js";
 import type { Agent } from "../types.js";
-import { VerifiedHandoffArtifactProtocol } from "./artifact-protocol.js";
+import {
+  CoordinationArtifactProtocolDispatchV1,
+  SharedSessionArtifactProtocol,
+  VerifiedHandoffArtifactProtocol,
+} from "./artifact-protocol.js";
 import { RoleScopedContextBuilder } from "./context-builder.js";
 import type {
   Clock,
@@ -20,9 +24,11 @@ import type {
 import { DurableCoordinationRepository } from "./repository.js";
 import { CoordinationService } from "./service.js";
 import type { CoordinationLogContext } from "./service.js";
+import { SharedSessionWorkflowV1 } from "./session-workflow.js";
 import { AdvancingClock } from "./testing/controls.js";
 import {
   ScriptedCoordinationRuntime,
+  deferred,
   failsExecution,
   succeeds,
   type ScriptedRuntimeStep,
@@ -37,6 +43,15 @@ import {
   VALID_FINAL_OUTPUT,
   VALID_PROPOSAL_OUTPUT,
 } from "./testing/fixtures.js";
+import {
+  CREATE_COUNTDOWN_REQUEST,
+  CREATE_FREE_CHAT_REQUEST,
+  PARTICIPANT_ONE,
+  PARTICIPANT_THREE,
+  PARTICIPANT_TWO,
+  countdownPayload,
+  freeChatPayload,
+} from "./testing/session-fixtures.js";
 import { VerifiedHandoffWorkflowV1 } from "./workflow.js";
 
 const AUTH_TOKEN = "a-strong-test-token";
@@ -129,6 +144,9 @@ const createStack = async (steps: ScriptedRuntimeStep[] = []): Promise<Stack> =>
       agentRow(PLANNER_AGENT.id, PLANNER_AGENT.name),
       agentRow(CRITIC_AGENT.id, CRITIC_AGENT.name),
       agentRow(FINALIZER_AGENT.id, FINALIZER_AGENT.name),
+      agentRow(PARTICIPANT_ONE.id, PARTICIPANT_ONE.name),
+      agentRow(PARTICIPANT_TWO.id, PARTICIPANT_TWO.name),
+      agentRow(PARTICIPANT_THREE.id, PARTICIPANT_THREE.name),
     );
   });
 
@@ -146,12 +164,18 @@ const createStack = async (steps: ScriptedRuntimeStep[] = []): Promise<Stack> =>
 
   const logs: Array<{ context: CoordinationLogContext; message: string }> = [];
   const runtime = new ScriptedCoordinationRuntime(steps);
+  const verifiedArtifactProtocol = new VerifiedHandoffArtifactProtocol({ clock, ids });
+  const sessionArtifactProtocol = new SharedSessionArtifactProtocol({ clock, ids });
   const service = new CoordinationService({
     agentDirectory,
     repository: new DurableCoordinationRepository({ store, clock, ids }),
     workflow: new VerifiedHandoffWorkflowV1(),
+    sessionWorkflow: new SharedSessionWorkflowV1(),
     contextBuilder: new RoleScopedContextBuilder(),
-    artifactProtocol: new VerifiedHandoffArtifactProtocol({ clock, ids }),
+    artifactProtocol: new CoordinationArtifactProtocolDispatchV1(
+      verifiedArtifactProtocol,
+      sessionArtifactProtocol,
+    ),
     runtime,
     clock,
     ids,
@@ -218,6 +242,24 @@ const createRun = async (app: FastifyInstance, overrides: Record<string, unknown
     url: "/api/coordination-runs",
     headers,
     payload: { ...CREATE_BODY, ...overrides },
+  });
+
+const SESSION_COUNTDOWN_BODY = {
+  ...CREATE_COUNTDOWN_REQUEST,
+  // Keep the durable API test short while still exercising the shared-state
+  // transition through both a first and final countdown message.
+  policy: { sessionProtocol: "countdown", sessionStartValue: 2, maxTurns: 2 },
+};
+
+const createSessionRun = async (
+  app: FastifyInstance,
+  overrides: Record<string, unknown> = {},
+) =>
+  app.inject({
+    method: "POST",
+    url: "/api/coordination-runs",
+    headers,
+    payload: { ...SESSION_COUNTDOWN_BODY, ...overrides },
   });
 
 // --------------------------------------------------------- P2-16 API surface
@@ -768,5 +810,311 @@ describe("evidence timeline through the real stack", () => {
     expect(details?.run).toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
     expect(details?.events.map((event) => event.type)).toContain("run.interrupted");
     expect(await restarted.listReservedAgentIds()).toEqual([]);
+  });
+});
+
+// -------------------------------- P7 durable session API and evidence gate
+
+describe("durable shared-session API", () => {
+  it("creates, starts, and exposes a countdown with durable shared state", async () => {
+    const { app } = await createStack([
+      succeeds(JSON.stringify(countdownPayload(2))),
+      succeeds(JSON.stringify(countdownPayload(1))),
+    ]);
+    const created = await createSessionRun(app);
+    expect(created.statusCode).toBe(201);
+    const runId = (created.json() as { run: { id: string } }).run.id;
+
+    const started = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/start`,
+      headers,
+    });
+    expect(started.statusCode).toBe(202);
+
+    const details = (await settleHttp(app, runId)) as unknown as {
+      run: {
+        status: string;
+        phase: string;
+        sharedState?: { nextExpectedNumber: number };
+        finalArtifactId?: string;
+      };
+      turns: Array<{ sequence: number; role: string; kind: string; status: string }>;
+      attempts: Array<{ status: string; leaseToken?: string }>;
+      artifacts: Array<{ id: string; type: string; payload: { content: string } }>;
+      events: Array<{ sequence: number; type: string; details: Record<string, unknown> }>;
+    };
+
+    expect(details.run).toMatchObject({
+      status: "completed",
+      phase: "done",
+      sharedState: { nextExpectedNumber: 0 },
+    });
+    expect(details.turns.map((turn) => `${turn.sequence}:${turn.role}:${turn.kind}:${turn.status}`))
+      .toEqual([
+        "1:participant:session_turn:committed",
+        "2:participant:session_turn:committed",
+      ]);
+    expect(details.artifacts.map(({ type, payload }) => `${type}:${payload.content}`)).toEqual([
+      "session_message:2",
+      "session_message:1",
+    ]);
+    expect(details.run.finalArtifactId).toBe(details.artifacts.at(-1)?.id);
+    expect(details.attempts.every((attempt) => !("leaseToken" in attempt))).toBe(true);
+    expect(details.events.map((event) => event.sequence)).toEqual(
+      details.events.map((_event, index) => index + 1),
+    );
+    expect(details.events.at(-1)).toMatchObject({
+      type: "run.completed",
+      details: { artifactType: "session_message" },
+    });
+  });
+
+  it.each([
+    ["fewer than two participants", { agents: [PARTICIPANT_ONE.id] }],
+    ["duplicate participants", { agents: [PARTICIPANT_ONE.id, PARTICIPANT_ONE.id] }],
+    ["a verified-only requiredSections field", { requiredSections: [] }],
+    ["a verified-only maxRevisions field", { policy: { maxRevisions: 1 } }],
+    ["an unknown session protocol", { policy: { sessionProtocol: "other" } }],
+    ["a countdown start below range", { policy: { sessionStartValue: 1 } }],
+    ["a countdown ceiling below its start", { policy: { sessionStartValue: 4, maxTurns: 3 } }],
+    [
+      "a free-chat start value",
+      { policy: { sessionProtocol: "free_chat", sessionStartValue: 3, maxTurns: 3 } },
+    ],
+    ["a free-chat ceiling below range", { policy: { sessionProtocol: "free_chat", maxTurns: 2 } }],
+  ])("rejects %s with a 400", async (_label, overrides) => {
+    const { app } = await createStack();
+    const response = await createSessionRun(app, overrides);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+  });
+
+  it("returns 404 for an unknown session participant before creating the run", async () => {
+    const { app, store } = await createStack();
+    const response = await createSessionRun(app, {
+      agents: [PARTICIPANT_ONE.id, PARTICIPANT_TWO.id, "missing-session-agent"],
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: "NOT_FOUND" } });
+    expect(store.snapshot().coordinationRuns).toEqual([]);
+  });
+
+  it("keeps session start readiness and derived reservations atomic", async () => {
+    const { app, runtime, store } = await createStack([deferred()]);
+    const first = (await createSessionRun(app)).json() as { run: { id: string } };
+    const second = (await createSessionRun(app, { name: "Second countdown" })).json() as {
+      run: { id: string };
+    };
+
+    await store.mutate((database) => {
+      const participant = database.agents.find((agent) => agent.id === PARTICIPANT_ONE.id);
+      if (participant) participant.status = "stopped";
+    });
+    const notReady = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${first.run.id}/start`,
+      headers,
+    });
+    expect(notReady.statusCode).toBe(409);
+    expect(notReady.json()).toMatchObject({ error: { code: "AGENT_NOT_READY" } });
+
+    await store.mutate((database) => {
+      const participant = database.agents.find((agent) => agent.id === PARTICIPANT_ONE.id);
+      if (participant) participant.status = "ready";
+    });
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${first.run.id}/start`,
+      headers,
+    })).statusCode).toBe(202);
+    await runtime.waitForStarts(1);
+
+    const reserved = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${second.run.id}/start`,
+      headers,
+    });
+    expect(reserved.statusCode).toBe(409);
+    expect(reserved.json()).toMatchObject({ error: { code: "AGENT_RESERVED" } });
+
+    const attemptId = runtime.pendingAttemptIds()[0];
+    expect(attemptId).toBeDefined();
+    await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${first.run.id}/stop`,
+      headers,
+    });
+    if (attemptId) {
+      runtime.resolveAttempt(attemptId, {
+        kind: "succeeded",
+        rawOutput: JSON.stringify(countdownPayload(2)),
+      });
+    }
+    await settleHttp(app, first.run.id);
+
+    // A terminal session releases its derived reservations, so the overlapping
+    // second run can now acquire the same participant set. Its unscripted
+    // runtime will fail safely, but the accepted start proves the release.
+    const released = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${second.run.id}/start`,
+      headers,
+    });
+    expect(released.statusCode).toBe(202);
+    await settleHttp(app, second.run.id);
+  });
+});
+
+describe("durable shared-session evidence timelines", () => {
+  it("records a wrong-number retry without advancing shared state prematurely", async () => {
+    const { app } = await createStack([
+      succeeds(JSON.stringify(countdownPayload(1))),
+      succeeds(JSON.stringify(countdownPayload(2))),
+      succeeds(JSON.stringify(countdownPayload(1))),
+    ]);
+    const created = await createSessionRun(app);
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+
+    const details = (await settleHttp(app, runId)) as unknown as {
+      run: { status: string; sharedState?: { nextExpectedNumber: number } };
+      attempts: Array<{ number: number; status: string }>;
+      events: Array<{ type: string }>;
+    };
+    expect(details.run).toMatchObject({ status: "completed", sharedState: { nextExpectedNumber: 0 } });
+    expect(details.attempts.slice(0, 2).map(({ number, status }) => `${number}:${status}`)).toEqual([
+      "1:invalid_output",
+      "2:succeeded",
+    ]);
+    expect(details.events.map((event) => event.type)).toContain("attempt.invalid_output");
+  });
+
+  it("completes free chat coherently at its turn cap and after a unanimous done round", async () => {
+    const cases = [
+      {
+        steps: [
+          succeeds(JSON.stringify(freeChatPayload("First idea."))),
+          succeeds(JSON.stringify(freeChatPayload("Second idea."))),
+          succeeds(JSON.stringify(freeChatPayload("Third idea."))),
+        ],
+        body: { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 3 } },
+      },
+      {
+        steps: [
+          succeeds(JSON.stringify(freeChatPayload("I am done.", true))),
+          succeeds(JSON.stringify(freeChatPayload("I agree.", true))),
+          succeeds(JSON.stringify(freeChatPayload("Complete.", true))),
+        ],
+        body: { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 6 } },
+      },
+    ];
+
+    for (const scenario of cases) {
+      const { app } = await createStack(scenario.steps);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/coordination-runs",
+        headers,
+        payload: scenario.body,
+      });
+      expect(created.statusCode).toBe(201);
+      const runId = (created.json() as { run: { id: string } }).run.id;
+      await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+      const details = (await settleHttp(app, runId)) as unknown as {
+        run: { status: string; sharedState?: unknown; finalArtifactId?: string };
+        artifacts: Array<{ id: string; type: string }>;
+        events: Array<{ sequence: number; type: string; details: Record<string, unknown> }>;
+      };
+      expect(details.run).toMatchObject({ status: "completed" });
+      expect(details.run.sharedState).toBeUndefined();
+      expect(details.run.finalArtifactId).toBe(details.artifacts.at(-1)?.id);
+      expect(details.events.map((event) => event.sequence)).toEqual(
+        details.events.map((_event, index) => index + 1),
+      );
+      expect(details.events.at(-1)).toMatchObject({
+        type: "run.completed",
+        details: { artifactType: "session_message" },
+      });
+    }
+  });
+
+  it("records a stopped session timeline and refuses its late result", async () => {
+    const { app, runtime } = await createStack([deferred()]);
+    const created = await createSessionRun(app);
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+    await runtime.waitForStarts(1);
+
+    const attemptId = runtime.pendingAttemptIds()[0];
+    const stopped = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/stop`,
+      headers,
+    });
+    expect(stopped.statusCode).toBe(202);
+    if (attemptId) {
+      runtime.resolveAttempt(attemptId, {
+        kind: "succeeded",
+        rawOutput: JSON.stringify(countdownPayload(2)),
+      });
+    }
+
+    const details = (await settleHttp(app, runId)) as unknown as {
+      run: { status: string; errorCode?: string; sharedState?: { nextExpectedNumber: number } };
+      artifacts: unknown[];
+      events: Array<{ sequence: number; type: string }>;
+    };
+    expect(details.run).toMatchObject({
+      status: "stopped",
+      errorCode: "STOPPED_BY_USER",
+      sharedState: { nextExpectedNumber: 2 },
+    });
+    expect(details.artifacts).toEqual([]);
+    expect(details.events.map((event) => event.type)).toEqual([
+      "run.created",
+      "run.started",
+      "turn.scheduled",
+      "attempt.started",
+      "run.stop_requested",
+      "attempt.cancelled",
+      "run.stopped",
+    ]);
+    expect(details.events.map((event) => event.sequence)).toEqual(
+      details.events.map((_event, index) => index + 1),
+    );
+  });
+
+  it("keeps stopped and restarted session evidence terminal and gapless", async () => {
+    const { app, runtime, store } = await createStack([deferred()]);
+    const created = await createSessionRun(app);
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+    await runtime.waitForStarts(1);
+
+    const restarted = new DurableCoordinationRepository({
+      store,
+      clock: new AdvancingClock(),
+      ids: new SequentialUuidGenerator(),
+    });
+    expect(await restarted.interruptActiveRuns()).toEqual([runId]);
+    const interrupted = await restarted.getRunDetails(runId);
+    expect(interrupted?.run).toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
+    expect(interrupted?.events.map((event) => event.sequence)).toEqual(
+      interrupted?.events.map((_event, index) => index + 1),
+    );
+    expect(interrupted?.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["run.interrupted", "attempt.cancelled", "run.failed"]),
+    );
+
+    const lateAttempt = runtime.pendingAttemptIds()[0];
+    if (lateAttempt) {
+      runtime.resolveAttempt(lateAttempt, {
+        kind: "succeeded",
+        rawOutput: JSON.stringify(countdownPayload(2)),
+      });
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    expect((await restarted.getRunDetails(runId))?.run.status).toBe("failed");
   });
 });
