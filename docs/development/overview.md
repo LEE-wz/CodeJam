@@ -680,6 +680,7 @@ export type WorkflowDecision =
   | {
       kind: "schedule";
       role: CoordinationRole;
+      agentId?: AgentId; // shared sessions identify one member of the repeated participant role
       turnKind: CoordinationTurn["kind"];
       phase: CoordinationRun["phase"];
       revision: number;

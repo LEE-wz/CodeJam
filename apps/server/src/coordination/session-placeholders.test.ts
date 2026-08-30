@@ -77,20 +77,18 @@ describe("Phase 5 placeholders: artifact-protocol", () => {
 });
 
 describe("Phase 5 placeholders: events", () => {
-  it("throws for the participant role label, naming P6-01", () => {
-    expect(() => roleLabel("participant")).toThrow("participant role label lands in P6-01");
+  it("uses the participant role label implemented by P6-01", () => {
+    expect(roleLabel("participant")).toBe("Participant");
   });
 
-  it("throws for the session_turn kind label, naming P6-01", () => {
+  it("uses the session-turn label implemented by P6-01", () => {
     const events = createCoordinationEventFactory({
-      redactor: {
-        text: (value: string) => value,
-        eventDetails: (value: Record<string, unknown>) =>
-          value as Record<string, string | number | boolean | null | string[]>,
-      },
+      text: (value: string) => value,
+      eventDetails: (value: Record<string, unknown>) =>
+        value as Record<string, string | number | boolean | null | string[]>,
     });
 
-    expect(() =>
+    expect(
       events.turnScheduled({
         runId: "run-placeholder",
         turnId: "turn-placeholder",
@@ -102,8 +100,8 @@ describe("Phase 5 placeholders: events", () => {
         revision: 0,
         expectedArtifactType: "proposal",
         inputArtifactCount: 0,
-      }),
-    ).toThrow("session_turn label lands in P6-01");
+      }).message,
+    ).toBe("Turn 1: Planner to produce the session turn.");
   });
 });
 
@@ -148,7 +146,7 @@ describe("Phase 5 placeholders: context-builder", () => {
 });
 
 describe("Phase 5 placeholders: workflow", () => {
-  it("throws if a session turn reaches the verified-handoff state guard, naming P6-01", () => {
+  it("rejects a session turn that reaches the verified-handoff state guard", () => {
     const workflow = new VerifiedHandoffWorkflowV1();
     const turn: CoordinationTurn = {
       ...sessionTurn(),
@@ -156,8 +154,12 @@ describe("Phase 5 placeholders: workflow", () => {
       outputArtifactId: "artifact-placeholder",
     };
 
-    expect(() =>
+    expect(
       workflow.decideNext({ run: sessionRun(), turns: [turn], artifacts: [] }),
-    ).toThrow("session_turn verified-state guard lands in P6-01");
+    ).toEqual({
+      kind: "fail",
+      code: "INVALID_STATE",
+      message: "Verified-handoff run contains a session turn",
+    });
   });
 });

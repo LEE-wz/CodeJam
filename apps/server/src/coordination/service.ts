@@ -511,7 +511,9 @@ export class CoordinationService implements CoordinationServiceContract {
 
   private makeTurn(run: CoordinationRun, decision: Extract<WorkflowDecision, { kind: "schedule" }>): CoordinationTurn {
     const participant = run.participants.find(
-      (candidate) => candidate.role === decision.role,
+      (candidate) =>
+        candidate.role === decision.role &&
+        (decision.agentId === undefined || candidate.agentId === decision.agentId),
     );
     if (!participant) {
       throw new CoordinationError(

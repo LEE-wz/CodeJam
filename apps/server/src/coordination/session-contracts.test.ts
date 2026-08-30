@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { CoordinationService } from "./service.js";
 import { SharedSessionWorkflowV1 } from "./session-workflow.js";
-import { DeterministicIdGenerator, FixedClock } from "./testing/controls.js";
+import { DeterministicIdGenerator, FIXED_NOW, FixedClock } from "./testing/controls.js";
 import {
   FakeAgentDirectory,
   FakeArtifactProtocol,
@@ -25,13 +25,14 @@ import {
   CREATE_COUNTDOWN_REQUEST,
   CREATE_FREE_CHAT_REQUEST,
   PARTIAL_DONE_ROUND,
+  PARTICIPANT_ONE,
   SESSION_PARTICIPANTS,
   SESSION_START_VALUE,
   UNANIMOUS_DONE_ROUND,
   WITHDRAWN_DONE_SEQUENCE,
   countdownPayload,
 } from "./testing/session-fixtures.js";
-import { SESSION_LIMITS } from "./types.js";
+import { DEFAULT_COORDINATION_POLICY, SESSION_LIMITS } from "./types.js";
 
 const buildService = () =>
   new CoordinationService({
@@ -191,16 +192,45 @@ describe("Phase 5 session message payload", () => {
   });
 });
 
-describe("Phase 5 session workflow shell", () => {
-  it("is registrable but refuses to route, naming P6-01", () => {
+describe("shared session workflow registration", () => {
+  it("routes a valid new countdown run to the first participant", () => {
     const workflow = new SharedSessionWorkflowV1();
 
-    expect(() =>
-      workflow.decideNext({
-        run: { policy: { workflow: "shared_session_v1" } } as never,
-        turns: [],
-        artifacts: [],
-      }),
-    ).toThrow("shared session routing lands in P6-01");
+    expect(workflow.decideNext({
+      run: {
+        id: "run-session-contract",
+        name: CREATE_COUNTDOWN_REQUEST.name,
+        objective: CREATE_COUNTDOWN_REQUEST.objective,
+        requiredSections: [],
+        participants: SESSION_PARTICIPANTS.map((agent) => ({
+          role: "participant" as const,
+          agentId: agent.id,
+          agentNameSnapshot: agent.name,
+        })),
+        policy: {
+          ...DEFAULT_COORDINATION_POLICY,
+          workflow: "shared_session_v1",
+          sessionProtocol: "countdown",
+          sessionStartValue: SESSION_START_VALUE,
+          maxTurns: SESSION_START_VALUE,
+        },
+        status: "running",
+        phase: "sessioning",
+        revision: 0,
+        nextTurnSequence: 1,
+        sharedState: { nextExpectedNumber: SESSION_START_VALUE },
+        version: 1,
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+      },
+      turns: [],
+      artifacts: [],
+    })).toMatchObject({
+      kind: "schedule",
+      role: "participant",
+      agentId: PARTICIPANT_ONE.id,
+      turnKind: "session_turn",
+      expectedArtifactType: "session_message",
+    });
   });
 });

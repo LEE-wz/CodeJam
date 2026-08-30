@@ -53,6 +53,11 @@ export type WorkflowDecision =
   | {
       kind: "schedule";
       role: CoordinationRole;
+      /**
+       * Session turns name the selected member of the repeated participant
+       * role. Verified-handoff decisions omit this and retain role lookup.
+       */
+      agentId?: AgentId;
       turnKind: CoordinationTurn["kind"];
       phase: CoordinationRun["phase"];
       revision: number;

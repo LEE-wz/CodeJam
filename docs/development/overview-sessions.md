@@ -145,6 +145,7 @@ present.
 | Missing or inconsistent `sharedState` (countdown), or non-session artifacts in a session run | Fail `INVALID_STATE` safely |
 
 - `inputArtifactIds` on a session turn lists every committed `session_message` in the run so far, in chronological order. This is the transcript.
+- The schedule decision carries the selected participant's `agentId`; all session members share the `participant` role, so role-only lookup cannot express round-robin routing. Verified-handoff decisions continue to omit this optional field.
 - Retries do not change the round-robin position: the position derives from committed session turns only.
 - The `revision` field stays 0 for session runs.
 - On any session completion, the run's `finalArtifactId` points at the last committed session message. For countdown that is the message with value `1`; for free chat it is the closing message of the unanimous round, or the message that consumed `maxTurns`.

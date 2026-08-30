@@ -399,6 +399,34 @@ message (countdown: the message with value `1`; free chat: the closing message
 of the unanimous round, or the message that consumed `maxTurns`). `P6-01`
 encodes both rules.
 
+### Mini-RFC: schedule decisions identify a repeated-role participant
+
+**Status:** Approved by the user on 2026-08-30 during P6-01.
+
+**Current contract and blocker.** Phase 5 made `SharedSessionWorkflow` reuse
+`WorkflowDecision`. A schedule decision named only a `role`, and the service
+resolved that role with the first matching run participant. This is sufficient
+for verified handoff, whose three roles are unique, but every shared-session
+member has role `participant`. The pure workflow could compute the required
+round-robin Agent but could not communicate that identity to the service; every
+real session turn would otherwise go to the first Agent.
+
+**Approved change.** Add optional `agentId?: AgentId` to the schedule member of
+`WorkflowDecision`. `SharedSessionWorkflowV1` always supplies the selected
+round-robin participant ID. Turn construction resolves both role and Agent ID
+when it is present. Existing verified-handoff decisions omit the field and keep
+their existing role-only lookup unchanged.
+
+**Scope and compatibility.** This is an additive internal workflow contract
+change. It changes no persisted type, API request or response, event shape, or
+verified-handoff routing behavior. Retries remain on the already scheduled
+logical turn and therefore on the same Agent.
+
+**Required evidence.** Pure workflow tests assert the selected Agent across
+round-robin cycles; Phase 6 walking-skeleton tests assert the real service
+schedules those Agents in order; the verified-handoff regression suite remains
+green.
+
 ### Mini-RFC: Phase 5 exhaustiveness exception (approved, P5-02)
 
 **Current contract.** `FILESYSTEM_MAP.md` scopes Phase 5 to `types.ts`,
