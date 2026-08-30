@@ -309,14 +309,162 @@ Phase 1 split, and the discrepancy is recorded rather than silently coded:
 | Failure demo | One demo Agent is instructed to occasionally subtract 2 instead of 1. The Agent genuinely misbehaves; middleware behaviour is never simulated. |
 | Latency | Live 10-turn runs can exceed the 3-minute demo budget. Mitigations: fast demo endpoint, pre-executed full run, live shorter run narrated over polling. |
 
-### Session open decisions (settle at P5-01)
+### Session decisions settled at P5-01 (2026-08-30)
 
-| Question | Recommended default |
+The team read `overview-sessions.md` and approved the session mini-RFC **with one
+amendment** (the free-chat completion signal, recorded as its own mini-RFC below).
+Every question previously listed as open in Section 11 is now settled:
+
+| Question | Decision |
 |---|---|
-| `sessionStartValue` default and range | 10; range 2..12 (countdown only) |
-| Participant ordering UX | Selection order is the turn order; drag reordering is stretch |
-| Free-chat default `maxTurns` | 6; range 3..12 |
-| Misleading countdown run in local data | Delete before judging evidence (P9-19) |
+| `sessionStartValue` default and range | 10; range 2..12 (countdown only). Per-run policy field, so a shorter demo run needs no code change. |
+| Participant ordering UX | Selection order is the turn order. Drag reordering stays a Phase 8 stretch goal; it changes no API. |
+| Free-chat default `maxTurns` | 6; range 3..12, reusing the bound already shipped in `routes.ts`. |
+| Misleading countdown run in local data | Delete before judging evidence (P9-19). |
+
+`overview-sessions.md` Section 11 previously listed six open decisions while this
+file already recorded two of them as settled. Section 11 has been rewritten to
+match; this file remains the record of the decision.
+
+### Session build scope settled at P5-01 (2026-08-30)
+
+The team chose to implement **Phase 5 only** for now and leave Phases 6-8 for
+teammates to pick up later. Both decisions were taken deliberately:
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Build the session extension before releasing? | **Phase 5 only, then reassess.** | Phase 5 is 8 tasks of additive types, contracts and fixtures with no behaviour that can regress. It freezes the session contract cheaply and leaves the go/no-go on Phases 6-8 open until the team knows its pace. Phase 9 (release) remains unstarted and is what produces the submission. |
+| Keep or cut `free_chat`? | **Keep in the frozen contract; defer implementation.** | `sessionProtocol` freezes with both members now, because reserving an enum member costs nothing and adding one after the contract freeze costs a mini-RFC plus rework in whichever phase the team is in. Countdown and free chat are both implemented in Phase 6. |
+
+The team's stated intent for `free_chat`: participants share one chat, share the
+transcript context, and work on any given task together. The first two are what
+the contract already provides. The third is what the completion-signal mini-RFC
+below exists to address.
+
+**Consequence to carry forward:** if the project is submitted before Phases 6-8
+land, the codebase contains session types, contracts and fixtures that nothing
+implements, and the Phase 9 sheet is written for "both workflows" throughout
+(P9-01, P9-09, P9-11, P9-12). Either implement the session phases or de-scope
+Phase 9 to the verified workflow; do not ship documentation that claims a
+protocol which does not run.
+
+### Mini-RFC: free-chat completion signal
+
+**Current contract.** `overview-sessions.md` Section 6.5 completes a free-chat run
+"when all allowed turns are committed (`maxTurns`) or on user stop", and Section 2
+lists semantic evaluation of free-chat content as an explicit non-goal.
+
+**Blocker.** A free-chat run reaching `completed` therefore means *N turns
+happened*, not *the task was done*. That is a materially weaker claim than the
+team's stated goal of Agents completing a task together, and stating the stronger
+claim in the README or the demo would be dishonest.
+
+**Proposed change (approved 2026-08-30).** Add an optional `done?: boolean` to
+`SessionMessagePayload`. It is **advisory**: a participant may declare that it
+considers the shared objective met, and never ends the run by doing so.
+`SharedSessionWorkflowV1` completes a free-chat run when **every participant's
+most recent committed message carries `done: true`** -- unanimous consent across
+one full round -- or at `maxTurns`, or on user stop, whichever comes first. A
+later message from the same participant without the flag clears that
+participant's own signal.
+
+**Why this shape.**
+
+- The rule is computed by backend code from committed artifacts only, so
+  overview.md Section 5.1's trust boundary is unchanged: Agents supply input, the
+  state machine decides. A single Agent asserting `done` cannot truncate the
+  collaboration.
+- It is pure and deterministic, computable from committed turns exactly like the
+  round-robin position, so it fits `SharedSessionWorkflowV1` without new state.
+- It degrades safely. If no Agent ever signals, behaviour is identical to the
+  frozen `maxTurns` rule, so this is strictly additive.
+- Unanimity requires at least one message from every participant, so a run can
+  never complete before `participantCount` committed turns.
+
+**Affected files and workstreams.** `coordination/types.ts` (Phase 5, done);
+`SharedSessionWorkflowV1` completion routing and its table tests (P6-01, P6-03);
+the free-chat schema and the countdown cross-field rejection of `done` (P6-04,
+P6-05); the output contract shown in the prompt (P6-07); the transcript view
+(P8-06); the documented completion claim (P9-01, P9-03).
+
+**Required tests.** Unanimous round completes; partial round does not; a withdrawn
+signal reopens the run; `done` on a countdown message is rejected with
+`INVALID_AGENT_OUTPUT`; a free-chat run with no signals still completes at
+`maxTurns`. Fixtures for the first three exist in `testing/session-fixtures.ts`.
+
+**Not yet confirmed.** The *shape* is approved. The specific unanimity rule above
+was proposed by the implementer, not chosen by the team, and should be confirmed
+before P6-01 encodes it. The alternatives considered were N consecutive signals
+from any participants, and requiring explicit user confirmation.
+
+### Mini-RFC: Phase 5 exhaustiveness exception (approved, P5-02)
+
+**Current contract.** `FILESYSTEM_MAP.md` scopes Phase 5 to `types.ts`,
+`contracts.ts`, `testing/**`, and new session modules named by the phase sheet.
+
+**Blocker.** This codebase expresses several backend-owned tables as
+`Readonly<Record<CoordinationTurnKind, ...>>` and
+`Readonly<Record<ArtifactType, ...>>`. Adding the session enum members
+(`participant`, `sessioning`, `session_turn`, `session_message`) makes every one
+of those tables fail to compile. Phase 5's own gate -- "session contracts and
+fixtures compile" -- therefore cannot pass without editing files outside the map.
+
+**Approved change.** Phase 5 may edit those files for **one purpose only**:
+adding loud placeholder entries. A placeholder throws at runtime and names the
+task that replaces it. Placeholders must never look like working instructions.
+No real session instruction, prompt, routing, or validation is written in Phase 5.
+
+**Placeholders are getters, not IIFEs.** The pattern first proposed was
+`session_turn: (() => { throw new Error("..."); })()`. An IIFE inside an object
+literal is evaluated when the **module is imported**, so that form throws on
+import: the server would not boot and all 389 existing tests would fail,
+including the test meant to prove the placeholder throws. A getter
+(`get session_turn(): string { throw new Error("..."); }`) satisfies the same
+`Record` type, keeps module load clean, and throws only when something reads the
+session entry -- which nothing in Phase 5 does.
+
+**Tables amended, and the task that replaces each.**
+
+| File | Table | Replaced by |
+|---|---|---|
+| `coordination/context-builder.ts` | `TASK_INSTRUCTIONS.session_turn` | P6-07 |
+| `coordination/context-builder.ts` | `OUTPUT_SHAPES.session_message` | P6-07 |
+| `coordination/context-builder.ts` | `OUTPUT_LIMITS.session_message` | P6-07 |
+| `coordination/context-builder.ts` | `ROLE_VISIBILITY.session_turn` | P6-07 |
+| `coordination/events.ts` | `ROLE_LABELS.participant` | P6-01 |
+| `coordination/events.ts` | `TURN_KIND_LABELS.session_turn` | P6-01 |
+| `coordination/artifact-protocol.ts` | `EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn` | P6-05 |
+| `coordination/workflow.ts` | local `expectedOutput.session_turn` | P6-01 |
+
+`workflow.ts` was found by the typecheck and is not in the amendment's original
+list: its `expectedOutput` map is indexed by `turn.kind`, so the new member
+produced `TS7053`. It takes the same placeholder treatment.
+
+**Deliberately not fixed.** Two sites accept the new members **without** a
+compile error and are therefore out of scope by explicit instruction:
+
+- `repository.ts` `expectedArtifactTypeForTurn` returns `"proposal"` from a bare
+  `default:`, so a session turn is silently recorded as expecting a proposal
+  artifact. **P7-02 owns this. TypeScript will not remind anyone.**
+- `context-builder.ts` `capPayload` ends in a bare fallthrough. Because
+  `SessionMessagePayload` also has a `content` field, a session message would
+  take the final-artifact branch and appear to work. **Phase 6 owns this.**
+
+Both were verified to compile cleanly in their current form, which is precisely
+why they are recorded here: nothing in the build will surface them.
+
+**One file outside the amendment.** `coordination/service.ts` is edited for the
+create dispatch and the minimal session create, because P5-07's required
+construction test cannot exist otherwise ("a session create produces a `created`
+run with `phase: \"sessioning\"` and `sharedState.nextExpectedNumber`
+initialized"). Full create validation and the session context probe remain P6-10.
+
+**Required tests.** `session-placeholders.test.ts` proves every placeholder
+throws with its task name, and proves the amended modules still import cleanly.
+The four `context-builder.ts` tables are module-private and `build()` reads the
+expected artifact type first, so they are covered collectively through the real
+public entry point rather than individually; exporting four internal tables to
+assert them would widen the module surface, which this phase may not do.
 
 ### Session invariants that may not be weakened
 

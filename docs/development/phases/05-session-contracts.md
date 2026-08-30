@@ -24,6 +24,41 @@ If a contract detail, route shape, task boundary, or expected evidence is unclea
 - One construction/compile test proving the service can dispatch both workflows from fake dependencies.
 - A recorded session contract commit reference.
 
+## Scope amendment (team-approved, P5-02)
+
+Adding the session enum members breaks compile-time exhaustiveness in tables
+outside this phase's filesystem map, because the codebase uses
+`Readonly<Record<CoordinationTurnKind, ...>>` and
+`Readonly<Record<ArtifactType, ...>>` style tables. This phase's compile gate
+cannot pass otherwise.
+
+Phase 5 may therefore edit those files for **one purpose only**: adding loud
+placeholder entries that throw at runtime and name the task that replaces them.
+Placeholders must never look like working instructions. No real session
+instruction, prompt, routing, or validation is written here.
+
+Placeholders are **getters, not IIFEs**. An IIFE in an object literal evaluates
+at module load and would throw on import, taking the server and the whole test
+suite with it. A getter satisfies the same `Record` type and throws only when
+the session entry is read.
+
+Amended tables and their replacing task: `context-builder.ts`
+`TASK_INSTRUCTIONS`, `OUTPUT_SHAPES`, `OUTPUT_LIMITS`, `ROLE_VISIBILITY` (P6-07);
+`events.ts` `ROLE_LABELS`, `TURN_KIND_LABELS` (P6-01); `artifact-protocol.ts`
+`EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND` (P6-05); `workflow.ts` local
+`expectedOutput` (P6-01). The last was found by the typecheck and is additional
+to the amendment's original list. `session-placeholders.test.ts` proves each one
+throws.
+
+Out of scope by instruction, and **not** fixed: `repository.ts`
+`expectedArtifactTypeForTurn` (P7-02) and `context-builder.ts` `capPayload`
+(Phase 6). Both accept the new members with no compile error, so neither the
+build nor the test suite will remind anyone they are outstanding. See
+[`../ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md).
+
+`service.ts` is edited outside the amendment for the create dispatch and minimal
+session create, because P5-07's construction test requires them.
+
 ## Tasks
 
 ### Team approval and decisions
