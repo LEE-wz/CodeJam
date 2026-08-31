@@ -584,15 +584,18 @@ export class CoordinationService implements CoordinationServiceContract {
     }
 
     const details = await this.dependencies.repository.getRunDetails(id);
-    const activeAttempt = details?.attempts.find((attempt) => attempt.status === "running");
-    if (activeAttempt) {
-      try {
-        await this.dependencies.runtime.cancelAttempt(activeAttempt.id);
-      } catch {
-        // The stop transition is durable before cancellation is attempted. A
-        // gateway-side cancellation failure must not leave it stranded.
-      }
-    }
+    await Promise.all(
+      (details?.attempts ?? [])
+        .filter((attempt) => attempt.status === "running")
+        .map(async (attempt) => {
+          try {
+            await this.dependencies.runtime.cancelAttempt(attempt.id);
+          } catch {
+            // The stop transition is durable before cancellation is attempted.
+            // A gateway-side failure cannot leave any sibling stranded.
+          }
+        }),
+    );
     const stopped = await this.dependencies.repository.finishStopped(id);
     if (!stopped) {
       throw new CoordinationError(404, "NOT_FOUND", "Coordination run not found");
@@ -909,9 +912,25 @@ export class CoordinationService implements CoordinationServiceContract {
         next += 1;
         const turn = scheduledTurns[index];
         if (!turn) return;
-        outcomes[index] = ownsLoop()
-          ? await this.executeTurnWithRetries(scheduledRun, turn, ownsLoop)
-          : "settled";
+        if (!ownsLoop()) {
+          outcomes[index] = "settled";
+          continue;
+        }
+        try {
+          outcomes[index] = await this.executeTurnWithRetries(scheduledRun, turn, ownsLoop);
+        } catch (error) {
+          // Do not let one unexpected worker failure short-circuit the wave.
+          // The supervisor must wait for every already-started sibling to
+          // settle before it makes the run-level failure transition.
+          outcomes[index] = {
+            kind: "failed",
+            code: error instanceof CoordinationError ? error.code : "INTERNAL_ERROR",
+            message:
+              error instanceof CoordinationError
+                ? error.message
+                : "Coordination turn stopped because of an internal error",
+          };
+        }
       }
     };
     await Promise.all(Array.from({ length: cap }, worker));
