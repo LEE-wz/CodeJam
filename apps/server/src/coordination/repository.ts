@@ -967,7 +967,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
    * `completed`/`failed`/`stopped` are immutable, `stop_requested` belongs to
    * the stop path, and `created` has no orchestration to reconcile.
    *
-   * Idempotent: a run with no `activeTurnId` returns `noop` without appending an
+   * Idempotent: a run with no `activeTurnIds` returns `noop` without appending an
    * event or bumping the version, so running this twice changes nothing.
    */
   async reconcileRun(input: {
