@@ -561,10 +561,11 @@ describe("PA14-27 recovery gates that must not move", () => {
     expect(await context.durable.listReservedAgentIds()).toEqual([]);
   });
 
-  it("returns an auction session interrupted before any bid to awaiting_input", async () => {
-    // A round killed before bidding began has no settled evidence to re-derive
-    // from, so it keeps today's semantics rather than being kept `running`.
-    const context = await startRound([deferred()]);
+  it("returns a direct round interrupted mid-execution to awaiting_input", async () => {
+    // A direct round schedules an execution turn and never a bid, so a restart
+    // leaves no settled evidence to re-derive from. Direct rounds deliberately
+    // keep today's semantics: the session goes idle for the user to re-ask.
+    const context = await startRound([deferred()], auctionRequest({ routingMode: "direct" }));
     await context.runtime.waitForStarts(1);
 
     expect(await context.durable.interruptActiveRuns()).toEqual([context.runId]);
@@ -572,7 +573,25 @@ describe("PA14-27 recovery gates that must not move", () => {
     const after = await detailsOf(context.durable, context.runId);
     expect(after.run.status).toBe("awaiting_input");
     expect(after.events.map(({ type }) => type)).toContain("run.awaiting_input");
+    expect(after.turns.filter(({ kind }) => kind === "session_bid")).toHaveLength(0);
+    expect(after.turns.every(({ status }) => status === "failed")).toBe(true);
     expect(typeCounts(after, "session_award")).toBe(0);
+  });
+
+  it("keeps an auction round interrupted mid-bid-wave running on its settled evidence", async () => {
+    // Only the first bidder started. The round still resolves from whatever
+    // settles, so recovery keeps it resumable rather than discarding the wave.
+    const context = await startRound([deferred()]);
+    await context.runtime.waitForStarts(1);
+
+    expect(await context.durable.interruptActiveRuns()).toEqual([context.runId]);
+
+    const after = await detailsOf(context.durable, context.runId);
+    expect(after.run.status).toBe("running");
+    expect(after.run.activeTurnIds).toEqual([]);
+    expect(after.events.map(({ type }) => type)).not.toContain("run.awaiting_input");
+    expect(after.turns.filter(({ kind }) => kind === "session_bid")).toHaveLength(3);
+    expect(await context.durable.listReservedAgentIds()).toEqual([]);
   });
 });
 

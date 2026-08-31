@@ -1184,6 +1184,15 @@ export class DurableCoordinationRepository implements CoordinationRepository {
    * Verified handoffs fail terminally; shared sessions return to durable idle
    * so their committed transcript can be resumed. Either path releases every
    * attempt-derived Agent reservation and no loop is resumed automatically.
+   *
+   * PA14-27 adds one exception, gated on `auctionPolicy`. An auction round is
+   * driven entirely by its own committed evidence, so a round interrupted with
+   * settled bids or an unexecuted award can be re-derived rather than
+   * abandoned. `awaiting_input` is a dead end for such a round: nothing
+   * re-derives an idle run, so the award would never be made and the awarded
+   * plan would never run. A pending round therefore stays `running` with no
+   * active turn, which is exactly the state `reconcileUnownedRuns` gives a
+   * fresh loop. Every other run keeps its previous behaviour byte for byte.
    */
   async interruptActiveRuns(): Promise<CoordinationRunId[]> {
     return this.store.mutate((database) => {
@@ -1194,10 +1203,14 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         }
 
         const now = this.clock.nowIso();
+        const wasRunning = run.status === "running";
         this.append(
           database,
           this.events.runInterrupted({ runId: run.id, code: "SERVER_RESTARTED" }),
         );
+        // `settleActiveWork` clears the list, so the interrupted turns are read
+        // before it runs.
+        const interruptedTurnIds = [...run.activeTurnIds];
         this.settleActiveWork(
           database,
           run,
@@ -1206,10 +1219,22 @@ export class DurableCoordinationRepository implements CoordinationRepository {
           "server restarted while the attempt was running",
         );
         if (run.policy.workflow === "shared_session_v1") {
-          run.status = "awaiting_input";
-          delete run.errorCode;
-          delete run.errorMessage;
-          this.append(database, this.events.runAwaitingInput({ runId: run.id }));
+          const isAuctionSession = run.policy.auctionPolicy !== undefined;
+          if (isAuctionSession) {
+            this.cancelInterruptedAwardExecution(database, run, interruptedTurnIds);
+          }
+          // A stop request outranks recovery: the user asked for this run to
+          // stop, so it is never resumed by a restart.
+          if (isAuctionSession && wasRunning && this.hasPendingAuctionRound(database, run)) {
+            run.status = "running";
+            delete run.errorCode;
+            delete run.errorMessage;
+          } else {
+            run.status = "awaiting_input";
+            delete run.errorCode;
+            delete run.errorMessage;
+            this.append(database, this.events.runAwaitingInput({ runId: run.id }));
+          }
         } else {
           run.status = "failed";
           run.errorCode = "SERVER_RESTARTED";
@@ -1322,6 +1347,117 @@ export class DurableCoordinationRepository implements CoordinationRepository {
   }
 
   // -------------------------------------------------------------- helpers
+
+  /** The one immutable award of the run's current user-message round, if any. */
+  private currentRoundAward(
+    database: Database,
+    run: CoordinationRun,
+  ): SessionAwardArtifact | undefined {
+    const userArtifactId = run.lastUserArtifactId;
+    if (userArtifactId === undefined) {
+      return undefined;
+    }
+    return database.coordinationArtifacts.find(
+      (artifact): artifact is SessionAwardArtifact =>
+        artifact.runId === run.id &&
+        artifact.type === "session_award" &&
+        artifact.payload.userArtifactId === userArtifactId,
+    );
+  }
+
+  /**
+   * Re-mark the award-execution turns a restart interrupted as `cancelled`
+   * (PA14-27).
+   *
+   * `settleActiveWork` closes every interrupted turn as `failed`, which the
+   * workflow reads as a genuine Agent failure and answers by failing the whole
+   * round (PA14-13). A restart is not an Agent failure, so an interrupted
+   * awarded execution is recorded as cancelled instead and its assignment stays
+   * re-schedulable. Only turns carrying this round's immutable award qualify,
+   * so a pre-award direct turn in the same round is untouched. No turn event is
+   * emitted, exactly as the stop path cancels turns without one.
+   */
+  private cancelInterruptedAwardExecution(
+    database: Database,
+    run: CoordinationRun,
+    interruptedTurnIds: readonly CoordinationTurn["id"][],
+  ): void {
+    const award = this.currentRoundAward(database, run);
+    if (!award) {
+      return;
+    }
+    for (const turnId of interruptedTurnIds) {
+      const turn = database.coordinationTurns.find((candidate) => candidate.id === turnId);
+      if (turn?.kind === "session_turn" && turn.inputArtifactIds.includes(award.id)) {
+        turn.status = "cancelled";
+      }
+    }
+  }
+
+  /**
+   * Whether the current auction round still has work a resumed loop can derive
+   * from committed evidence alone (PA14-27).
+   *
+   * The predicate deliberately mirrors what `SharedSessionWorkflowV1.decideNext`
+   * does with the same durable records, because a round kept `running` that the
+   * workflow cannot advance would stay `running` forever:
+   *
+   * - No award yet: the round is pending exactly when a bid turn exists for it,
+   *   which is what makes the workflow return `resolve_auction`. A round killed
+   *   before any bid was scheduled has nothing to derive from and goes idle, so
+   *   direct rounds keep their current semantics.
+   * - `publish_candidate`: the answer was published inside the award mutation,
+   *   so nothing is outstanding.
+   * - Otherwise the award schedules assignments -- the winning plan's, or the
+   *   award's own Agent for a bid-less fallback award -- and the round is
+   *   pending while any of them has no committed execution turn.
+   *
+   * A missing winning bid is corrupt state: the round is reported not pending so
+   * the session stays usable rather than being resumed or auto-failed.
+   */
+  private hasPendingAuctionRound(database: Database, run: CoordinationRun): boolean {
+    const userArtifactId = run.lastUserArtifactId;
+    if (userArtifactId === undefined) {
+      return false;
+    }
+    const turns = database.coordinationTurns.filter((turn) => turn.runId === run.id);
+    const award = this.currentRoundAward(database, run);
+    if (!award) {
+      return turns.some(
+        (turn) =>
+          turn.kind === "session_bid" && turn.inputArtifactIds.includes(userArtifactId),
+      );
+    }
+    if (award.payload.outcome === "publish_candidate") {
+      return false;
+    }
+
+    let assignedAgentIds: AgentId[];
+    if (award.payload.winningBidArtifactId === undefined) {
+      assignedAgentIds = [award.payload.selectedAgentId];
+    } else {
+      const winningBid = database.coordinationArtifacts.find(
+        (artifact) =>
+          artifact.id === award.payload.winningBidArtifactId && artifact.runId === run.id,
+      );
+      if (winningBid?.type !== "session_bid") {
+        return false;
+      }
+      assignedAgentIds = winningBid.payload.plan.assignments.map(({ agentId }) => agentId);
+    }
+
+    const executedAgentIds = new Set(
+      turns
+        .filter(
+          (turn) =>
+            turn.kind === "session_turn" &&
+            turn.status === "committed" &&
+            turn.inputArtifactIds.includes(award.id),
+        )
+        .map(({ agentId }) => agentId),
+    );
+    return assignedAgentIds.some((agentId) => !executedAgentIds.has(agentId));
+  }
 
   /** Cancel active attempts and close every active turn of a run going terminal. */
   private settleActiveWork(
