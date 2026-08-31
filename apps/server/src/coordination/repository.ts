@@ -19,6 +19,8 @@ import type {
   ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
+  ScheduleTurnsInput,
+  ScheduleTurnsResult,
   StartRunCommitResult,
 } from "./contracts.js";
 import type {
@@ -48,6 +50,8 @@ export type {
   ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
+  ScheduleTurnsInput,
+  ScheduleTurnsResult,
   StartRunCommitResult,
 } from "./contracts.js";
 
@@ -118,7 +122,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         return byCreatedAt !== 0 ? byCreatedAt : right.index - left.index;
       })
       .slice(0, Math.max(0, limit))
-      .map((entry) => entry.run);
+      .map((entry) => normaliseRun(entry.run));
   }
 
   async getRunDetails(id: CoordinationRunId): Promise<CoordinationRunDetails | undefined> {
@@ -127,7 +131,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     if (!run) {
       return undefined;
     }
-    return buildRunDetails(database, run);
+    return buildRunDetails(database, normaliseRun(run));
   }
 
   /**
@@ -390,13 +394,14 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     return this.store.mutate((database) => {
       const run = database.coordinationRuns.find((candidate) => candidate.id === id);
       if (!run) return undefined;
-      if (run.status !== "running") return structuredClone(run);
-      delete run.activeTurnId;
+      if (run.status !== "running" || ensureActiveTurnIds(run).length !== 0) {
+        return normaliseRun(run);
+      }
       run.status = "awaiting_input";
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
       this.append(database, this.events.runAwaitingInput({ runId: run.id }));
-      return structuredClone(run);
+      return normaliseRun(run);
     });
   }
 
@@ -435,47 +440,80 @@ export class DurableCoordinationRepository implements CoordinationRepository {
   }
 
   async scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult> {
+    const scheduled = await this.scheduleTurns({
+      runId: input.runId,
+      expectedRunVersion: input.expectedRunVersion,
+      turns: [input.turn],
+      nextPhase: input.nextPhase,
+      nextRevision: input.nextRevision,
+    });
+    if (scheduled.kind !== "scheduled") return scheduled;
+    return { kind: "scheduled", run: scheduled.run, turn: scheduled.turns[0]! };
+  }
+
+  async scheduleTurns(input: ScheduleTurnsInput): Promise<ScheduleTurnsResult> {
     return this.store.mutate((database) => {
       const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
       if (!run) {
         return { kind: "not_found" } as const;
       }
+      const activeTurnIds = ensureActiveTurnIds(run);
       if (
         run.status !== "running" ||
-        run.activeTurnId !== undefined ||
+        activeTurnIds.length !== 0 ||
+        input.turns.length === 0 ||
         run.version !== input.expectedRunVersion
       ) {
-        return { kind: "stale", currentRun: structuredClone(run) } as const;
+        return { kind: "stale", currentRun: normaliseRun(run) } as const;
       }
 
-      const turn = structuredClone(input.turn);
-      database.coordinationTurns.push(turn);
-      run.activeTurnId = turn.id;
-      run.nextTurnSequence += 1;
+      const turns = [...input.turns]
+        .map((turn) => structuredClone(turn))
+        .sort((left, right) => left.sequence - right.sequence);
+      const turnIds = new Set(turns.map((turn) => turn.id));
+      const agentIds = new Set(turns.map((turn) => turn.agentId));
+      const validWave =
+        turnIds.size === turns.length &&
+        agentIds.size === turns.length &&
+        turns.every(
+          (turn, index) =>
+            turn.runId === run.id &&
+            turn.status === "scheduled" &&
+            turn.sequence === run.nextTurnSequence + index,
+        );
+      if (!validWave) {
+        return { kind: "stale", currentRun: normaliseRun(run) } as const;
+      }
+
+      database.coordinationTurns.push(...turns);
+      run.activeTurnIds = turns.map((turn) => turn.id);
+      run.nextTurnSequence += turns.length;
       run.phase = input.nextPhase;
       run.revision = input.nextRevision;
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
 
-      this.append(
-        database,
-        this.events.turnScheduled({
-          runId: run.id,
-          turnId: turn.id,
-          sequence: turn.sequence,
-          role: turn.role,
-          agentId: turn.agentId,
-          kind: turn.kind,
-          phase: run.phase,
-          revision: run.revision,
-          expectedArtifactType: expectedArtifactTypeForTurn(turn),
-          inputArtifactCount: turn.inputArtifactIds.length,
-        }),
-      );
+      for (const turn of turns) {
+        this.append(
+          database,
+          this.events.turnScheduled({
+            runId: run.id,
+            turnId: turn.id,
+            sequence: turn.sequence,
+            role: turn.role,
+            agentId: turn.agentId,
+            kind: turn.kind,
+            phase: run.phase,
+            revision: run.revision,
+            expectedArtifactType: expectedArtifactTypeForTurn(turn),
+            inputArtifactCount: turn.inputArtifactIds.length,
+          }),
+        );
+      }
       return {
         kind: "scheduled",
-        run: structuredClone(run),
-        turn: structuredClone(turn),
+        run: normaliseRun(run),
+        turns: structuredClone(turns),
       } as const;
     });
   }
@@ -487,7 +525,11 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       if (!run || !turn) {
         return { kind: "not_found" } as const;
       }
-      if (run.status !== "running" || turn.status !== "scheduled") {
+      if (
+        run.status !== "running" ||
+        !activeTurnIdsFor(run).includes(turn.id) ||
+        turn.status !== "scheduled"
+      ) {
         return { kind: "stale" } as const;
       }
 
@@ -580,7 +622,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       // late result from a superseded attempt.
       if (
         run.status !== "running" ||
-        run.activeTurnId !== turn.id ||
+        !activeTurnIdsFor(run).includes(turn.id) ||
         turn.status !== "running" ||
         turn.activeAttemptId !== attempt.id ||
         attempt.status !== "running" ||
@@ -618,7 +660,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       turn.lastValidationErrors = [];
       delete turn.activeAttemptId;
 
-      delete run.activeTurnId;
+      removeActiveTurnId(run, turn.id);
       if (artifact.type === "proposal") {
         run.latestProposalArtifactId = artifact.id;
       }
@@ -702,7 +744,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       if (input.status === "cancelled") {
         turn.status = "cancelled";
         turn.completedAt = now;
-        delete run.activeTurnId;
+        removeActiveTurnId(run, turn.id);
       } else {
         // The turn stays schedulable so the service can retry within its ceiling.
         turn.status = "scheduled";
@@ -904,7 +946,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       .map((run) => ({
         runId: run.id,
         status: run.status as "running" | "stop_requested",
-        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        activeTurnIds: activeTurnIdsFor(run),
         hasRunningAttempt: runIdsWithRunningAttempt.has(run.id),
       }));
   }
@@ -925,7 +967,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
    * `completed`/`failed`/`stopped` are immutable, `stop_requested` belongs to
    * the stop path, and `created` has no orchestration to reconcile.
    *
-   * Idempotent: a run with no `activeTurnId` returns `noop` without appending an
+   * Idempotent: a run with no `activeTurnIds` returns `noop` without appending an
    * event or bumping the version, so running this twice changes nothing.
    */
   async reconcileRun(input: {
@@ -943,11 +985,12 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       if (run.status !== "running") {
         return { kind: "owned", run: structuredClone(run) } as const;
       }
-      if (run.activeTurnId === undefined) {
+      const activeTurnIds = activeTurnIdsFor(run);
+      if (activeTurnIds.length === 0) {
         return { kind: "noop", run: structuredClone(run) } as const;
       }
 
-      const turnId = run.activeTurnId;
+      const turnIds = [...activeTurnIds];
       this.settleActiveWork(
         database,
         run,
@@ -957,22 +1000,24 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       );
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
-      this.append(
-        database,
-        this.events.runReconciled({
-          runId: run.id,
-          turnId,
-          code: "RUN_ABANDONED",
-          reason: input.reason,
-        }),
-      );
+      for (const turnId of turnIds) {
+        this.append(
+          database,
+          this.events.runReconciled({
+            runId: run.id,
+            turnId,
+            code: "RUN_ABANDONED",
+            reason: input.reason,
+          }),
+        );
+      }
       return { kind: "reconciled", run: structuredClone(run) } as const;
     });
   }
 
   // -------------------------------------------------------------- helpers
 
-  /** Cancel the active attempt and close the active turn of a run going terminal. */
+  /** Cancel active attempts and close every active turn of a run going terminal. */
   private settleActiveWork(
     database: Database,
     run: CoordinationRun,
@@ -980,11 +1025,12 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     code: CoordinationErrorCode,
     message: string,
   ): void {
-    const turn = run.activeTurnId
-      ? database.coordinationTurns.find((candidate) => candidate.id === run.activeTurnId)
-      : undefined;
+    const turns = activeTurnIdsFor(run)
+      .map((turnId) => database.coordinationTurns.find((candidate) => candidate.id === turnId))
+      .flatMap((turn) => (turn ? [turn] : []))
+      .sort((left, right) => left.sequence - right.sequence);
 
-    if (turn) {
+    for (const turn of turns) {
       const now = this.clock.nowIso();
       const attempt = turn.activeAttemptId
         ? database.coordinationAttempts.find((candidate) => candidate.id === turn.activeAttemptId)
@@ -1014,7 +1060,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       turn.completedAt = now;
       delete turn.activeAttemptId;
     }
-    delete run.activeTurnId;
+    run.activeTurnIds = [];
   }
 
   private attemptSettlementEvent(
@@ -1099,6 +1145,35 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 }
 
 // ------------------------------------------------------------ pure helpers
+
+type LegacyRunRecord = CoordinationRun & { activeTurnId?: string };
+
+/**
+ * Old JSON rows used a singular pointer. Reads derive the new array without
+ * mutating the row, so a passive read never performs a data migration.
+ */
+const activeTurnIdsFor = (run: CoordinationRun): string[] => {
+  if (Array.isArray(run.activeTurnIds)) return [...run.activeTurnIds];
+  const legacy = run as LegacyRunRecord;
+  return legacy.activeTurnId === undefined ? [] : [legacy.activeTurnId];
+};
+
+/** Materialise the additive active-turn array before a command mutates a run. */
+const ensureActiveTurnIds = (run: CoordinationRun): string[] => {
+  if (!Array.isArray(run.activeTurnIds)) {
+    run.activeTurnIds = activeTurnIdsFor(run);
+  }
+  return run.activeTurnIds;
+};
+
+const removeActiveTurnId = (run: CoordinationRun, turnId: string): void => {
+  run.activeTurnIds = activeTurnIdsFor(run).filter((candidate) => candidate !== turnId);
+};
+
+const normaliseRun = (run: CoordinationRun): CoordinationRun => ({
+  ...structuredClone(run),
+  activeTurnIds: activeTurnIdsFor(run),
+});
 
 /**
  * Agents that are genuinely mid-attempt: they hold a `running` attempt inside a

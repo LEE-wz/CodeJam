@@ -50,6 +50,7 @@ export const SESSION_LIMITS = {
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
   defaultSessionTurns: 200,
+  maxParallelTurns: 10,
 } as const;
 
 export interface RequiredSection {
@@ -67,6 +68,8 @@ export interface CoordinationPolicy {
   outputMaxChars: number;
   sessionProtocol?: SessionProtocol;
   sessionStartValue?: number;
+  sessionParallel?: boolean;
+  maxParallelTurns?: number;
 }
 
 export interface CoordinationParticipant {
@@ -86,7 +89,7 @@ export interface CoordinationRun {
   phase: CoordinationPhase;
   revision: number;
   nextTurnSequence: number;
-  activeTurnId?: string;
+  activeTurnIds: string[];
   latestProposalArtifactId?: string;
   latestReviewArtifactId?: string;
   finalArtifactId?: string;

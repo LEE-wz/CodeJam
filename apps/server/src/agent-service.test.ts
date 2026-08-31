@@ -113,7 +113,7 @@ async function reserveAgent(
     createdAt: timestamp,
     updatedAt: timestamp,
     startedAt: timestamp,
-    ...(withRunningAttempt ? { activeTurnId: "turn-1" } : {}),
+    activeTurnIds: withRunningAttempt ? ["turn-1"] : [],
   };
   const turn: CoordinationTurn = {
     id: "turn-1",

@@ -318,7 +318,7 @@ describe("SessionWorkspace", () => {
     const composer = await screen.findByLabelText("Message the session") as HTMLTextAreaElement;
     expect(composer.disabled).toBe(true);
     expect(composer.placeholder).toBe("Agents are working…");
-    expect(screen.getByText(/Agents are working\. Stop ends only this wave/i)).toBeTruthy();
+    expect(screen.getByText(/Agents are working on this wave\. Stop ends only this wave/i)).toBeTruthy();
   });
 
   it("renders user and Agent messages as distinct ordered transcript entries", async () => {
@@ -354,6 +354,29 @@ describe("SessionWorkspace", () => {
     expect(userEntry?.textContent).toContain("YouUser message");
     expect(userEntry?.textContent).toContain("Please prioritize safety");
     expect(container.querySelectorAll(".transcript-message:not(.transcript-message-user)")).toHaveLength(1);
+  });
+
+  it("orders concurrently committed wave messages by their durable transcript sequence", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const messages = base.artifacts.filter((artifact) => artifact.type === "session_message");
+    if (messages.length !== 3) throw new Error("expected three session fixture messages");
+    const wave = {
+      ...base,
+      run: { ...base.run, activeTurnIds: ["turn-wave-1", "turn-wave-2", "turn-wave-3"] },
+      artifacts: [
+        { ...messages[0]!, payload: { ...messages[0]!.payload, content: "Wave third" }, transcriptSequence: 3 },
+        { ...messages[1]!, payload: { ...messages[1]!.payload, content: "Wave first" }, transcriptSequence: 1 },
+        { ...messages[2]!, payload: { ...messages[2]!.payload, content: "Wave second" }, transcriptSequence: 2 },
+      ],
+    };
+    mockedApi.list.mockResolvedValue({ runs: [wave.run] });
+    mockedApi.detail.mockResolvedValue(wave);
+    render(<SessionWorkspace agents={agents} />);
+    const transcript = await screen.findByRole("list", { name: "Session transcript" });
+    const text = transcript.textContent ?? "";
+    expect(text.indexOf("Wave first")).toBeLessThan(text.indexOf("Wave second"));
+    expect(text.indexOf("Wave second")).toBeLessThan(text.indexOf("Wave third"));
+    expect(screen.getByText(/3 Agents are working in this wave/i)).toBeTruthy();
   });
 
   it("appends delta polling results without replacing the existing transcript", async () => {

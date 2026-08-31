@@ -8,6 +8,7 @@ import type {
   CoordinationServiceContract,
   CoordinationWorkflowDispatch,
   IdGenerator,
+  ScheduledTurnSpec,
   SharedSessionWorkflow,
   VerifiedHandoffWorkflow,
   WorkflowDecision,
@@ -60,6 +61,16 @@ const boundedRetryFeedback = (messages: string[]): string[] =>
         : message,
     );
 
+const isBusyAgentFailure = (message: string): boolean =>
+  message.toLowerCase().includes("already running");
+
+/** A short, bounded yield gives a Playground turn a chance to release an Agent. */
+const boundedBusyBackoff = async (attemptNumber: number): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, Math.min(250, 25 * attemptNumber));
+  });
+};
+
 const isTerminal = (status: CoordinationRun["status"]): boolean =>
   terminalStatuses.has(status);
 
@@ -83,7 +94,11 @@ export const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
  * turn exited without a terminal call while the run may still be `running`, so
  * the loop must reconcile before it may continue or stop.
  */
-type TurnExecutionOutcome = "committed" | "settled" | "abandoned";
+type TurnExecutionOutcome =
+  | "committed"
+  | "settled"
+  | "abandoned"
+  | { kind: "failed"; code: CoordinationErrorCode; message: string };
 
 /**
  * Structured coordination log fields. Only identifiers, enum values, counts, and
@@ -338,6 +353,8 @@ export class CoordinationService implements CoordinationServiceContract {
       (protocol === "countdown"
         ? (startValue ?? SESSION_LIMITS.defaultStartValue)
         : SESSION_LIMITS.defaultSessionTurns);
+    const maxParallelTurns =
+      input.policy?.maxParallelTurns ?? Math.min(agentIds.length, 4);
 
     if (
       (protocol === "countdown" &&
@@ -351,6 +368,9 @@ export class CoordinationService implements CoordinationServiceContract {
         (!Number.isInteger(maxTurns) ||
           maxTurns < SESSION_LIMITS.minSessionTurns ||
           maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
+      !Number.isInteger(maxParallelTurns) ||
+      maxParallelTurns < 1 ||
+      maxParallelTurns > SESSION_LIMITS.maxParallelTurns ||
       (input.policy?.perAttemptTimeoutMs !== undefined &&
         (!Number.isInteger(input.policy.perAttemptTimeoutMs) ||
           input.policy.perAttemptTimeoutMs < 10_000 ||
@@ -369,6 +389,8 @@ export class CoordinationService implements CoordinationServiceContract {
       contextMaxChars: SESSION_CONTEXT_MAX_CHARS,
       maxTurns,
       sessionProtocol: protocol,
+      sessionParallel: input.policy?.sessionParallel ?? false,
+      maxParallelTurns,
       ...(startValue !== undefined ? { sessionStartValue: startValue } : {}),
       ...(input.policy?.perAttemptTimeoutMs !== undefined
         ? { perAttemptTimeoutMs: input.policy.perAttemptTimeoutMs }
@@ -396,6 +418,7 @@ export class CoordinationService implements CoordinationServiceContract {
       phase: "sessioning",
       revision: 0,
       nextTurnSequence: 1,
+      activeTurnIds: [],
       ...(startValue !== undefined ? { sharedState: { nextExpectedNumber: startValue } } : {}),
       version: 1,
       createdAt: timestamp,
@@ -458,6 +481,7 @@ export class CoordinationService implements CoordinationServiceContract {
       phase: "drafting",
       revision: 0,
       nextTurnSequence: 1,
+      activeTurnIds: [],
       version: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -560,15 +584,18 @@ export class CoordinationService implements CoordinationServiceContract {
     }
 
     const details = await this.dependencies.repository.getRunDetails(id);
-    const activeAttempt = details?.attempts.find((attempt) => attempt.status === "running");
-    if (activeAttempt) {
-      try {
-        await this.dependencies.runtime.cancelAttempt(activeAttempt.id);
-      } catch {
-        // The stop transition is durable before cancellation is attempted. A
-        // gateway-side cancellation failure must not leave it stranded.
-      }
-    }
+    await Promise.all(
+      (details?.attempts ?? [])
+        .filter((attempt) => attempt.status === "running")
+        .map(async (attempt) => {
+          try {
+            await this.dependencies.runtime.cancelAttempt(attempt.id);
+          } catch {
+            // The stop transition is durable before cancellation is attempted.
+            // A gateway-side failure cannot leave any sibling stranded.
+          }
+        }),
+    );
     const stopped = await this.dependencies.repository.finishStopped(id);
     if (!stopped) {
       throw new CoordinationError(404, "NOT_FOUND", "Coordination run not found");
@@ -725,13 +752,39 @@ export class CoordinationService implements CoordinationServiceContract {
         return;
       }
 
-      const scheduled = await this.dependencies.repository.scheduleTurn({
-        runId,
-        expectedRunVersion: details.run.version,
-        turn: this.makeTurn(details.run, decision),
-        nextPhase: decision.phase,
-        nextRevision: decision.revision,
-      });
+      const specs: ScheduledTurnSpec[] =
+        decision.kind === "schedule" ? [decision] : decision.turns;
+      if (
+        specs.length === 0 ||
+        specs.some(
+          (spec) =>
+            spec.phase !== specs[0]?.phase || spec.revision !== specs[0]?.revision,
+        )
+      ) {
+        await this.dependencies.repository.failRun({
+          runId,
+          code: "INVALID_STATE",
+          message: "Workflow returned an invalid parallel wave",
+        });
+        return;
+      }
+      const turns = specs.map((spec, index) => this.makeTurn(details.run, spec, index));
+      const scheduled =
+        decision.kind === "schedule"
+          ? await this.dependencies.repository.scheduleTurn({
+              runId,
+              expectedRunVersion: details.run.version,
+              turn: turns[0]!,
+              nextPhase: specs[0]!.phase,
+              nextRevision: specs[0]!.revision,
+            })
+          : await this.dependencies.repository.scheduleTurns({
+              runId,
+              expectedRunVersion: details.run.version,
+              turns,
+              nextPhase: specs[0]!.phase,
+              nextRevision: specs[0]!.revision,
+            });
       if (scheduled.kind === "not_found") {
         // The run was deleted between the reload and the schedule. Nothing is
         // left to settle, and a deleted run reserves nobody.
@@ -741,34 +794,47 @@ export class CoordinationService implements CoordinationServiceContract {
         continue;
       }
 
-      this.log({
-        runId,
-        turnId: scheduled.turn.id,
-        sequence: scheduled.turn.sequence,
-        role: scheduled.turn.role,
-        agentId: scheduled.turn.agentId,
-        status: decision.turnKind,
-      }, "Coordination turn scheduled");
+      const scheduledTurns =
+        "turn" in scheduled ? [scheduled.turn] : scheduled.turns;
+      for (const turn of scheduledTurns) {
+        this.log({
+          runId,
+          turnId: turn.id,
+          sequence: turn.sequence,
+          role: turn.role,
+          agentId: turn.agentId,
+          status: turn.kind,
+        }, "Coordination turn scheduled");
+      }
 
-      const outcome = await this.executeTurnWithRetries(
+      const outcomes = await this.executeWave(
         scheduled.run,
-        scheduled.turn,
+        scheduledTurns,
         () => this.ownsLoop(runId, epoch),
       );
       if (!this.ownsLoop(runId, epoch)) return;
-      if (outcome === "committed") {
+      const failed = outcomes.find(
+        (outcome): outcome is Extract<TurnExecutionOutcome, { kind: "failed" }> =>
+          typeof outcome === "object" && outcome.kind === "failed",
+      );
+      if (failed) {
+        await this.dependencies.repository.failRun({ runId, code: failed.code, message: failed.message });
+        return;
+      }
+      if (outcomes.some((outcome) => outcome === "committed")) {
         // Progress resets the reconciliation budget: the bound exists to catch
         // a run that cannot advance, not one that occasionally loses a lease.
         reconciliations = 0;
-        continue;
       }
-      if (outcome === "settled") {
+      if (outcomes.every((outcome) => outcome === "settled")) {
         return;
       }
 
-      reconciliations += 1;
-      if (!(await this.reconcileAbandonedLoop(runId, reconciliations))) {
-        return;
+      if (outcomes.some((outcome) => outcome === "abandoned")) {
+        reconciliations += 1;
+        if (!(await this.reconcileAbandonedLoop(runId, reconciliations))) {
+          return;
+        }
       }
     }
   }
@@ -822,7 +888,60 @@ export class CoordinationService implements CoordinationServiceContract {
     return false;
   }
 
-  private makeTurn(run: CoordinationRun, decision: Extract<WorkflowDecision, { kind: "schedule" }>): CoordinationTurn {
+  /**
+   * Starts a durable wave with bounded parallelism. Every sibling is allowed to
+   * settle before the caller decides whether the run should continue or fail.
+   */
+  private async executeWave(
+    scheduledRun: CoordinationRun,
+    scheduledTurns: CoordinationTurn[],
+    ownsLoop: () => boolean,
+  ): Promise<TurnExecutionOutcome[]> {
+    const cap = Math.max(
+      1,
+      Math.min(
+        scheduledTurns.length,
+        scheduledRun.policy.maxParallelTurns ?? Math.min(scheduledRun.participants.length, 4),
+      ),
+    );
+    const outcomes: TurnExecutionOutcome[] = [];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const index = next;
+        next += 1;
+        const turn = scheduledTurns[index];
+        if (!turn) return;
+        if (!ownsLoop()) {
+          outcomes[index] = "settled";
+          continue;
+        }
+        try {
+          outcomes[index] = await this.executeTurnWithRetries(scheduledRun, turn, ownsLoop);
+        } catch (error) {
+          // Do not let one unexpected worker failure short-circuit the wave.
+          // The supervisor must wait for every already-started sibling to
+          // settle before it makes the run-level failure transition.
+          outcomes[index] = {
+            kind: "failed",
+            code: error instanceof CoordinationError ? error.code : "INTERNAL_ERROR",
+            message:
+              error instanceof CoordinationError
+                ? error.message
+                : "Coordination turn stopped because of an internal error",
+          };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: cap }, worker));
+    return outcomes;
+  }
+
+  private makeTurn(
+    run: CoordinationRun,
+    decision: ScheduledTurnSpec,
+    offset: number = 0,
+  ): CoordinationTurn {
     const participant = run.participants.find(
       (candidate) =>
         candidate.role === decision.role &&
@@ -838,7 +957,7 @@ export class CoordinationService implements CoordinationServiceContract {
     return {
       id: this.dependencies.ids.turnId(),
       runId: run.id,
-      sequence: run.nextTurnSequence,
+      sequence: run.nextTurnSequence + offset,
       role: decision.role,
       agentId: participant.agentId,
       kind: decision.turnKind,
@@ -941,6 +1060,9 @@ export class CoordinationService implements CoordinationServiceContract {
         if (!(await this.finishAttempt(attempt, "failed", lastErrorCode, lastErrorMessage))) {
           return "abandoned";
         }
+        if (isBusyAgentFailure(lastErrorMessage)) {
+          await boundedBusyBackoff(number);
+        }
         continue;
       }
 
@@ -1018,11 +1140,11 @@ export class CoordinationService implements CoordinationServiceContract {
           scheduledRun.id,
         );
         if (afterCancellation?.run.status === "running") {
-          await this.dependencies.repository.failRun({
-            runId: scheduledRun.id,
+          return {
+            kind: "failed",
             code: "AGENT_EXECUTION_FAILED",
             message: "Agent execution was cancelled unexpectedly",
-          });
+          };
         }
         return "settled";
       }
@@ -1036,12 +1158,11 @@ export class CoordinationService implements CoordinationServiceContract {
       }
     }
 
-    await this.dependencies.repository.failRun({
-      runId: scheduledRun.id,
+    return {
+      kind: "failed",
       code: "MAX_ATTEMPTS_EXCEEDED",
       message: "Agent could not complete its turn: " + lastErrorMessage,
-    });
-    return "settled";
+    };
   }
 
   private async finishAttempt(

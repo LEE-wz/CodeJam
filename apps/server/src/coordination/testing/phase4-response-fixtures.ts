@@ -187,7 +187,7 @@ const terminalFailure = (
   response.run.status = isStopped ? "stopped" : "failed";
   response.run.phase = "drafting";
   response.run.nextTurnSequence = 2;
-  delete response.run.activeTurnId;
+  response.run.activeTurnIds = [];
   delete response.run.latestProposalArtifactId;
   delete response.run.latestReviewArtifactId;
   delete response.run.finalArtifactId;

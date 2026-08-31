@@ -122,6 +122,7 @@ export const seedRun = async (
     phase: "drafting",
     revision: 0,
     nextTurnSequence: 1,
+    activeTurnIds: [],
     version: 1,
     createdAt: now,
     updatedAt: now,
@@ -149,7 +150,7 @@ describe("walking skeleton: schedule, attempt, validate, commit", () => {
     expect(details.run.status).toBe("completed");
     expect(details.run.phase).toBe("done");
     expect(details.run.errorCode).toBeUndefined();
-    expect(details.run.activeTurnId).toBeUndefined();
+    expect(details.run.activeTurnIds).toEqual([]);
 
     expect(details.turns.map((turn) => [turn.sequence, turn.role, turn.kind, turn.status])).toEqual(
       [
@@ -277,6 +278,7 @@ describe("walking skeleton: lease is required to commit", () => {
         phase: "drafting",
         revision: 0,
         nextTurnSequence: 1,
+        activeTurnIds: [],
         version: 1,
         createdAt: clock.nowIso(),
         updatedAt: clock.nowIso(),
@@ -828,7 +830,7 @@ describe("walking skeleton: Phase 1 matrix coverage", () => {
       const details = await settle(service, runId);
 
       expect(details.run.status).toBe(scenario.status);
-      expect(details.run.activeTurnId).toBeUndefined();
+      expect(details.run.activeTurnIds).toEqual([]);
       expect(details.turns.every((turn) => turn.activeAttemptId === undefined)).toBe(true);
       if (scenario.status === "completed") {
         expect(details.run.finalArtifactId).toBeDefined();

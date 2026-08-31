@@ -20,6 +20,7 @@ import {
   FakeAgentDirectory,
   ScriptedCoordinationRuntime,
   deferred,
+  failsToStart,
   succeeds,
   timesOut,
   type ScriptedRuntimeStep,
@@ -39,6 +40,7 @@ import {
   WRONG_NUMBER_OUTPUT,
   countdownPayload,
   freeChatPayload,
+  sessionParticipantRoster,
 } from "./testing/session-fixtures.js";
 
 const settled = new Set(["awaiting_input", "completed", "failed", "stopped"]);
@@ -46,6 +48,7 @@ const settled = new Set(["awaiting_input", "completed", "failed", "stopped"]);
 const sessionHarness = (
   steps: ScriptedRuntimeStep[],
   contextBuilder: ContextBuilder = new RoleScopedContextBuilder(),
+  participants = SESSION_PARTICIPANTS,
 ) => {
   const clock = new AdvancingClock();
   const ids = new DeterministicIdGenerator();
@@ -54,7 +57,7 @@ const sessionHarness = (
   const verifiedProtocol = new VerifiedHandoffArtifactProtocol({ clock, ids });
   const sessionProtocol = new SharedSessionArtifactProtocol({ clock, ids });
   const service = new CoordinationService({
-    agentDirectory: new FakeAgentDirectory(SESSION_PARTICIPANTS),
+    agentDirectory: new FakeAgentDirectory(participants),
     repository,
     workflow: new VerifiedHandoffWorkflowV1(),
     sessionWorkflow: new SharedSessionWorkflowV1(),
@@ -90,8 +93,9 @@ const flush = async (ticks = 200): Promise<void> => {
 const startSession = async (
   steps: ScriptedRuntimeStep[],
   request: CreateSessionRunRequest = CREATE_COUNTDOWN_REQUEST,
+  participants = SESSION_PARTICIPANTS,
 ) => {
-  const context = sessionHarness(steps);
+  const context = sessionHarness(steps, new RoleScopedContextBuilder(), participants);
   const run = await context.service.createRun(request);
   if (request.policy?.sessionProtocol === "free_chat") {
     await context.service.resumeRun(run.id, { content: "Work on the shared objective" });
@@ -131,6 +135,22 @@ describe("session create validation and context probe", () => {
       maxTurns: SESSION_LIMITS.defaultSessionTurns,
     });
     expect(freeChatRun.policy.sessionStartValue).toBeUndefined();
+    expect(freeChatRun.policy).toMatchObject({ sessionParallel: false, maxParallelTurns: 3 });
+  });
+
+  it("defaults the parallel worker ceiling to the smaller of the roster and four", async () => {
+    const roster = sessionParticipantRoster(6);
+    const run = await sessionHarness([], new RoleScopedContextBuilder(), roster).service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      agents: roster.map(({ id }) => id),
+      policy: { sessionProtocol: "free_chat" },
+    });
+    expect(run.policy.maxParallelTurns).toBe(4);
+
+    await expect(sessionHarness([]).service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: { sessionProtocol: "free_chat", maxParallelTurns: 11 },
+    })).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
   });
 
   it.each([
@@ -369,6 +389,7 @@ describe("session walking skeleton", () => {
       phase: "sessioning",
       revision: 0,
       nextTurnSequence: 1,
+      activeTurnIds: [],
       sharedState: { nextExpectedNumber: 4 },
       version: 1,
       createdAt: timestamp,
@@ -415,5 +436,136 @@ describe("session walking skeleton", () => {
       "invalid_output",
       "invalid_output",
     ]);
+  });
+
+  it("executes one free-chat wave with a bounded worker pool and settles every sibling", async () => {
+    const roster = sessionParticipantRoster(6);
+    const context = sessionHarness(
+      Array.from({ length: 6 }, () => deferred()),
+      new RoleScopedContextBuilder(),
+      roster,
+    );
+    const run = await context.service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      agents: roster.map(({ id }) => id),
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 12,
+        sessionParallel: true,
+        maxParallelTurns: 2,
+      },
+    });
+    await context.service.resumeRun(run.id, { content: "Give one launch recommendation each." });
+
+    const resolvePending = (): void => {
+      for (const attemptId of context.runtime.pendingAttemptIds()) {
+        context.runtime.resolveAttempt(attemptId, {
+          kind: "succeeded",
+          rawOutput: JSON.stringify(freeChatPayload(`Message from ${attemptId}`)),
+        });
+      }
+    };
+    await context.runtime.waitForStarts(2);
+    expect(context.runtime.peakConcurrency).toBe(2);
+    resolvePending();
+    await context.runtime.waitForStarts(4);
+    resolvePending();
+    await context.runtime.waitForStarts(6);
+    resolvePending();
+
+    const details = await settle(context.service, run.id);
+    expect(details.run).toMatchObject({ status: "awaiting_input", activeTurnIds: [] });
+    expect(details.turns.map(({ sequence }) => sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(new Set(details.turns.map(({ agentId }) => agentId)).size).toBe(6);
+    expect(details.artifacts.filter(({ type }) => type === "session_message")).toHaveLength(6);
+    expect(context.runtime.peakConcurrency).toBe(2);
+    expect(context.runtime.activeAttemptCount()).toBe(0);
+  });
+
+  it("cancels every running sibling when a parallel wave is stopped", async () => {
+    const context = sessionHarness([deferred(), deferred(), deferred()]);
+    const run = await context.service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 6,
+        sessionParallel: true,
+        maxParallelTurns: 3,
+      },
+    });
+    await context.service.resumeRun(run.id, { content: "Assess the launch plan." });
+    await context.runtime.waitForStarts(3);
+
+    const stopped = await context.service.stopRun(run.id);
+    expect(stopped).toMatchObject({ status: "awaiting_input", activeTurnIds: [] });
+    expect(context.runtime.cancelledAttemptIds).toHaveLength(3);
+    expect(new Set(context.runtime.cancelledAttemptIds).size).toBe(3);
+
+    const details = await context.service.getRun(run.id);
+    expect(details?.turns.map(({ status }) => status)).toEqual([
+      "cancelled",
+      "cancelled",
+      "cancelled",
+    ]);
+    expect(details?.attempts.map(({ status }) => status)).toEqual([
+      "cancelled",
+      "cancelled",
+      "cancelled",
+    ]);
+  });
+
+  it("waits for a successful sibling before failing a wave with exhausted retries", async () => {
+    const roster = sessionParticipantRoster(2);
+    const { service, runtime, runId } = await startSession([
+      timesOut("First participant timed out"),
+      succeeds(JSON.stringify(freeChatPayload("Second participant committed"))),
+      timesOut("First participant timed out again"),
+    ], {
+      ...CREATE_FREE_CHAT_REQUEST,
+      agents: roster.map(({ id }) => id),
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 6,
+        sessionParallel: true,
+        maxParallelTurns: 2,
+      },
+    }, roster);
+    const details = await settle(service, runId);
+    expect(details.run).toMatchObject({ status: "failed", errorCode: "MAX_ATTEMPTS_EXCEEDED" });
+    expect(details.attempts.map(({ status }) => status)).toEqual([
+      "timed_out",
+      "succeeded",
+      "timed_out",
+    ]);
+    expect(details.artifacts.filter(({ type }) => type === "session_message")).toHaveLength(1);
+    expect(runtime.starts).toHaveLength(3);
+  });
+
+  it("retries a busy Agent without preventing its wave siblings from settling", async () => {
+    const { service, runtime, runId } = await startSession([
+      failsToStart("This Agent is already running"),
+      succeeds(JSON.stringify(freeChatPayload("Second participant"))),
+      succeeds(JSON.stringify(freeChatPayload("Third participant"))),
+      succeeds(JSON.stringify(freeChatPayload("Retried first participant"))),
+    ], {
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 6,
+        sessionParallel: true,
+        maxParallelTurns: 3,
+      },
+    });
+    await runtime.waitForStarts(4);
+    const details = await settle(service, runId);
+    expect(details.run).toMatchObject({ status: "awaiting_input", activeTurnIds: [] });
+    expect(details.attempts.map(({ status }) => status)).toEqual([
+      "failed",
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(runtime.starts).toHaveLength(4);
+    expect(details.artifacts.filter(({ type }) => type === "session_message")).toHaveLength(3);
   });
 });

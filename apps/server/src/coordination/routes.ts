@@ -61,6 +61,8 @@ const sessionPolicySchema = z
       .min(SESSION_LIMITS.minStartValue)
       .max(SESSION_LIMITS.maxStartValue)
       .optional(),
+    sessionParallel: z.boolean().optional(),
+    maxParallelTurns: z.number().int().min(1).max(SESSION_LIMITS.maxParallelTurns).optional(),
     // Countdown permits a two-turn 2 -> 1 run; free chat is tightened below.
     maxTurns: z.number().int().min(2).max(SESSION_LIMITS.maxSessionTurns).optional(),
     perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),

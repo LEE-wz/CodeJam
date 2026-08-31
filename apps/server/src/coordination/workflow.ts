@@ -3,7 +3,11 @@ import type {
   WorkflowDecision,
   WorkflowView,
 } from "./contracts.js";
-import type { ArtifactType, CoordinationArtifact, CoordinationTurnKind } from "./types.js";
+import type {
+  ArtifactType,
+  CoordinationArtifact,
+  CoordinationTurnKind,
+} from "./types.js";
 
 export type {
   VerifiedHandoffWorkflow,
@@ -78,7 +82,7 @@ const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
   if (view.run.status !== "running") {
     return invalidState("Workflow decisions require a running coordination run");
   }
-  if (view.run.activeTurnId) {
+  if (view.run.activeTurnIds.length > 0) {
     return invalidState("Workflow cannot schedule while a turn is active");
   }
   if (!Number.isInteger(view.run.nextTurnSequence) || view.run.nextTurnSequence < 1) {

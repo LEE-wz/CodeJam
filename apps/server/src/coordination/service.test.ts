@@ -123,26 +123,47 @@ class MemoryRepository implements CoordinationRepository {
     nextPhase: CoordinationRun["phase"];
     nextRevision: number;
   }) {
+    const scheduled = await this.scheduleTurns({ ...input, turns: [input.turn] });
+    if (scheduled.kind !== "scheduled") return scheduled;
+    return { kind: "scheduled" as const, run: scheduled.run, turn: scheduled.turns[0]! };
+  }
+
+  async scheduleTurns(input: {
+    runId: string;
+    expectedRunVersion: number;
+    turns: CoordinationTurn[];
+    nextPhase: CoordinationRun["phase"];
+    nextRevision: number;
+  }) {
     const run = this.runs.get(input.runId);
     if (!run) return { kind: "not_found" as const };
-    if (run.status !== "running" || run.version !== input.expectedRunVersion) {
+    if (
+      run.status !== "running" ||
+      run.activeTurnIds.length !== 0 ||
+      input.turns.length === 0 ||
+      run.version !== input.expectedRunVersion
+    ) {
       return { kind: "stale" as const, currentRun: structuredClone(run) };
     }
-    const turn = structuredClone(input.turn);
-    this.turns.push(turn);
-    run.activeTurnId = turn.id;
-    run.nextTurnSequence += 1;
+    const turns = input.turns.map((turn) => structuredClone(turn));
+    this.turns.push(...turns);
+    run.activeTurnIds = turns.map(({ id }) => id);
+    run.nextTurnSequence += turns.length;
     run.phase = input.nextPhase;
     run.revision = input.nextRevision;
     run.version += 1;
-    return { kind: "scheduled" as const, run: structuredClone(run), turn: structuredClone(turn) };
+    return { kind: "scheduled" as const, run: structuredClone(run), turns: structuredClone(turns) };
   }
 
   async beginAttempt(input: { runId: string; turnId: string; attempt: CoordinationAttempt }) {
     const run = this.runs.get(input.runId);
     const turn = this.turns.find((item) => item.id === input.turnId);
     if (!run || !turn) return { kind: "not_found" as const };
-    if (run.status !== "running" || turn.status !== "scheduled") {
+    if (
+      run.status !== "running" ||
+      !run.activeTurnIds.includes(turn.id) ||
+      turn.status !== "scheduled"
+    ) {
       return { kind: "stale" as const };
     }
     const attempt = structuredClone(input.attempt);
@@ -179,7 +200,7 @@ class MemoryRepository implements CoordinationRepository {
     turn.status = "committed";
     turn.activeAttemptId = undefined;
     turn.outputArtifactId = input.artifact.id;
-    run.activeTurnId = undefined;
+    run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
     run.version += 1;
     this.artifacts.push(structuredClone(input.artifact));
     return {
@@ -219,7 +240,9 @@ class MemoryRepository implements CoordinationRepository {
     turn.activeAttemptId = undefined;
     turn.lastValidationErrors = input.validationErrors ?? [];
     turn.status = input.status === "cancelled" ? "cancelled" : "scheduled";
-    if (input.status === "cancelled") run.activeTurnId = undefined;
+    if (input.status === "cancelled") {
+      run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
+    }
     return "finished";
   }
 
@@ -235,7 +258,7 @@ class MemoryRepository implements CoordinationRepository {
     if (!run) return undefined;
     run.status = "stopped";
     run.stoppedAt = clock.nowIso();
-    run.activeTurnId = undefined;
+    run.activeTurnIds = [];
     return structuredClone(run);
   }
 
@@ -268,7 +291,7 @@ class MemoryRepository implements CoordinationRepository {
       .map((run) => ({
         runId: run.id,
         status: run.status as "running" | "stop_requested",
-        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        activeTurnIds: [...run.activeTurnIds],
         hasRunningAttempt: this.attempts.some(
           (attempt) => attempt.runId === run.id && attempt.status === "running",
         ),
@@ -284,17 +307,19 @@ class MemoryRepository implements CoordinationRepository {
     if (run.status !== "running") {
       return { kind: "owned" as const, run: structuredClone(run) };
     }
-    if (run.activeTurnId === undefined) {
+    if (run.activeTurnIds.length === 0) {
       return { kind: "noop" as const, run: structuredClone(run) };
     }
-    const turn = this.turns.find((candidate) => candidate.id === run.activeTurnId);
-    if (turn) {
+    const turns = run.activeTurnIds
+      .map((turnId) => this.turns.find((candidate) => candidate.id === turnId))
+      .flatMap((turn) => (turn ? [turn] : []));
+    for (const turn of turns) {
       const attempt = this.attempts.find((candidate) => candidate.id === turn.activeAttemptId);
       if (attempt && attempt.status === "running") attempt.status = "cancelled";
       turn.status = "failed";
       delete turn.activeAttemptId;
     }
-    delete run.activeTurnId;
+    run.activeTurnIds = [];
     return { kind: "reconciled" as const, run: structuredClone(run) };
   }
 }

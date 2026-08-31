@@ -624,3 +624,41 @@ would hold its reservations forever. The Phase 11 sweep closes it by calling
 `finishStopped`, which is idempotent and is exactly the transition `stopRun`
 would have made next, so racing an in-flight stop request is harmless. Recorded
 here because it extends `P11-06` beyond the sweep's literal wording.
+
+## Mini-RFC: Phase 13 parallel-wave state (approved, P13-01)
+
+**Current contract and blocker.** The Session v2 amendment approved parallel
+fan-out, but durable `CoordinationRun` state still has one `activeTurnId` and
+the repository admits exactly one scheduled turn. That pointer makes sibling
+turns overwrite one another and makes a stop or restart incapable of naming all
+live work.
+
+**Approved change.** Replace the live-state pointer with a required
+`activeTurnIds` array and schedule every sibling of one wave in one repository
+mutation. A turn remains independently owned by its own attempt and lease;
+committing, retrying, or cancelling a turn removes only that turn's entry. A
+terminal, stopped, interrupted, or reconciled run settles every listed turn in
+deterministic turn-sequence order before clearing the array. This preserves
+gapless per-run event sequencing and lets the service wait for the whole wave
+before it decides again.
+
+**Compatibility.** Existing JSON records that contain `activeTurnId` and omit
+`activeTurnIds` are read as a one-element wave. The legacy key is neither
+deleted nor migrated by a read, so stored history remains intact; a later
+mutation may add the new array while retaining the legacy field. New runs write
+an empty `activeTurnIds` array. Verified-handoff decisions continue to use the
+single-turn wrapper and its invariant is exactly zero or one active ID.
+
+**Bounded execution.** A session wave is deterministic in Phase 13: it is one
+next round-robin participant unless `sessionParallel` is enabled, in which case
+it contains the distinct participants that have not replied to the active user
+message. The service admits at most `maxParallelTurns` simultaneous pipelines
+(default `min(participantCount, 4)`, maximum 10); any remaining siblings stay
+scheduled in the same durable wave. A busy Agent is a retryable, per-turn
+failure and never aborts unrelated siblings.
+
+**Affected workstreams and proof.** This changes only the coordination types,
+repository, session workflow, service, route validation, compatible fixtures,
+and their tests. It does not alter `workflow.ts`, verified-handoff decisions,
+or the meaning of a lease. Repository races prove atomic scheduling and
+independent settlement; supervisor tests prove batching, stop, and restart.
