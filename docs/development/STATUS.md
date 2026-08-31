@@ -1,14 +1,17 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (Checkpoint 14 complete: live rehearsal and canonical gate passed)
+**Last audit:** 2026-08-31 (`P15-01` measured: the JSON store has a hard ceiling
+around 4,400 committed turns, not 100,000)
 **Audited checkpoint:** Checkpoint 14 on `phase-14`, merged to `main`
-**Implementation branch:** `phase-14` (branched from `main` at `7985ca3`, merged)
+**Implementation branch:** Phase 15 work is on `main` (no task branch; see the
+Phase 15 recorded deviation)
 **Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Phase 15 - Scale, Storage, and Release
-**Current gate:** Checkpoint 14 complete; `P15-01` is the next action.
+**Current gate:** `P15-01` complete for every reachable size; `P15-02` is the next
+action. The 10,000-turn row is measured-impossible, not skipped.
 **Overall state:** Phases 0-8 and 10-14 `complete`; Phase 9 `superseded` by Phase 15;
-Phase 15 `not_started`
+Phase 15 `in_progress`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -34,7 +37,7 @@ they name a past checkpoint.
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `complete` (Checkpoint 13 verified; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `complete` (Checkpoint 14 verified; sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
-| 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
+| 15 | Scale, storage, and release | `in_progress` (`P15-01` done; sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
 [`plans/session-v2-plan.md`](plans/session-v2-plan.md), approved through the
@@ -47,10 +50,11 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Phase 14 is complete (Checkpoint 14 verified below). `P15-01` is
-the next action: measure the JSON store honestly at 100, 500, 2,000, and 10,000
-committed turns, per [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md).
-Create a `phase-15` task branch from `main` first.
+**Resume here.** `P15-01` is complete and its numbers are in the Phase 15 ledger
+below. They are decisive: the JSON store cannot reach the documented 100,000-turn
+ceiling, and fails hard at roughly 4,400 committed turns. `P15-02` (delta read
+path) is the next action, but `P15-04` (the storage decision) is now the
+load-bearing one and its evidence is already gathered.
 
 ### Checkpoint 11 final verification
 
@@ -64,6 +68,86 @@ Agents were usable afterwards. This closes Checkpoint 11.
 Docker Compose is available as `docker compose`. Baseline validation used
 `LAUNCHPAD_ENV_FILE=/dev/null` so the disposable verification service did not
 load repository-local secrets or runtime state.
+
+## Phase 15 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P15-01 | `complete` (10,000 row measured-impossible) | Reproducible harness at `apps/server/src/scale/p15-01-store-scale.ts`, run with `npm run scale:p15-01`. It drives one growing session through the **real** service, repository, workflow, artifact protocol, and `JsonStore` in a fresh `mkdtemp` directory, and refuses to run outside the system temp directory so it can never touch runtime data. Only the Agent runtime is a double, and it always commits one valid `session_message` with `done: true`, so a round-robin wave is exactly one message per participant. Measured 100, 500, 1,000 and 2,000 committed turns; 10,000 is unreachable and the reason is measured, not extrapolated. See the table and findings below. |
+| P15-02 | `not_started` | Next action. |
+| P15-03 | `not_started` | `P15-01` already fixes the honest number far below the current default; see findings. |
+| P15-04 | `not_started` | The decision is now load-bearing rather than optional. Its evidence is gathered. |
+| P15-05 - P15-20 | `not_started` | |
+
+### P15-01 measured store cost
+
+One session, ten participants, 226-character messages, `sessionPlanning: "round_robin"`.
+Node v24.12.0, darwin arm64. Mutation latency is sampled from the final prompt at
+each size, so every row is measured **at** that size rather than averaged across
+the growth leading to it. Total harness wall clock 1,895s.
+
+| Committed turns | DB file | Mutation p50 | Mutation p95 | Mutation max | `snapshot()` | Snapshot heap | RSS | `getRunDetails` | Last prompt end-to-end |
+|---|---|---|---|---|---|---|---|---|---|
+| 100 | 0.68 MiB | 2.13 ms | 3.31 ms | 4.59 ms | 0.99 ms | 1.01 MiB | 157.39 MiB | 1.97 ms | 0.14 s |
+| 500 | 8.43 MiB | 26.81 ms | 29.83 ms | 37.99 ms | 11.91 ms | 12.59 MiB | 914.03 MiB | 28.01 ms | 1.65 s |
+| 1000 | 29.43 MiB | 95.87 ms | 115.14 ms | 139.82 ms | 40.89 ms | 44.32 MiB | 1822.84 MiB | 92.80 ms | 6.01 s |
+| 2000 | 109.22 MiB | 394.58 ms | 428.83 ms | 560.26 ms | 167.34 ms | 146.78 MiB | 1827.39 MiB | 361.59 ms | 23.84 s |
+
+### P15-01 findings
+
+1. **Everything is quadratic, and the cause is a single line.** Every scheduled
+   turn stores `inputArtifactIds` for the whole transcript so far
+   (`session-workflow.ts` lines 257, 306, 336), so turn *n* stores *n* ids and
+   the ledger stores O(n^2) of them. At 400 turns, `coordinationTurns` is
+   **70.9%** of the file and **93%** of that is `inputArtifactIds` - 88,000 id
+   entries. Cost per committed turn rises from **7.2 KB at 100 turns to 57.3 KB
+   at 2,000**. This is a data-model property, so no storage engine fixes it on
+   its own: a swap under `CoordinationRepository` moves the bytes without
+   removing them.
+2. **A hard failure exists well below the documented ceiling.** `persist()`
+   serialises the entire database into one string
+   (`JSON.stringify(data, null, 2)`, `store.ts` line 154). Node's
+   `MAX_STRING_LENGTH` is **512 MiB**; exceeding it throws
+   `RangeError: Invalid string length`, verified directly rather than assumed.
+   Fitting the seven measured sizes (100/200/400/500/800/1,000/2,000) gives
+   `MiB = 2.5175e-5*n^2 + 4.2597e-3*n`, which reproduces every measured point to
+   within **0.3%**, and reaches 512 MiB at **n ~= 4,426 committed turns**. That
+   is **4.4%** of `SESSION_LIMITS.maxSessionTurns` (100,000). Past it a session
+   cannot be saved at all - this is data loss, not slowness.
+3. **Memory is a second wall, and it arrives first.** `mutate` holds the live
+   database plus a full `structuredClone`. RSS reached **1.83 GiB at 1,000
+   turns** against Node's ~4 GiB default old-space. The process was already over
+   half its heap budget at 1,000 turns, so the practical limit is lower than the
+   4,426-turn serialisation limit.
+4. **The product is unusable long before any of those limits.** End-to-end
+   latency for one user prompt goes **0.14s -> 1.65s -> 6.01s -> 23.84s** across
+   100 -> 2,000 turns: **171x slower for 20x the turns**. A 24-second wait for a
+   single prompt is past any reasonable interactive threshold, and 2,000 turns is
+   only 2% of the documented ceiling. The current default,
+   `SESSION_LIMITS.defaultSessionTurns` of **200**, is defensible; the 100,000
+   ceiling is not.
+5. **Why 10,000 was not measured.** It needs ~2.5 GiB in one JSON string, roughly
+   five times Node's limit, so it would throw before completing. Reaching even
+   the 4,426-turn failure point costs hours of quadratic mutations - the 2,000
+   row alone took 32 minutes. The row is therefore recorded as measured-impossible
+   with the mechanism identified, rather than filled in by extrapolation, which
+   the phase sheet forbids.
+
+### Phase 15 recorded deviation
+
+The sheet's entry criteria ask for a `phase-15` task branch from the completed
+Checkpoint 14. `P15-01` was done on `main` instead, at the user's explicit
+instruction not to create branches. `P15-01` adds no product code - one new
+harness under `apps/server/src/scale/`, one npm script, and this record - so the
+deviation carries no risk to the shipped engine. Later Phase 15 tasks that do
+change product code should get their own branch.
+
+The sheet also asks that no feature work remain open at Phase 15 entry. The
+auction track on `bidding-agent-phase-14-award` is unmerged and incomplete
+(`PA14-18`, `PA14-27`), and `docs/development/phases/parallel/README.md` treats it
+as an alternative that has not been compared against the main track. Phase 15
+documents and freezes whichever coordination model `main` carries, so that
+comparison should be settled before `P15-06`-`P15-08` are written.
 
 ## Phase 12 task ledger
 
@@ -793,10 +877,23 @@ no task was promoted on a host-only or focused run.
   builds), three live ten-Agent rehearsals, and one genuine plan rejection with
   recovery. See [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md).
 
+### Phase 15
+
+- `P15-01` complete: the store is measured, and the measurement is decisive.
+  Quadratic growth from per-turn `inputArtifactIds` gives a hard
+  `RangeError` ceiling near 4,400 committed turns and unusable prompt latency
+  (23.8s) by 2,000. The 10,000-turn row is measured-impossible.
+- `P15-02` is the next action. `P15-03` and `P15-04` should be taken together:
+  the honest ceiling and the storage decision now follow from the same evidence,
+  and a repository swap alone does not remove the quadratic data model.
+- `P15-06`-`P15-08` (documentation) should not start until the auction-track
+  comparison is settled, since they freeze whichever model `main` carries.
+
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 | `main` | **`P15-01` store scale measurement** — `npm run scale:p15-01`, sizes 100/500/1,000/2,000 | **Completed (1,895s):** DB 0.68 → 109.22 MiB; mutation p50 2.13 → 394.58 ms; `getRunDetails` 1.97 → 361.59 ms; one prompt 0.14s → 23.84s. Growth is quadratic (`inputArtifactIds`). Fit over seven sizes reproduces every point to 0.3% and hits Node's 512 MiB string limit at ~4,426 turns — 4.4% of the documented 100,000 ceiling. 10,000 unreachable, recorded as measured-impossible. |
 | 2026-08-31 | `phase-14` | **Checkpoint 14 gate** — disposable Docker Compose `npm run check` | **Passed (exit 0):** 30 server files / 571 tests, 3 web files / 47 tests, both typechecks, and both production builds. The `__proto__` test passes under the locked `zod` 4.4.3. |
 | 2026-08-31 | `phase-14` | **Checkpoint 14 live rehearsal** — three ten-Agent coordinator-planned sessions | **Passed:** `b1f291a8` (countdown 22.72s / fan-out 8.27s / third 9.54s), `7d750f5c` (19.10 / 7.79 / 8.31s), `c4890719` (22.88 / 9.37 / 6.81s). Ordered 10→1 via sequential plan with no numeric validator; fan-out parallel; session live after the third prompt. Genuine rejection + recovery in `f8ae3635` (attempt 1 `invalid_output`, attempt 2 committed). |
 | 2026-08-31 | `7985ca3` | **Checkpoint 13 live gate** — six- and ten-participant parallel waves | **Passed:** six participants `5e04164e` (6/6 attempts first-try, 4.15s, cap 4: 4 then 2, 22 events); ten participants `492a52c3` (10/10 first-try, 5.14s, cap 4: never more than 4 in flight, 34 events). Peak container memory 151.7 MiB (3.7% of 4 GiB); zero 429 responses. ~8.5x over the Phase 10 ~44s sequential baseline. All Agents returned ready. |
