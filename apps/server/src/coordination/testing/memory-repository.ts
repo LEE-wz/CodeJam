@@ -137,9 +137,8 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
   async awaitInput(id: CoordinationRunId): Promise<CoordinationRun | undefined> {
     const run = this.runs.get(id);
     if (!run) return undefined;
-    if (run.status === "running") {
+    if (run.status === "running" && activeTurnIdsFor(run).length === 0) {
       run.status = "awaiting_input";
-      run.activeTurnIds = [];
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
     }
@@ -184,9 +183,10 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
   async scheduleTurns(input: ScheduleTurnsInput): Promise<ScheduleTurnsResult> {
     const run = this.runs.get(input.runId);
     if (!run) return { kind: "not_found" };
+    const activeTurnIds = ensureActiveTurnIds(run);
     if (
       run.status !== "running" ||
-      run.activeTurnIds.length !== 0 ||
+      activeTurnIds.length !== 0 ||
       input.turns.length === 0 ||
       run.version !== input.expectedRunVersion
     ) {
@@ -221,7 +221,11 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     const run = this.runs.get(input.runId);
     const turn = this.findTurn(input.turnId);
     if (!run || !turn) return { kind: "not_found" };
-    if (run.status !== "running" || turn.status !== "scheduled") {
+    if (
+      run.status !== "running" ||
+      !activeTurnIdsFor(run).includes(turn.id) ||
+      turn.status !== "scheduled"
+    ) {
       return { kind: "stale" };
     }
     const attempt = structuredClone(input.attempt);
@@ -263,7 +267,7 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     if (!run || !turn || !attempt) return { kind: "not_found" };
     if (
       run.status !== "running" ||
-      !run.activeTurnIds.includes(turn.id) ||
+      !activeTurnIdsFor(run).includes(turn.id) ||
       turn.status !== "running" ||
       turn.activeAttemptId !== attempt.id ||
       attempt.status !== "running" ||
@@ -295,7 +299,7 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     turn.outputArtifactId = artifact.id;
     turn.completedAt = this.clock.nowIso();
     delete turn.activeAttemptId;
-    run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
+    run.activeTurnIds = activeTurnIdsFor(run).filter((id) => id !== turn.id);
     if (artifact.type === "proposal") run.latestProposalArtifactId = artifact.id;
     if (artifact.type === "review") run.latestReviewArtifactId = artifact.id;
     if (nextExpectedNumber !== undefined && run.sharedState) {
@@ -334,7 +338,7 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     if (input.status === "cancelled") {
       turn.status = "cancelled";
       turn.completedAt = this.clock.nowIso();
-      run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
+      run.activeTurnIds = activeTurnIdsFor(run).filter((id) => id !== turn.id);
     } else {
       turn.status = "scheduled";
     }
@@ -418,7 +422,7 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
       summaries.push({
         runId: run.id,
         status: run.status,
-        activeTurnIds: [...run.activeTurnIds],
+        activeTurnIds: activeTurnIdsFor(run),
         hasRunningAttempt: this.attempts.some(
           (attempt) => attempt.runId === run.id && attempt.status === "running",
         ),
@@ -444,7 +448,7 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     if (run.status !== "running") {
       return { kind: "owned", run: structuredClone(run) };
     }
-    if (run.activeTurnIds.length === 0) {
+    if (activeTurnIdsFor(run).length === 0) {
       return { kind: "noop", run: structuredClone(run) };
     }
     this.settleActiveWork(run, "failed");
@@ -454,7 +458,7 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
   }
 
   private settleActiveWork(run: CoordinationRun, turnStatus: "failed" | "cancelled"): void {
-    const turns = run.activeTurnIds
+    const turns = activeTurnIdsFor(run)
       .map((turnId) => this.findTurn(turnId))
       .flatMap((turn) => (turn ? [turn] : []));
     for (const turn of turns) {
@@ -484,3 +488,14 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
       .reduce((maximum, artifact) => Math.max(maximum, artifact.transcriptSequence ?? 0), 0) + 1;
   }
 }
+
+const activeTurnIdsFor = (run: CoordinationRun): string[] => {
+  if (Array.isArray(run.activeTurnIds)) return [...run.activeTurnIds];
+  const legacy = run as CoordinationRun & { activeTurnId?: string };
+  return legacy.activeTurnId === undefined ? [] : [legacy.activeTurnId];
+};
+
+const ensureActiveTurnIds = (run: CoordinationRun): string[] => {
+  if (!Array.isArray(run.activeTurnIds)) run.activeTurnIds = activeTurnIdsFor(run);
+  return run.activeTurnIds;
+};
