@@ -119,6 +119,10 @@ export interface CoordinationPolicy {
    * Absent on free-chat and verified-handoff runs.
    */
   sessionStartValue?: number;
+  /** Enables deterministic fan-out for the active user message. */
+  sessionParallel?: boolean;
+  /** Shared-session only; enforced by the wave supervisor. */
+  maxParallelTurns?: number;
 }
 
 export const DEFAULT_COORDINATION_POLICY: CoordinationPolicy = {
@@ -157,7 +161,8 @@ export interface CoordinationRun {
   phase: CoordinationPhase;
   revision: number;
   nextTurnSequence: number;
-  activeTurnId?: CoordinationTurnId;
+  /** Every scheduled or running turn in the current durable wave. */
+  activeTurnIds: CoordinationTurnId[];
   latestProposalArtifactId?: CoordinationArtifactId;
   latestReviewArtifactId?: CoordinationArtifactId;
   finalArtifactId?: CoordinationArtifactId;
@@ -418,6 +423,8 @@ export interface CreateSessionRunRequest {
     | {
         sessionProtocol?: SessionProtocol | undefined;
         sessionStartValue?: number | undefined;
+        sessionParallel?: boolean | undefined;
+        maxParallelTurns?: number | undefined;
         maxTurns?: number | undefined;
         perAttemptTimeoutMs?: number | undefined;
       }
@@ -454,6 +461,7 @@ export const SESSION_LIMITS = {
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
   defaultSessionTurns: 200,
+  maxParallelTurns: 10,
   messageMinChars: 1,
   messageMaxChars: 500,
 } as const;
