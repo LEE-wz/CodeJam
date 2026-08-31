@@ -18,9 +18,11 @@ import type {
   FinishAttemptInput,
   IdGenerator,
   NonTerminalRunSummary,
-  PublishBidCandidateInput,
-  PublishBidCandidateResult,
+  AwardSessionBidInput,
+  AwardSessionBidResult,
   ReconcileRunResult,
+  RecordAwardFeedbackInput,
+  RecordAwardFeedbackResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
   ScheduleTurnsInput,
@@ -39,8 +41,11 @@ import type {
   CoordinationRunDetails,
   CoordinationRunId,
   CoordinationTurn,
+  SessionAwardArtifact,
+  SessionAwardPayload,
+  SessionMessageRouting,
 } from "./types.js";
-import { aggregateRunUsage } from "./types.js";
+import { aggregateRunUsage, splitAuctionUsage } from "./types.js";
 
 export type {
   BeginAttemptInput,
@@ -54,9 +59,11 @@ export type {
   FailTurnResult,
   FinishAttemptInput,
   NonTerminalRunSummary,
-  PublishBidCandidateInput,
-  PublishBidCandidateResult,
+  AwardSessionBidInput,
+  AwardSessionBidResult,
   ReconcileRunResult,
+  RecordAwardFeedbackInput,
+  RecordAwardFeedbackResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
   ScheduleTurnsInput,
@@ -358,6 +365,19 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         }
       }
 
+      // PA14-14: a per-round routing request is stored only when the session
+      // actually runs auction routing, and an explicit Agent must already be a
+      // snapshotted participant. Anything else is dropped rather than trusted.
+      const routing = normalizeMessageRouting(run, input.routing);
+      if (routing === "invalid") {
+        return {
+          kind: "conflict",
+          run: structuredClone(run),
+          code: "INVALID_STATE",
+          message: "Requested routing Agent is not a participant of this session",
+        } as const;
+      }
+
       const now = this.clock.nowIso();
       const transcriptSequence = nextTranscriptSequence(database, run.id);
       const artifact: CoordinationArtifact = {
@@ -367,6 +387,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         payload: { schemaVersion: 1, type: "user_message", content: input.content.trim() },
         createdBy: { kind: "user" },
         ...(input.clientMessageId === undefined ? {} : { clientMessageId: input.clientMessageId }),
+        ...(routing === undefined ? {} : { routing }),
         transcriptSequence,
         sizeChars: input.content.trim().length,
         createdAt: now,
@@ -702,91 +723,221 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     });
   }
 
-  async publishBidCandidate(
-    input: PublishBidCandidateInput,
-  ): Promise<PublishBidCandidateResult> {
+  /**
+   * Commit exactly one award for the current user-message round (PA14-09), and,
+   * for an accepted direct candidate, its transcript projection in the same
+   * mutation (PA14-10).
+   *
+   * Two guards make duplication impossible. `expectedRunVersion` rejects a
+   * competing loop that read the run before the award, and the durable
+   * `userArtifactId` lookup makes a restart-driven retry a no-op that returns
+   * the existing award. The published projection is derived only from the
+   * winning bid's own candidate answer, so this backend write can never invent
+   * model content.
+   */
+  async awardSessionBid(input: AwardSessionBidInput): Promise<AwardSessionBidResult> {
     return this.store.mutate((database) => {
       const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
       if (!run) return { kind: "not_found" } as const;
+
+      const existingAward = database.coordinationArtifacts.find(
+        (artifact): artifact is SessionAwardArtifact =>
+          artifact.runId === run.id &&
+          artifact.type === "session_award" &&
+          artifact.payload.userArtifactId === input.userArtifactId,
+      );
+      if (existingAward) {
+        const published = database.coordinationArtifacts.find(
+          (artifact) =>
+            artifact.runId === run.id &&
+            artifact.type === "session_message" &&
+            artifact.sourceBidArtifactId !== undefined &&
+            artifact.sourceBidArtifactId === existingAward.payload.winningBidArtifactId,
+        );
+        return {
+          kind: "already_awarded",
+          run: structuredClone(run),
+          award: structuredClone(existingAward),
+          ...(published ? { publishedArtifact: structuredClone(published) } : {}),
+        } as const;
+      }
+
       if (run.status !== "running" || run.version !== input.expectedRunVersion) {
         return { kind: "stale", currentRun: structuredClone(run) } as const;
       }
 
-      const bid = database.coordinationArtifacts.find(
-        (artifact) => artifact.id === input.bidArtifactId && artifact.runId === run.id,
-      );
+      const invalid = (reason: string) =>
+        ({ kind: "invalid", currentRun: structuredClone(run), reason }) as const;
+
+      const policy = run.policy.auctionPolicy;
       const user = database.coordinationArtifacts.find(
         (artifact) => artifact.id === input.userArtifactId && artifact.runId === run.id,
       );
-      const turn = bid?.turnId
-        ? database.coordinationTurns.find((candidate) => candidate.id === bid.turnId)
-        : undefined;
-      const policy = run.policy.auctionPolicy;
       if (
+        !policy ||
+        policy.scoringVersion !== input.scoringVersion ||
         run.lastUserArtifactId !== input.userArtifactId ||
         run.activeTurnIds.length > 0 ||
-        !policy ||
-        policy.routingMode !== "auto" ||
         !user ||
-        user.type !== "user_message" ||
-        !bid ||
-        bid.type !== "session_bid" ||
-        !turn ||
-        turn.status !== "committed" ||
-        turn.outputArtifactId !== bid.id ||
-        !turn.inputArtifactIds.includes(user.id) ||
-        bid.payload.recommendation !== "direct" ||
-        bid.payload.candidateAnswer === undefined ||
-        bid.payload.confidenceBps < policy.directConfidenceThresholdBps ||
-        bid.payload.estimatedOutputTokens > policy.directOutputTokenBudget
+        user.type !== "user_message"
       ) {
-        return { kind: "invalid", currentRun: structuredClone(run) } as const;
+        return invalid("Award does not match the current auction round");
+      }
+      if (!run.participants.some(({ agentId }) => agentId === input.selectedAgentId)) {
+        return invalid("Award names an Agent that is not a session participant");
+      }
+      if (
+        !Number.isInteger(input.scoreBps) ||
+        input.scoreBps < 0 ||
+        input.scoreBps > 10_000
+      ) {
+        return invalid("Award score is outside the basis-point range");
       }
 
-      const existing = database.coordinationArtifacts.find(
-        (artifact) =>
-          artifact.runId === run.id &&
-          artifact.type === "session_message" &&
-          artifact.sourceBidArtifactId === bid.id,
-      );
-      if (existing) {
-        return {
-          kind: "published",
-          run: structuredClone(run),
-          artifact: structuredClone(existing),
-        } as const;
+      let winningBid: Extract<CoordinationArtifact, { type: "session_bid" }> | undefined;
+      if (input.outcome === "fallback_execution") {
+        if (input.winningBidArtifactId !== undefined || input.fallback === undefined) {
+          return invalid("A fallback award carries no winning bid");
+        }
+      } else {
+        const bid = database.coordinationArtifacts.find(
+          (artifact) => artifact.id === input.winningBidArtifactId && artifact.runId === run.id,
+        );
+        const turn = bid?.turnId
+          ? database.coordinationTurns.find((candidate) => candidate.id === bid.turnId)
+          : undefined;
+        if (
+          !bid ||
+          bid.type !== "session_bid" ||
+          bid.createdByAgentId !== input.selectedAgentId ||
+          !turn ||
+          turn.status !== "committed" ||
+          turn.outputArtifactId !== bid.id ||
+          !turn.inputArtifactIds.includes(user.id)
+        ) {
+          return invalid("Award does not name a committed bid from this round");
+        }
+        winningBid = bid;
       }
 
       const now = this.clock.nowIso();
-      const content = bid.payload.candidateAnswer.trim();
-      const artifact: CoordinationArtifact = {
+      const payload: SessionAwardPayload = {
+        schemaVersion: 1,
+        type: "session_award",
+        userArtifactId: input.userArtifactId,
+        ...(winningBid ? { winningBidArtifactId: winningBid.id } : {}),
+        selectedAgentId: input.selectedAgentId,
+        outcome: input.outcome,
+        scoringVersion: input.scoringVersion,
+        scoreBps: input.scoreBps,
+        components: { ...input.components },
+        estimatedExecution: { ...input.estimatedExecution },
+        ...(input.fallback ? { fallback: input.fallback } : {}),
+      };
+      const award: SessionAwardArtifact = {
         id: this.ids.artifactId(),
         runId: run.id,
-        turnId: turn.id,
-        createdByRole: "participant",
-        createdByAgentId: bid.createdByAgentId,
-        type: "session_message",
-        payload: { schemaVersion: 1, type: "session_message", content },
-        sourceBidArtifactId: bid.id,
-        transcriptSequence: nextTranscriptSequence(database, run.id),
-        sizeChars: content.length,
+        type: "session_award",
+        payload,
+        createdBy: { kind: "system" },
+        sizeChars: JSON.stringify(payload).length,
         createdAt: now,
       };
-      database.coordinationArtifacts.push(artifact);
+
+      let publishedArtifact:
+        | Extract<CoordinationArtifact, { type: "session_message" }>
+        | undefined;
+      if (input.outcome === "publish_candidate") {
+        const candidate = winningBid?.payload.candidateAnswer?.trim();
+        if (
+          !winningBid ||
+          !candidate ||
+          winningBid.payload.recommendation !== "direct" ||
+          winningBid.payload.confidenceBps < policy.directConfidenceThresholdBps ||
+          winningBid.payload.estimatedOutputTokens > policy.directOutputTokenBudget
+        ) {
+          return invalid("Winning candidate no longer satisfies its publication gates");
+        }
+        publishedArtifact = {
+          id: this.ids.artifactId(),
+          runId: run.id,
+          turnId: winningBid.turnId,
+          createdByRole: "participant",
+          createdByAgentId: winningBid.createdByAgentId,
+          type: "session_message",
+          payload: { schemaVersion: 1, type: "session_message", content: candidate },
+          sourceBidArtifactId: winningBid.id,
+          transcriptSequence: nextTranscriptSequence(database, run.id),
+          sizeChars: candidate.length,
+          createdAt: now,
+        };
+      }
+
+      database.coordinationArtifacts.push(award);
+      if (publishedArtifact) database.coordinationArtifacts.push(publishedArtifact);
       run.version += 1;
       run.updatedAt = now;
-      this.append(database, this.events.bidCandidatePublished({
+      this.append(database, this.events.awardCreated({
         runId: run.id,
-        turnId: turn.id,
-        artifactId: artifact.id,
-        agentId: bid.createdByAgentId,
-        transcriptSequence: artifact.transcriptSequence!,
+        artifactId: award.id,
+        agentId: input.selectedAgentId,
+        userArtifactId: input.userArtifactId,
+        winningBidArtifactId: winningBid?.id,
+        outcome: input.outcome,
+        scoringVersion: input.scoringVersion,
+        scoreBps: input.scoreBps,
       }));
+      if (input.outcome === "fallback_execution" && input.fallback) {
+        this.append(database, this.events.auctionFallbackApplied({
+          runId: run.id,
+          artifactId: award.id,
+          agentId: input.selectedAgentId,
+          fallback: input.fallback,
+          validBidCount: input.fallbackEvidence?.validBidCount ?? 0,
+          requiredBidCount: input.fallbackEvidence?.requiredBidCount ?? 0,
+        }));
+      }
+      if (publishedArtifact) {
+        this.append(database, this.events.bidCandidatePublished({
+          runId: run.id,
+          turnId: publishedArtifact.turnId,
+          artifactId: publishedArtifact.id,
+          agentId: publishedArtifact.createdByAgentId,
+          transcriptSequence: publishedArtifact.transcriptSequence!,
+        }));
+      }
       return {
-        kind: "published",
+        kind: "awarded",
         run: structuredClone(run),
-        artifact: structuredClone(artifact),
+        award: structuredClone(award),
+        ...(publishedArtifact ? { publishedArtifact: structuredClone(publishedArtifact) } : {}),
       } as const;
+    });
+  }
+
+  async recordAwardFeedback(
+    input: RecordAwardFeedbackInput,
+  ): Promise<RecordAwardFeedbackResult> {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
+      const award = database.coordinationArtifacts.find(
+        (artifact) =>
+          artifact.id === input.awardArtifactId &&
+          artifact.runId === input.runId &&
+          artifact.type === "session_award",
+      );
+      if (!run || !award || award.type !== "session_award") {
+        return { kind: "not_found" } as const;
+      }
+      // Feedback never mutates the award and never changes run status, so it
+      // cannot race a running wave or revive a terminal session.
+      this.append(database, this.events.awardFeedbackRecorded({
+        runId: run.id,
+        artifactId: award.id,
+        agentId: award.payload.selectedAgentId,
+        decision: input.decision,
+      }));
+      return { kind: "recorded", run: structuredClone(run) } as const;
     });
   }
 
@@ -1422,6 +1573,43 @@ const nextCountdownValue = (
   return Number.isInteger(value) && run.sharedState ? value - 1 : "invalid";
 };
 
+/**
+ * Normalize a per-round routing request against durable policy (PA14-14).
+ *
+ * `undefined` means "store nothing"; `"invalid"` means the caller named an
+ * Agent that is not a participant, which is a conflict rather than a silent
+ * downgrade. A non-auction session stores no routing at all, so a legacy
+ * session cannot be pushed onto the auction path by a message.
+ */
+const normalizeMessageRouting = (
+  run: CoordinationRun,
+  requested: SessionMessageRouting | undefined,
+): SessionMessageRouting | undefined | "invalid" => {
+  if (!requested || run.policy.auctionPolicy === undefined) return undefined;
+  if (
+    requested.selectedAgentId !== undefined &&
+    !run.participants.some(({ agentId }) => agentId === requested.selectedAgentId)
+  ) {
+    return "invalid";
+  }
+  const routing: SessionMessageRouting = {
+    // A high-risk message always runs an auction; it can never be lowered here.
+    ...(requested.riskLevel === "high"
+      ? { routingMode: "auction" as const }
+      : requested.routingMode === undefined
+        ? {}
+        : { routingMode: requested.routingMode }),
+    ...(requested.selectedAgentId === undefined
+      ? {}
+      : { selectedAgentId: requested.selectedAgentId }),
+    ...(requested.coordinationPreference === undefined
+      ? {}
+      : { coordinationPreference: requested.coordinationPreference }),
+    ...(requested.riskLevel === undefined ? {} : { riskLevel: requested.riskLevel }),
+  };
+  return Object.keys(routing).length === 0 ? undefined : routing;
+};
+
 const nextTranscriptSequence = (database: Database, runId: CoordinationRunId): number =>
   database.coordinationArtifacts
     .filter((artifact) => artifact.runId === runId)
@@ -1492,6 +1680,7 @@ const buildRunDetails = (database: Database, run: CoordinationRun): Coordination
     turns,
     attempts,
     usageTotals: aggregateRunUsage(attempts),
+    auctionUsage: splitAuctionUsage({ turns, attempts, artifacts }),
     artifacts,
     events,
   }) as CoordinationRunDetails;

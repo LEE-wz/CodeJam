@@ -183,4 +183,118 @@ describe("Coordination HTTP routes", () => {
       await app.close();
     },
   );
+
+  describe("PA14-14 and PA14-17 auction request surface", () => {
+    const buildApp = async () => {
+      const calls: Array<Record<string, unknown>> = [];
+      const coordination = {
+        initialize: async () => undefined,
+        listRuns: async () => [run],
+        getRun: async () => details,
+        createRun: async () => run,
+        startRun: async () => run,
+        stopRun: async () => run,
+        resumeRun: async (id: string, input: Record<string, unknown>) => {
+          calls.push({ kind: "resume", id, ...input });
+          return run;
+        },
+        endRun: async () => run,
+        recordAwardFeedback: async (input: Record<string, unknown>) => {
+          calls.push({ kind: "feedback", ...input });
+          return run;
+        },
+      } as unknown as CoordinationServiceContract;
+      const app = await createApp(
+        loadConfig({ NODE_ENV: "test", APP_AUTH_TOKEN: "a-strong-test-token" }),
+        agentService,
+        coordination,
+      );
+      return { app, calls, headers: { authorization: "Bearer a-strong-test-token" } };
+    };
+
+    it("passes bounded routing through and rejects any budget escalation", async () => {
+      const { app, calls, headers } = await buildApp();
+
+      const accepted = await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/messages`,
+        headers,
+        payload: {
+          content: "Draft the rollback plan",
+          routing: {
+            routingMode: "auction",
+            selectedAgentId: "planner",
+            coordinationPreference: "team",
+            riskLevel: "high",
+          },
+        },
+      });
+      expect(accepted.statusCode).toBe(202);
+      expect(calls[0]).toMatchObject({
+        kind: "resume",
+        routing: { routingMode: "auction", selectedAgentId: "planner" },
+      });
+
+      // Every budget-shaped field is an unknown key on a strict object.
+      for (const routing of [
+        { maxBidOutputTokens: 9_999 },
+        { auctionExecutionTokenBudget: 9_999 },
+        { maxBidAttempts: 9 },
+        { minimumValidBids: 1 },
+        { maxParallelTurns: 10 },
+        { participants: ["planner"] },
+      ]) {
+        const rejected = await app.inject({
+          method: "POST",
+          url: `/api/coordination-runs/${runId}/messages`,
+          headers,
+          payload: { content: "Escalate", routing },
+        });
+        expect(rejected.statusCode).toBe(400);
+        expect(rejected.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+      }
+      await app.close();
+    });
+
+    it("refuses direct routing on a message marked high-risk", async () => {
+      const { app, headers } = await buildApp();
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/messages`,
+        headers,
+        payload: {
+          content: "Risky change",
+          routing: { routingMode: "direct", riskLevel: "high" },
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("accepts a bounded award rating and rejects an unknown decision", async () => {
+      const { app, calls, headers } = await buildApp();
+
+      const accepted = await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/awards/award-1/feedback`,
+        headers,
+        payload: { decision: "accepted" },
+      });
+      expect(accepted.statusCode).toBe(202);
+      expect(calls[0]).toMatchObject({
+        kind: "feedback",
+        awardArtifactId: "award-1",
+        decision: "accepted",
+      });
+
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/awards/award-1/feedback`,
+        headers,
+        payload: { decision: "excellent" },
+      });
+      expect(rejected.statusCode).toBe(400);
+      await app.close();
+    });
+  });
 });

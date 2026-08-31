@@ -923,3 +923,74 @@ This approved addendum completes `PA14-01` and authorizes implementation of
 coverage; compatibility fixtures must prove absent auction policy retains the
 legacy path. The full Phase 14 race, failure, redaction, UI, Compose, and live
 rehearsal gates remain mandatory.
+
+## Addendum: contract additions made by `PA14-09`–`PA14-26` (2026-08-31)
+
+Recorded per the source-of-truth rule: the implementation of the approved
+adaptive-auction addendum needed these concrete shapes, and two of them differ
+from the wording approved at `PA14-01`. Nothing here widens a budget, a
+concurrency cap, an attempt ceiling, or participant scope.
+
+### Award shape
+
+- `session_award` is a turn-less, Agent-less artifact: `{ type, payload,
+  createdBy: { kind: "system" }, sizeChars, createdAt }`. It has no
+  `createdByAgentId` and no `transcriptSequence`, so it is structurally
+  impossible for an Agent to author and it can never enter a transcript
+  projection.
+- **Deviation from the approved wording.** The approved addendum named an
+  explicit `selectionKind: "bid" | "fallback"` discriminator. The implemented
+  payload discriminates on `outcome` alone and derives the same rule
+  structurally: `fallback_execution` prohibits `winningBidArtifactId` and
+  requires `fallback`; the other two outcomes require a committed bid from the
+  current round. A separate `selectionKind` would have been a second source of
+  truth for a fact `outcome` already carries, and the repository rejects either
+  inconsistent combination.
+- The award key remains `(runId, userArtifactId)`. `awardSessionBid` is the only
+  writer, takes `expectedRunVersion`, and returns `already_awarded` when an
+  award for that user message exists — so a competing loop and a restarted loop
+  both observe the committed decision instead of re-scoring.
+
+### Feedback
+
+- **Deviation from the approved wording.** The approved addendum described one
+  *mutable projection per award written with an expected version*. Feedback is
+  implemented as an `award.feedback_recorded` event carrying only the award id,
+  the selected Agent id, and the enum; the current rating of an award is the
+  newest such event. This keeps the "the award is immutable" invariant literal
+  rather than nearly-literal, needs no second mutable record, and is idempotent
+  in the sense that matters: re-rating changes the derived rating and appends
+  one audit event, and nothing about the award or the run changes either way.
+
+### Per-round routing on a user message (`PA14-14`)
+
+- `POST /api/coordination-runs/:id/messages` accepts an optional strict
+  `routing` object: `routingMode` (`direct | auction`), `selectedAgentId`,
+  `coordinationPreference` (`any | single | team`), and `riskLevel`
+  (`standard | high`). The strict schema is the escalation boundary: a budget,
+  concurrency, attempt, or participant field is rejected as an unknown key
+  rather than ignored.
+- `riskLevel: "high"` is normalized to `routingMode: "auction"` on the stored
+  message and a high-risk message may not request `direct`. A routing request
+  is stored only on an auction-capable session, and an unknown
+  `selectedAgentId` is a `409 INVALID_STATE` conflict rather than a silent
+  downgrade.
+- `coordinationPreference` and `riskLevel` are rendered into bid prompts as
+  advisory text. They never change the output contract, the participants, or a
+  budget.
+
+### Execution prompt provenance (`PA14-11`, `PA14-12`)
+
+- An awarded execution turn carries the award artifact id on its
+  `inputArtifactIds`, and the context builder renders one
+  `[AWARDED PLAN AND YOUR ASSIGNMENT]` section from the award plus the winning
+  bid it names. Only the winning bid is reachable this way, which is the
+  structural form of "losing bids never enter an execution prompt".
+
+### Read model (`PA14-15`)
+
+- Every run detail read carries `auctionUsage` with `actualBidding`,
+  `actualExecution`, and `projectedExecution`. An attempt belongs to bidding
+  exactly when its turn is a `session_bid` turn, so the two actual totals always
+  reconstruct `usageTotals`, and `projectedExecution` is summed only from
+  committed awards. No field is a currency amount.

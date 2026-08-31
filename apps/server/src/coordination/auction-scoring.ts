@@ -54,6 +54,17 @@ export interface ScoreBidInput {
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).length;
 
+/**
+ * The run-level input ceiling every projected cost is normalized against.
+ *
+ * It is deliberately a property of the run, not of the bid: a normalizer that
+ * varied with a plan's own shape would let a bid change its own denominator.
+ * The worst case is one full context window per concurrently executable turn,
+ * using the same conservative 3 bytes-per-token estimator as the bid estimate.
+ */
+export const auctionContextCeilingInputTokens = (run: CoordinationRun): number =>
+  resolveMaxParallelTurns(run) * Math.ceil(run.policy.contextMaxChars / 3);
+
 /** Contract estimator: ceil UTF-8 bytes / 3, with sequential predecessor reserve. */
 export const estimateExecutionInputTokens = (
   payload: SessionBidPayload,

@@ -1,11 +1,14 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (`PA14-01`–`PA14-08` complete; `PA14-09` next)
+**Last audit:** 2026-08-31 (`PA14-01`–`PA14-17` and `PA14-19`–`PA14-26` complete;
+`PA14-18` engine deletion and `PA14-27` live rehearsal outstanding)
 **Audited checkpoint:** Auction Phase 13 complete at `085e765`
-**Implementation branch:** `bidding-agent-implementation` (base `085e765`; auction-track root `aa17407`)
+**Implementation branch:** `bidding-agent-phase-14-award` (base `01620a0` on
+`bidding-agent-implementation`; auction-track root `aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Parallel Phase 14 - Adaptive Auction Coordination
-**Current gate:** Auction Checkpoint 14 in progress (`PA14-09` durable award next)
+**Current gate:** Auction Checkpoint 14 in progress (`PA14-18` countdown-engine
+deletion and `PA14-27` live rehearsal remain)
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
 Phases 11-12 and auction Phase 13 `complete`; auction Phase 14 `in_progress`; Phase 15 `not_started`
 
@@ -32,7 +35,7 @@ they name a past checkpoint.
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Auction foundation and purpose-aware parallel waves | `complete` on `bidding-agent-implementation` — all of `PA13-01`-`PA13-20`; Auction Checkpoint 13 met (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
-| 14 | Adaptive auction coordination | `in_progress` on `bidding-agent-phase-14` — `PA14-01`-`PA14-06` complete (auction sheet: [`phases/parallel/14-adaptive-auction-coordination.md`](phases/parallel/14-adaptive-auction-coordination.md)); main-track sheet unchanged |
+| 14 | Adaptive auction coordination | `in_progress` on `bidding-agent-phase-14-award` — `PA14-01`-`PA14-17` and `PA14-19`-`PA14-26` complete; `PA14-18` partial and `PA14-27` not started (auction sheet: [`phases/parallel/14-adaptive-auction-coordination.md`](phases/parallel/14-adaptive-auction-coordination.md)); main-track sheet unchanged |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
@@ -46,10 +49,24 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Implement `PA14-09`: add the strict backend-authored
-`session_award` artifact and version-checked one-award-per-user-message
-repository command, then connect the completed `confidence_cost_v1` ranker to
-that durable award boundary.
+**Resume here.** Two Auction Phase 14 tasks remain, and both are gated on
+running work rather than on writing code:
+
+1. `PA14-27` — the real ten-Agent multi-prompt rehearsal. It needs live Agents
+   and a running deployment, so it cannot be produced from the test suite.
+2. `PA14-18` — deleting the countdown engine. Both replacement demonstrations
+   exist as green tests (awarded sequential countdown and awarded parallel
+   fan-out, in `auction-execution.test.ts`), but the sheet gates the deletion on
+   those scenarios being demonstrated, and `PA14-27` is what exercises them end
+   to end. Delete the engine after that rehearsal, keeping stored countdown
+   read/render support.
+
+The mandatory disposable Docker Compose gate could not be run for this change:
+`docker compose` is installed (v5.4.0) but no Docker daemon is reachable on this
+machine (`unix:///Users/darius/.docker/run/docker.sock` does not exist), so
+`docker compose build launchpad` cannot start. The host `npm run check` result
+below is therefore the only verification evidence for `PA14-09`-`PA14-26`, and
+the Compose gate must be rerun before Auction Checkpoint 14 is claimed.
 
 ## Auction Phase 14 task ledger
 
@@ -63,6 +80,50 @@ that durable award boundary.
 | PA14-06 | `complete` | Explicit Auction atomically schedules one fresh-thread bid turn for every participant. The shared wave builder excludes Agents with a prior bid for the PA14-07 Auto escalation path; retries stay on the same turn under `maxBidAttempts`. Walking-skeleton evidence proves one turn per Agent, private non-transcript bid commits, and bounded same-opportunity retries. |
 | PA14-07 | `complete` | Auto schedules one fresh-thread primary bid. A direct recommendation is published only after recommendation, candidate, confidence, output-budget, single-plan, and durable-policy gates pass; the version-checked projection records `sourceBidArtifactId`, Agent provenance, and one transcript sequence. Recommendation/confidence misses reuse the primary bid and atomically schedule only remaining participants; exhausted primary attempts retire without failing the round. |
 | PA14-08 | `complete` | Added pure `confidence_cost_v1` eligibility and ranking: UTF-8 byte input estimation, sequential predecessor reserve, 4/1/16 weighted units with projected cached input fixed at zero, exact integer normalization, cold-start/latest-20 calibration, bounded reliability penalties, score clamping, minimum-valid-bid result, and roster-stable ties. Explanations expose only integer components and never prompt or raw output. |
+| PA14-09 | `complete` | Added the turn-less, Agent-less `session_award` artifact and the single version-checked `awardSessionBid` repository command. The `(runId, userArtifactId)` key makes a competing loop and a restarted loop both observe the committed award instead of re-scoring. Award creation validates round membership, bid provenance, participant membership, and the basis-point range. |
+| PA14-10 | `complete` | An accepted Auto candidate commits its award and its `session_message` projection in one mutation, at one version, with `sourceBidArtifactId` and Agent provenance and the next transcript sequence. A candidate that no longer passes its gates writes neither record. |
+| PA14-11 | `complete` | An awarded execution turn carries the award artifact on its inputs and runs on a durable `threadPolicy: "fresh"`. The context builder renders one `[AWARDED PLAN AND YOUR ASSIGNMENT]` section from the award and the winning bid it names, so only the winner's plan can reach an execution prompt. |
+| PA14-12 | `complete` | `single` schedules one turn; `sequential` schedules strictly by position so each later Agent sees the earlier committed messages of the same round; `parallel` schedules one bounded wave through the Phase 13 supervisor. All three derive the next assignment from committed turns, so a restart repeats no work. |
+| PA14-13 | `complete` | Fewer than `minimumValidBids` valid bids applies the configured bounded fallback exactly once, recorded as a `fallback_execution` award plus an `auction.fallback_applied` event; `fail` fails the run and makes no award. A fallback Agent still receives an ordinary execution turn. Winning-execution failure and timeout fail the round and never promote a runner-up. |
+| PA14-14 | `complete` | The message API accepts a strict `routing` object (`routingMode`, `selectedAgentId`, `coordinationPreference`, `riskLevel`). Every budget, concurrency, attempt, and participant field is rejected as an unknown key; `riskLevel: "high"` is normalized to an auction and may not request direct; a non-participant Agent is a `409` conflict. |
+| PA14-15 | `complete` | Every read carries `auctionUsage` with `actualBidding`, `actualExecution`, and `projectedExecution`. The two actual totals always reconstruct `usageTotals`; the projection is summed only from committed awards. Lease, prompt, thread, and raw-output stripping is unchanged. |
+| PA14-16 | `complete` | The create form offers Auto/Direct/Auction and an optional default Agent; the composer offers a per-round override, Agent selection, and a high-risk marker; the working state names bid evaluation separately from awarded execution; an award card shows score components, projected versus actual tokens, and an expandable evidence-only bid panel. The transcript still shows only user messages and published responses. |
+| PA14-17 | `complete` | `POST /api/coordination-runs/:id/awards/:awardId/feedback` records one `accepted \| rejected` rating as an audit event containing only IDs and the enum. The award artifact and the run status are byte-identical afterwards, and the UI labels confidence as self-reported. |
+| PA14-18 | `in_progress` | Both replacement demonstrations are green: an awarded sequential plan produces the ordered `3, 2, 1` transcript across three Agents, and an awarded parallel plan fans out to three committed turns. The countdown engine has **not** been deleted; the sheet gates deletion on these scenarios, and `PA14-27` is what exercises them against live Agents. |
+| PA14-19 | `complete` | A free-chat session with no `auctionPolicy` still answers with the ordinary wave and produces no bid or award — absence remains the legacy marker. Countdown and verified-handoff fixtures pass unchanged. `splitAuctionUsage` is covered for sessions with no auction evidence and for attempts with absent or null usage. |
+| PA14-20 | `complete` | Routing tests cover explicit Direct, explicit Auction, Auto escalation, per-message override, forced high-risk auction, explicit Agent selection, sticky follow-up ownership, and resolution once every bid opportunity has settled. |
+| PA14-21 | `complete` | Bid validation covers forged provenance, wrong artifact type, fenced and malformed JSON, unknown fields, foreign and duplicate assignment Agents, non-contiguous positions, single-plan ownership, missing direct candidates, and each execution budget. |
+| PA14-22 | `complete` | The scorer suite adds unsupported-scoring-version rejection and proof that input array order cannot change the ranking, on top of the `PA14-08` cold-start, calibration, rounding, boundary, and stable-tie coverage. |
+| PA14-23 | `complete` | Competing awards at the same version yield exactly one award artifact and one `award.created` event; a stale replay is a no-op; a restarted service over the same durable store reruns no settled bid, duplicates no award, and schedules nothing further for a finished plan. |
+| PA14-24 | `complete` | Failure tests cover partial bidder failure above the minimum, all bidders invalid, the minimum-valid-bid boundary, each of the three fallbacks, winner retry exhaustion, and winner timeout — with the runner-up never executed in either failure case. |
+| PA14-25 | `complete` | Bid and awarded-execution attempts are counted separately, the two actual totals reconcile with the run total, and the projection comes only from the award. No token count is converted into a cost claim. |
+| PA14-26 | `complete` | Web tests cover the routing policy display, award attribution, projected-versus-actual tokens, bid-evidence expansion, transcript exclusion of losing bids, the bidding-versus-executing working state, fallback honesty, per-message routing submission, the high-risk force, and feedback recording with `aria-pressed` state. |
+
+### Phase 14 verification evidence (`PA14-09`-`PA14-26`)
+
+- The repository-wide host `npm run check` passed both workspace typechecks,
+  **36 server files / 678 tests**, **5 web files / 66 tests**, and both
+  production builds (**744 tests total**).
+- New suites: `auction-award.test.ts` (16 tests: award atomicity, competing and
+  replayed awards, publication gates, fallback selection, feedback immutability,
+  usage separation), `auction-routing-decisions.test.ts` (15 tests: routing
+  table, awarded single/sequential/parallel execution, restart derivation,
+  duplicate-award rejection), and `auction-execution.test.ts` (14 tests:
+  end-to-end awarded team execution, failure and fallback paths, restart
+  boundaries, stored-history compatibility).
+- `SessionAuction.test.tsx` adds **9 web tests** for the routing surface,
+  award summary, bid-evidence panel, per-message routing, and feedback.
+- The first local run of the web suite failed to resolve the workspace's
+  lockfile-declared Testing Library packages, exactly as the `PA14-08` audit
+  recorded. A clean `npm ci` restored the locked tree; no manifest or lockfile
+  changed. `npm ci` reports the unchanged **1 moderate and 5 high
+  vulnerabilities**.
+- **The mandatory disposable Docker Compose gate did not run.** `docker compose`
+  is present (v5.4.0) but no daemon is reachable
+  (`dial unix /Users/darius/.docker/run/docker.sock: no such file or directory`),
+  so `docker compose build launchpad` cannot start. Per the runbook this leaves
+  `PA14-09`-`PA14-26` verified only on the host; rerun the Compose gate before
+  claiming Auction Checkpoint 14.
 
 ### Phase 14 verification evidence (`PA14-01`-`PA14-08`)
 

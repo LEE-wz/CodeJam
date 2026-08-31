@@ -15,6 +15,10 @@ import type {
   CoordinationTurn,
   CoordinationTurnId,
   CoordinationWavePurpose,
+  SessionAuctionScoringVersion,
+  SessionAwardArtifact,
+  SessionAwardComponents,
+  SessionAwardOutcome,
   AppendUserMessageRequest,
   CreateCoordinationRunRequest,
   CreateRunRequest,
@@ -46,6 +50,7 @@ export interface CoordinationServiceContract {
   stopRun(id: CoordinationRunId): Promise<CoordinationRun>;
   resumeRun(id: CoordinationRunId, input: AppendUserMessageRequest): Promise<CoordinationRun>;
   endRun(id: CoordinationRunId): Promise<CoordinationRun>;
+  recordAwardFeedback(input: RecordAwardFeedbackInput): Promise<CoordinationRun>;
 }
 
 export interface CoordinationAgentView {
@@ -75,6 +80,8 @@ export type WorkflowDecision =
       expectedArtifactType: ArtifactType;
       /** A standalone Auto primary bid is still bidding work, not execution. */
       wavePurpose?: CoordinationWavePurpose;
+      /** Awarded execution runs fresh; omitted elsewhere (PA14-11). */
+      threadPolicy?: ExecutionThreadPolicy;
     }
   /**
    * Schedule several turns as one atomic wave (PA13-10).
@@ -94,13 +101,25 @@ export type WorkflowDecision =
         turnKind: CoordinationTurn["kind"];
         inputArtifactIds: CoordinationArtifactId[];
         expectedArtifactType: ArtifactType;
+        threadPolicy?: ExecutionThreadPolicy;
       }>;
     }
   | { kind: "complete"; finalArtifactId: CoordinationArtifactId }
+  /**
+   * Every bid opportunity for the current round has settled and no award
+   * exists yet (PA14-09). The service scores the named bids with the run's
+   * configured scoring version and commits exactly one award.
+   */
   | {
-      kind: "publish_bid_candidate";
+      kind: "resolve_auction";
       userArtifactId: CoordinationArtifactId;
-      bidArtifactId: CoordinationArtifactId;
+      bidArtifactIds: CoordinationArtifactId[];
+      /**
+       * Present when the Auto primary already satisfies every direct
+       * publication gate, so the service awards `publish_candidate` without
+       * ranking a wider field.
+       */
+      directCandidateBidArtifactId?: CoordinationArtifactId;
     }
   | { kind: "await_input" }
   | { kind: "fail"; code: CoordinationErrorCode; message: string };
@@ -261,17 +280,62 @@ export type CommitAcceptedArtifactResult =
   | { kind: "stale" }
   | { kind: "not_found" };
 
-export interface PublishBidCandidateInput {
+/**
+ * One version-checked award command (PA14-09, PA14-10).
+ *
+ * `publish_candidate` commits the award and the transcript projection of the
+ * winning bid's candidate answer in the same mutation, so a restart can never
+ * observe an award without its published message or a message without its
+ * award. `fallback_execution` carries no winning bid.
+ */
+export interface AwardSessionBidInput {
   runId: CoordinationRunId;
   expectedRunVersion: number;
   userArtifactId: CoordinationArtifactId;
-  bidArtifactId: CoordinationArtifactId;
+  winningBidArtifactId?: CoordinationArtifactId | undefined;
+  selectedAgentId: AgentId;
+  outcome: SessionAwardOutcome;
+  scoringVersion: SessionAuctionScoringVersion;
+  scoreBps: number;
+  components: SessionAwardComponents;
+  estimatedExecution: { inputTokens: number; outputTokens: number };
+  /** Fallback awards only: which configured rule chose the Agent. */
+  fallback?: "default_agent" | "round_robin" | undefined;
+  /** Fallback awards only: the settled evidence recorded with the event. */
+  fallbackEvidence?: { validBidCount: number; requiredBidCount: number } | undefined;
 }
 
-export type PublishBidCandidateResult =
-  | { kind: "published"; run: CoordinationRun; artifact: CoordinationArtifact }
+export type AwardSessionBidResult =
+  | {
+      kind: "awarded";
+      run: CoordinationRun;
+      award: SessionAwardArtifact;
+      publishedArtifact?: CoordinationArtifact;
+    }
+  /** An award already exists for this round. The command changed nothing. */
+  | {
+      kind: "already_awarded";
+      run: CoordinationRun;
+      award: SessionAwardArtifact;
+      publishedArtifact?: CoordinationArtifact;
+    }
   | { kind: "stale"; currentRun: CoordinationRun }
-  | { kind: "invalid"; currentRun: CoordinationRun }
+  | { kind: "invalid"; currentRun: CoordinationRun; reason: string }
+  | { kind: "not_found" };
+
+/**
+ * One optional user rating of a committed award (PA14-17). The award artifact
+ * is never mutated: the rating is a durable event, and the newest event for an
+ * award is its current rating.
+ */
+export interface RecordAwardFeedbackInput {
+  runId: CoordinationRunId;
+  awardArtifactId: CoordinationArtifactId;
+  decision: "accepted" | "rejected";
+}
+
+export type RecordAwardFeedbackResult =
+  | { kind: "recorded"; run: CoordinationRun }
   | { kind: "not_found" };
 
 export interface FinishAttemptInput {
@@ -353,7 +417,8 @@ export interface CoordinationRepository {
   commitAcceptedArtifact(
     input: CommitAcceptedArtifactInput,
   ): Promise<CommitAcceptedArtifactResult>;
-  publishBidCandidate(input: PublishBidCandidateInput): Promise<PublishBidCandidateResult>;
+  awardSessionBid(input: AwardSessionBidInput): Promise<AwardSessionBidResult>;
+  recordAwardFeedback(input: RecordAwardFeedbackInput): Promise<RecordAwardFeedbackResult>;
   finishAttempt(input: FinishAttemptInput): Promise<"finished" | "stale">;
   requestStop(id: CoordinationRunId): Promise<CoordinationRun | undefined>;
   finishStopped(id: CoordinationRunId): Promise<CoordinationRun | undefined>;

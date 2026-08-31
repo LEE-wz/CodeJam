@@ -322,6 +322,7 @@ describe("session walking skeleton", () => {
       succeeds(autoBid(overrides)),
       succeeds(remainingBid),
       succeeds(remainingBid),
+      succeeds(JSON.stringify(freeChatPayload("Awarded answer", true))),
     ], {
       ...CREATE_FREE_CHAT_REQUEST,
       policy: {
@@ -332,19 +333,37 @@ describe("session walking skeleton", () => {
     });
     const details = await settle(auto.service, auto.runId);
 
-    expect(details.run).toMatchObject({
-      status: "failed",
-      errorMessage: "Settled Auto bids require the PA14 scoring decision",
-    });
-    expect(details.turns).toHaveLength(3);
-    expect(details.turns.map(({ agentId }) => agentId)).toEqual([
+    // Escalation collects one bid per participant, commits exactly one award,
+    // and then executes the awarded plan.
+    expect(details.run.status).toBe("awaiting_input");
+    expect(details.turns.slice(0, 3).map(({ agentId }) => agentId)).toEqual([
       PARTICIPANT_ONE.id,
       PARTICIPANT_TWO.id,
       PARTICIPANT_THREE.id,
     ]);
-    expect(auto.runtime.starts).toHaveLength(3);
+    expect(details.turns).toHaveLength(4);
+    expect(details.turns[3]).toMatchObject({
+      kind: "session_turn",
+      wavePurpose: "session_execution",
+      status: "committed",
+      agentId: PARTICIPANT_ONE.id,
+    });
+    expect(auto.runtime.starts).toHaveLength(4);
     expect(details.artifacts.filter(({ type }) => type === "session_bid")).toHaveLength(3);
-    expect(details.artifacts.some(({ type }) => type === "session_message")).toBe(false);
+    const awards = details.artifacts.filter(({ type }) => type === "session_award");
+    expect(awards).toHaveLength(1);
+    expect(awards[0]).toMatchObject({
+      type: "session_award",
+      createdBy: { kind: "system" },
+      payload: { outcome: "execute_plan", scoringVersion: "confidence_cost_v1" },
+    });
+    // The only chat message is the awarded execution: no losing bid is published.
+    const messages = details.artifacts.filter(({ type }) => type === "session_message");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      createdByAgentId: PARTICIPANT_ONE.id,
+      payload: { content: "Awarded answer" },
+    });
   });
 
   it("executes explicit direct routing once without scheduling a bid wave", async () => {
@@ -398,7 +417,10 @@ describe("session walking skeleton", () => {
       estimatedOutputTokens: 1_000,
     });
     const auction = await startSession(
-      SESSION_PARTICIPANTS.map(() => succeeds(output)),
+      [
+        ...SESSION_PARTICIPANTS.map(() => succeeds(output)),
+        succeeds(JSON.stringify(freeChatPayload("Awarded answer", true))),
+      ],
       {
         ...CREATE_FREE_CHAT_REQUEST,
         policy: {
@@ -413,21 +435,28 @@ describe("session walking skeleton", () => {
     );
     const details = await settle(auction.service, auction.runId);
 
-    expect(details.run).toMatchObject({
-      status: "failed",
-      errorCode: "INVALID_STATE",
-      errorMessage: "Settled bids require the PA14 award decision",
-    });
-    expect(details.turns).toHaveLength(SESSION_PARTICIPANTS.length);
-    expect(details.turns.every(
+    expect(details.run.status).toBe("awaiting_input");
+    const bidTurns = details.turns.slice(0, SESSION_PARTICIPANTS.length);
+    expect(bidTurns.every(
       ({ kind, wavePurpose, status }) =>
         kind === "session_bid" && wavePurpose === "session_bidding" && status === "committed",
     )).toBe(true);
     const bids = details.artifacts.filter(({ type }) => type === "session_bid");
     expect(bids).toHaveLength(SESSION_PARTICIPANTS.length);
     expect(bids.every(({ transcriptSequence }) => transcriptSequence === undefined)).toBe(true);
-    expect(auction.runtime.starts).toHaveLength(SESSION_PARTICIPANTS.length);
-    expect(auction.runtime.starts.every(({ threadPolicy }) => threadPolicy === "fresh")).toBe(true);
+    expect(auction.runtime.starts.slice(0, SESSION_PARTICIPANTS.length)
+      .every(({ threadPolicy }) => threadPolicy === "fresh")).toBe(true);
+    // Exactly one award, and the awarded execution runs on the Agent's own thread.
+    expect(details.artifacts.filter(({ type }) => type === "session_award")).toHaveLength(1);
+    expect(details.turns).toHaveLength(SESSION_PARTICIPANTS.length + 1);
+    expect(details.turns.at(-1)).toMatchObject({
+      kind: "session_turn",
+      status: "committed",
+      agentId: PARTICIPANT_ONE.id,
+    });
+    // PA14-11: the awarded execution starts fresh too — its prompt carries the
+    // full transcript and the winning plan, so it needs no private history.
+    expect(auction.runtime.starts.at(-1)?.threadPolicy).toBe("fresh");
   });
 
   it("retries invalid bids within the original opportunity and bid-attempt ceiling", async () => {
@@ -454,6 +483,7 @@ describe("session walking skeleton", () => {
       [
         ...SESSION_PARTICIPANTS.map(() => succeeds(invalid)),
         ...SESSION_PARTICIPANTS.map(() => succeeds(valid)),
+        succeeds(JSON.stringify(freeChatPayload("Awarded answer", true))),
       ],
       {
         ...CREATE_FREE_CHAT_REQUEST,
@@ -471,11 +501,13 @@ describe("session walking skeleton", () => {
     );
     const details = await settle(auction.service, auction.runId);
 
-    expect(details.turns).toHaveLength(SESSION_PARTICIPANTS.length);
-    expect(details.turns.map(({ attemptCount }) => attemptCount)).toEqual([2, 2, 2]);
-    expect(details.attempts).toHaveLength(SESSION_PARTICIPANTS.length * 2);
+    // Three bidders retried once each inside their single opportunity, then the
+    // awarded execution added exactly one further turn.
+    expect(details.turns).toHaveLength(SESSION_PARTICIPANTS.length + 1);
+    expect(details.turns.map(({ attemptCount }) => attemptCount)).toEqual([2, 2, 2, 1]);
+    expect(details.attempts).toHaveLength(SESSION_PARTICIPANTS.length * 2 + 1);
     expect(details.attempts.filter(({ status }) => status === "invalid_output")).toHaveLength(3);
-    expect(auction.runtime.starts.slice(3).every(
+    expect(auction.runtime.starts.slice(3, 6).every(
       ({ prompt }) => prompt.includes("confidenceBps:"),
     )).toBe(true);
   });

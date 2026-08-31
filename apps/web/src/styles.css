@@ -2460,3 +2460,277 @@ summary:focus-visible {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* --------------------------------------------------- PA14 auction surface */
+
+.session-routing-controls {
+  margin-top: 18px;
+  padding: 13px 15px;
+  border: 1px solid #e1ded6;
+  border-radius: 11px;
+}
+
+.session-routing-controls legend {
+  color: #555650;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.routing-mode-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 12px;
+}
+
+.routing-mode-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 4px 8px;
+  padding: 10px 11px;
+  border: 1px solid #dedbd2;
+  border-radius: 10px;
+  background: #f6f4ef;
+  cursor: pointer;
+}
+
+.routing-mode-option strong {
+  color: #393a35;
+  font-size: 12px;
+}
+
+.routing-mode-option span {
+  grid-column: 2;
+  color: #6b6c64;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.routing-mode-option:has(input:checked) {
+  border-color: #cec6f1;
+  background: #f0edff;
+}
+
+.auction-state {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.auction-state > div {
+  padding: 12px 13px;
+  border: 1px solid #dedbd2;
+  border-radius: 10px;
+  background: #f6f4ef;
+}
+
+.auction-state span {
+  display: block;
+  color: #85867f;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auction-state strong {
+  display: block;
+  margin-top: 4px;
+  color: #393a35;
+  font-size: 12px;
+}
+
+.award-summary {
+  padding: 14px 16px;
+  border: 1px solid #dedbd2;
+  border-radius: 11px;
+  background: #fbfaf7;
+}
+
+.award-summary + .award-summary {
+  margin-top: 10px;
+}
+
+.award-summary header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.award-outcome {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eceade;
+  color: #5b5c54;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.award-outcome-fallback_execution {
+  background: #fbeedd;
+  color: #8a5a1c;
+}
+
+.award-claim,
+.award-plan {
+  margin: 8px 0 0;
+  color: #6b6c64;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.award-components,
+.award-usage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.award-components dt,
+.award-usage dt {
+  color: #85867f;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.award-components dd,
+.award-usage dd {
+  margin: 3px 0 0;
+  color: #393a35;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.award-feedback {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #ebe8e0;
+  font-size: 11px;
+}
+
+.award-feedback small {
+  flex-basis: 100%;
+  color: #85867f;
+  font-size: 10px;
+}
+
+.award-feedback button[aria-pressed="true"] {
+  border-color: #cec6f1;
+  background: #f0edff;
+  color: #513db9;
+}
+
+.bid-evidence {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border: 1px solid #e1ded6;
+  border-radius: 11px;
+}
+
+.bid-evidence summary {
+  cursor: pointer;
+  color: #555650;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.bid-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.bid-row {
+  padding: 10px 12px;
+  border: 1px solid #e6e3da;
+  border-radius: 9px;
+  background: #f8f7f3;
+}
+
+.bid-row.bid-awarded {
+  border-color: #cec6f1;
+  background: #f4f2ff;
+}
+
+.bid-row header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.bid-row p {
+  margin: 6px 0 0;
+  color: #4a4b44;
+  font-size: 11px;
+}
+
+.bid-row small {
+  display: block;
+  margin-top: 5px;
+  color: #85867f;
+  font-size: 10px;
+}
+
+.bid-award-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #ddd6ff;
+  color: #4a3ba8;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composer-routing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-top: 10px;
+  padding: 11px 13px;
+  border: 1px solid #e6e3da;
+  border-radius: 10px;
+  background: #faf9f5;
+  font-size: 11px;
+}
+
+.composer-routing .composer-risk,
+.composer-routing p {
+  grid-column: 1 / -1;
+}
+
+.composer-routing .composer-risk {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.usage-split {
+  display: block;
+  margin-top: 3px;
+  color: #85867f;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .routing-mode-options,
+  .auction-state,
+  .composer-routing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

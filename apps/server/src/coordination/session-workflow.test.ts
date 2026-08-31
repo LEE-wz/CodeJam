@@ -327,10 +327,12 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
     }));
     view.run.nextTurnSequence = 4;
 
+    // Every bidder used its one opportunity and none committed, so the round
+    // moves to resolution rather than opening a second wave.
     expect(workflow.decideNext(view)).toMatchObject({
-      kind: "fail",
-      code: "INVALID_STATE",
-      message: "Settled bids require the PA14 award decision",
+      kind: "resolve_auction",
+      userArtifactId: userId,
+      bidArtifactIds: [],
     });
   });
 

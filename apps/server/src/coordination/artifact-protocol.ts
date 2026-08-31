@@ -29,8 +29,11 @@ import { resolveMaxParallelTurns } from "./types.js";
 
 type VerifiedArtifactPayload = Exclude<
   ArtifactPayload,
-  { type: "session_bid" | "session_message" | "user_message" }
+  { type: "session_bid" | "session_award" | "session_message" | "user_message" }
 >;
+
+/** Every artifact type an Agent turn can be asked to produce. The award is excluded: it is backend-authored. */
+type AgentArtifactType = Exclude<ArtifactType, "session_award">;
 
 export type {
   ArtifactProtocol,
@@ -43,7 +46,7 @@ export type {
  * produce. An Agent cannot select or change the artifact type of its own turn.
  */
 export const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND: Readonly<
-  Record<CoordinationTurnKind, ArtifactType>
+  Record<CoordinationTurnKind, AgentArtifactType>
 > = {
   initial_proposal: "proposal",
   proposal_revision: "proposal",
@@ -95,7 +98,7 @@ const stripOuterFence = (trimmed: string): string => {
 };
 
 const parsePayload = (
-  type: Exclude<ArtifactType, "session_bid" | "session_message" | "user_message">,
+  type: Exclude<AgentArtifactType, "session_bid" | "session_message" | "user_message">,
   value: unknown,
 ): { ok: true; payload: VerifiedArtifactPayload } | { ok: false; error: z.ZodError } => {
   const result =

@@ -122,6 +122,53 @@ export const aggregateRunUsage = (
     { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
   );
 
+/**
+ * The three token quantities an auction round must never conflate (PA14-15).
+ *
+ * `actualBidding` is already spent on bid attempts. `actualExecution` is spent
+ * on awarded execution attempts. `projectedExecution` is what the committed
+ * awards estimated before executing, so a reader can compare an estimate with
+ * what it actually cost. Nothing here is a currency amount: these are token
+ * counts only.
+ */
+export interface SessionAuctionUsage {
+  actualBidding: RunUsageTotals;
+  actualExecution: RunUsageTotals;
+  projectedExecution: { inputTokens: number; outputTokens: number };
+}
+
+/**
+ * Split run usage by what each attempt was for. An attempt belongs to bidding
+ * when its turn is a bid turn; every other session or handoff attempt is
+ * execution, so the two totals always reconstruct `usageTotals`.
+ */
+export const splitAuctionUsage = (input: {
+  turns: ReadonlyArray<Pick<CoordinationTurn, "id" | "kind">>;
+  attempts: ReadonlyArray<Pick<CoordinationAttempt, "turnId" | "usage">>;
+  artifacts: ReadonlyArray<CoordinationArtifact>;
+}): SessionAuctionUsage => {
+  const bidTurnIds = new Set(
+    input.turns.filter(({ kind }) => kind === "session_bid").map(({ id }) => id),
+  );
+  const bidding = input.attempts.filter(({ turnId }) => bidTurnIds.has(turnId));
+  const execution = input.attempts.filter(({ turnId }) => !bidTurnIds.has(turnId));
+  const projectedExecution = input.artifacts.reduce(
+    (total, artifact) =>
+      artifact.type === "session_award"
+        ? {
+            inputTokens: total.inputTokens + artifact.payload.estimatedExecution.inputTokens,
+            outputTokens: total.outputTokens + artifact.payload.estimatedExecution.outputTokens,
+          }
+        : total,
+    { inputTokens: 0, outputTokens: 0 },
+  );
+  return {
+    actualBidding: aggregateRunUsage(bidding),
+    actualExecution: aggregateRunUsage(execution),
+    projectedExecution,
+  };
+};
+
 export type CoordinationTurnStatus =
   | "scheduled"
   | "running"
@@ -143,6 +190,7 @@ export type ArtifactType =
   | "review"
   | "final"
   | "session_bid"
+  | "session_award"
   | "session_message"
   | "user_message";
 export type ReviewDecision = "approve" | "reject";
@@ -302,6 +350,13 @@ export interface CoordinationTurn {
   kind: CoordinationTurnKind;
   /** Missing only on pre-auction stored history; reads normalize it to execution. */
   wavePurpose?: CoordinationWavePurpose;
+  /**
+   * Which provider thread this turn runs on. Absent means the pre-auction
+   * default for the turn kind. Written by backend scheduling only (PA14-11):
+   * an awarded execution starts fresh so the answer depends on the committed
+   * plan and transcript rather than on an Agent's private history.
+   */
+  threadPolicy?: ExecutionThreadPolicy;
   status: CoordinationTurnStatus;
   attemptCount: number;
   activeAttemptId?: CoordinationAttemptId;
@@ -416,6 +471,50 @@ export interface SessionBidPayload {
   estimatedOutputTokens: number;
 }
 
+/**
+ * What an award instructs the session to do next (PA14-09).
+ *
+ * `publish_candidate` publishes the winning bid's own candidate answer as the
+ * round's response. `execute_plan` schedules the winning plan's assignments.
+ * `fallback_execution` is the durable, exactly-once record that the round drew
+ * fewer than `minimumValidBids` valid bids and the configured fallback Agent
+ * received an ordinary execution turn instead; it is the only outcome whose
+ * award has no winning bid.
+ */
+export type SessionAwardOutcome =
+  | "publish_candidate"
+  | "execute_plan"
+  | "fallback_execution";
+
+export interface SessionAwardComponents {
+  calibratedConfidenceBps: number;
+  normalizedProjectedCostBps: number;
+  reliabilityPenaltyBps: number;
+}
+
+/**
+ * Backend-authored, immutable record of the one selection made for one user
+ * message. No Agent can author it: it has no turn and no Agent provenance, and
+ * the repository is its only writer.
+ */
+export interface SessionAwardPayload {
+  schemaVersion: 1;
+  type: "session_award";
+  userArtifactId: CoordinationArtifactId;
+  winningBidArtifactId?: CoordinationArtifactId;
+  selectedAgentId: AgentId;
+  outcome: SessionAwardOutcome;
+  scoringVersion: SessionAuctionScoringVersion;
+  scoreBps: number;
+  components: SessionAwardComponents;
+  estimatedExecution: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+  /** Present only on a fallback award: which configured rule chose the Agent. */
+  fallback?: Exclude<SessionAuctionFallback, "fail">;
+}
+
 export interface UserMessagePayload {
   schemaVersion: 1;
   type: "user_message";
@@ -427,6 +526,7 @@ export type ArtifactPayload =
   | ReviewPayload
   | FinalPayload
   | SessionBidPayload
+  | SessionAwardPayload
   | SessionMessagePayload
   | UserMessagePayload;
 
@@ -450,10 +550,30 @@ export interface UserMessageArtifact {
   createdBy: { kind: "user" };
   /** Optional idempotency key supplied by the client. */
   clientMessageId?: string;
+  /** Bounded per-round routing request. Absent on every pre-PA14-14 message. */
+  routing?: SessionMessageRouting;
   transcriptSequence: number;
   sizeChars: number;
   createdAt: string;
   turnId?: undefined;
+}
+
+/**
+ * The award has no turn, no attempt, and no Agent author. Keeping it off
+ * `CoordinationArtifactBase` is the structural guarantee that it can only be
+ * produced by the repository, and its absent `transcriptSequence` keeps it out
+ * of every transcript projection.
+ */
+export interface SessionAwardArtifact {
+  id: CoordinationArtifactId;
+  runId: CoordinationRunId;
+  type: "session_award";
+  payload: SessionAwardPayload;
+  createdBy: { kind: "system" };
+  sizeChars: number;
+  createdAt: string;
+  turnId?: undefined;
+  transcriptSequence?: undefined;
 }
 
 export type CoordinationArtifact =
@@ -467,6 +587,7 @@ export type CoordinationArtifact =
       /** Backend publication of an accepted Auto bid candidate (PA14-07). */
       sourceBidArtifactId?: CoordinationArtifactId;
     })
+  | SessionAwardArtifact
   | UserMessageArtifact;
 
 export type CoordinationEventType =
@@ -501,6 +622,22 @@ export type CoordinationEventType =
    */
   | "turn.failed"
   | "bid.candidate_published"
+  /**
+   * Exactly one award was committed for the current user-message round
+   * (PA14-09). It is authored by the system and names only IDs, the outcome,
+   * the scoring version, and integer score components.
+   */
+  | "award.created"
+  /**
+   * The round drew fewer than `minimumValidBids` valid bids and the configured
+   * bounded fallback was applied exactly once (PA14-13).
+   */
+  | "auction.fallback_applied"
+  /**
+   * One optional user rating of a committed award (PA14-17). It is an event, so
+   * the award itself stays immutable, and it carries only IDs and the enum.
+   */
+  | "award.feedback_recorded"
   | "user.message_appended"
   | "run.awaiting_input";
 
@@ -530,15 +667,34 @@ export interface CoordinationRunDetails {
   turns: CoordinationTurn[];
   attempts: CoordinationAttempt[];
   usageTotals: RunUsageTotals;
+  /** Present on every read. Bid, awarded-execution, and projected token counts. */
+  auctionUsage: SessionAuctionUsage;
   artifacts: CoordinationArtifact[];
   events: CoordinationEvent[];
   /** Present only for a delta detail response. */
   cursor?: number;
 }
 
+/**
+ * Per-round routing a user may request (PA14-14).
+ *
+ * Every field is a bounded enum or a participant id. Budgets, concurrency,
+ * attempt ceilings, and participant scope are deliberately absent: those live
+ * only in durable session policy, so no message can widen what a round costs.
+ * `riskLevel: "high"` forces an auction for that round and can never lower it
+ * to direct.
+ */
+export interface SessionMessageRouting {
+  routingMode?: "direct" | "auction" | undefined;
+  selectedAgentId?: AgentId | undefined;
+  coordinationPreference?: "any" | "single" | "team" | undefined;
+  riskLevel?: "standard" | "high" | undefined;
+}
+
 export interface AppendUserMessageRequest {
   content: string;
   clientMessageId?: string;
+  routing?: SessionMessageRouting | undefined;
 }
 
 export interface RoleAgentSelection {

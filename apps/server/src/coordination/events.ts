@@ -261,6 +261,33 @@ export interface CoordinationEventFactory {
     transcriptSequence: number;
   }): CoordinationEventDraft;
 
+  awardCreated(input: {
+    runId: CoordinationRunId;
+    artifactId: CoordinationArtifactId;
+    agentId: AgentId;
+    userArtifactId: CoordinationArtifactId;
+    winningBidArtifactId?: CoordinationArtifactId | undefined;
+    outcome: string;
+    scoringVersion: string;
+    scoreBps: number;
+  }): CoordinationEventDraft;
+
+  auctionFallbackApplied(input: {
+    runId: CoordinationRunId;
+    artifactId: CoordinationArtifactId;
+    agentId: AgentId;
+    fallback: string;
+    validBidCount: number;
+    requiredBidCount: number;
+  }): CoordinationEventDraft;
+
+  awardFeedbackRecorded(input: {
+    runId: CoordinationRunId;
+    artifactId: CoordinationArtifactId;
+    agentId: AgentId;
+    decision: "accepted" | "rejected";
+  }): CoordinationEventDraft;
+
   runAwaitingInput(input: { runId: CoordinationRunId }): CoordinationEventDraft;
 }
 
@@ -574,6 +601,59 @@ export const createCoordinationEventFactory = (
         actor: agentActor(agentId, "participant"),
         message: "Accepted Auto candidate published.",
         details: { agentId, transcriptSequence },
+      }),
+
+    awardCreated: ({
+      runId,
+      artifactId,
+      agentId,
+      userArtifactId,
+      winningBidArtifactId,
+      outcome,
+      scoringVersion,
+      scoreBps,
+    }) =>
+      draft({
+        runId,
+        artifactId,
+        type: "award.created",
+        actor: SYSTEM,
+        message: "Session award committed.",
+        details: {
+          agentId,
+          userArtifactId,
+          outcome,
+          scoringVersion,
+          scoreBps,
+          ...(winningBidArtifactId === undefined ? {} : { winningBidArtifactId }),
+        },
+      }),
+
+    auctionFallbackApplied: ({
+      runId,
+      artifactId,
+      agentId,
+      fallback,
+      validBidCount,
+      requiredBidCount,
+    }) =>
+      draft({
+        runId,
+        artifactId,
+        type: "auction.fallback_applied",
+        actor: SYSTEM,
+        message: "Auction fallback applied.",
+        details: { agentId, fallback, validBidCount, requiredBidCount },
+      }),
+
+    awardFeedbackRecorded: ({ runId, artifactId, agentId, decision }) =>
+      draft({
+        runId,
+        artifactId,
+        type: "award.feedback_recorded",
+        actor: USER,
+        message: "Award feedback recorded.",
+        details: { agentId, decision },
       }),
 
     runAwaitingInput: ({ runId }) =>

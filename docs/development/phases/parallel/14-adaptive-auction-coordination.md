@@ -329,75 +329,78 @@ as primarily self-reported.
   cold-start handling, calibration/reliability penalties, score arithmetic, and
   stable ties. Snapshot every boundary and publish a human-readable scoring
   explanation that contains no prompt or raw output.
-- [ ] **PA14-09** Add backend-authored `session_award` and atomic award creation.
+- [x] **PA14-09** Add backend-authored `session_award` and atomic award creation.
   Prove one award per `lastUserArtifactId` under concurrent calls and restart.
 
 ### Publication and winning execution
 
-- [ ] **PA14-10** Implement atomic direct-candidate award and transcript
+- [x] **PA14-10** Implement atomic direct-candidate award and transcript
   publication with `sourceBidArtifactId`, selected-Agent provenance, and one
   transcript sequence. Losing and escalated candidates never appear in chat.
-- [ ] **PA14-11** Execute single-Agent winning plans through a fresh thread with
+- [x] **PA14-11** Execute single-Agent winning plans through a fresh thread with
   the winning assignment and plan explicitly included in the bounded prompt.
-- [ ] **PA14-12** Execute sequential and parallel winning plans using the same
+- [x] **PA14-12** Execute sequential and parallel winning plans using the same
   structural assignment rules and Phase 13 execution supervisor. Preserve the
   main plan's ordered-transcript property without an engine-side semantic
   validator.
-- [ ] **PA14-13** Implement the no-valid-bid fallback, strict winning-execution
+- [x] **PA14-13** Implement the no-valid-bid fallback, strict winning-execution
   failure, stop, restart, and end semantics. All paths must be finite and
   restart-derived from durable evidence.
 
 ### API and web experience
 
-- [ ] **PA14-14** Extend create-session and user-message APIs with routing mode,
+- [x] **PA14-14** Extend create-session and user-message APIs with routing mode,
   optional Agent selection, and structured risk/coordination preference without
   allowing per-message budget escalation.
-- [ ] **PA14-15** Expose bid and award evidence, actual bid usage, projected
+- [x] **PA14-15** Expose bid and award evidence, actual bid usage, projected
   execution usage, actual execution usage, scoring components, fallbacks, and
   partial bidder failure through the delta read model. Continue stripping
   leases, provider thread IDs, prompts, and raw rejected output.
-- [ ] **PA14-16** Add UI controls for Auto, Direct, and Auction; selected/default
+- [x] **PA14-16** Add UI controls for Auto, Direct, and Auction; selected/default
   Agent; a working state distinguishing evaluating bids from executing; an award
   summary; token estimates versus actuals; and an expandable evidence-only bid
   panel. The chat transcript shows only user messages and published responses.
-- [ ] **PA14-17** Add optional award feedback and calibration labels. Never imply
+- [x] **PA14-17** Add optional award feedback and calibration labels. Never imply
   that unrated self-confidence has been objectively verified.
 
 ### Countdown removal and compatibility
 
-- [ ] **PA14-18** Demonstrate the countdown acceptance scenario through an
+- [~] **PA14-18** Demonstrate the countdown acceptance scenario through an
   awarded sequential team plan and a fan-out scenario through an awarded
   parallel plan. Only then delete the countdown engine branch on the auction
   implementation branch while retaining stored countdown read/render support.
-- [ ] **PA14-19** Keep verified-handoff behaviour and historical session data
+  *Both demonstrations exist (`auction-execution.test.ts`). The engine deletion
+  is deliberately held: the sheet gates it on the demonstrations, and the
+  `PA14-27` live rehearsal that exercises them end to end has not run.*
+- [x] **PA14-19** Keep verified-handoff behaviour and historical session data
   readable. Add fixtures for pre-auction sessions, old countdown sessions, and
   auction sessions with partial or absent optional usage.
 
 ### Tests and rehearsal
 
-- [ ] **PA14-20** Add routing tests for explicit Direct, explicit Auction, Auto
+- [x] **PA14-20** Add routing tests for explicit Direct, explicit Auction, Auto
   direct acceptance, every Auto escalation gate, sticky follow-up, specialization
   ties, unavailable primary, per-message override, and forbidden budget
   escalation.
-- [ ] **PA14-21** Add bid-validation tests for every bound and cross-field rule,
+- [x] **PA14-21** Add bid-validation tests for every bound and cross-field rule,
   foreign or duplicate Agent IDs, invalid positions, unknown fields, malformed
   JSON, wrong artifact type, over-budget estimates, and injected policy changes.
-- [ ] **PA14-22** Add scorer tests for cold start, exact thresholds, integer
+- [x] **PA14-22** Add scorer tests for cold start, exact thresholds, integer
   rounding, cached-input weighting, historical penalties, underestimation,
   stable ties, participant-order independence, and version rejection.
-- [ ] **PA14-23** Add repository/workflow races: restart mid-bid wave, restart
+- [x] **PA14-23** Add repository/workflow races: restart mid-bid wave, restart
   after bids before award, competing awards, restart after award before
   execution, direct publication collision, stop during bidding, stop during
   execution, feedback racing a read, and duplicate user submission.
-- [ ] **PA14-24** Add failure tests: some invalid bidders, all invalid bidders,
+- [x] **PA14-24** Add failure tests: some invalid bidders, all invalid bidders,
   busy bidders, minimum-valid-bid boundary, each fallback, winner timeout,
   winner retry exhaustion, and proof that a runner-up is never silently
   executed.
-- [ ] **PA14-25** Add token-accounting tests separating all actual bid attempts,
+- [x] **PA14-25** Add token-accounting tests separating all actual bid attempts,
   projected winning execution, actual winning execution, cached input, retry
   overhead, and the direct fast path. Never claim a provider cost when only
   token counts are known.
-- [ ] **PA14-26** Add web tests for all routing controls and states, evidence
+- [x] **PA14-26** Add web tests for all routing controls and states, evidence
   expansion, transcript exclusion of losing bids, award attribution, estimates
   versus actuals, feedback, accessibility, polling cleanup, and narrow-screen
   rendering.

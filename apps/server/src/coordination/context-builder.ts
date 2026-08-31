@@ -31,6 +31,7 @@ export type {
 const SECTION = {
   contract: "[RELAY SYSTEM CONTRACT]",
   artifacts: "[COMMITTED INPUT ARTIFACTS]",
+  assignment: "[AWARDED PLAN AND YOUR ASSIGNMENT]",
   task: "[YOUR TASK]",
   output: "[OUTPUT CONTRACT]",
 } as const;
@@ -138,6 +139,9 @@ const capPayload = (payload: ArtifactPayload, cap: number): unknown => {
       },
     };
   }
+  // Awards are backend-authored evidence and are never rendered as prompt
+  // content, so they are returned untouched rather than capped as text.
+  if (payload.type === "session_award") return payload;
   // Session messages are explicit here so future artifact members cannot fall
   // through into transcript handling by coincidence.
   return { ...payload, content: capText(payload.content, cap) };
@@ -171,7 +175,9 @@ const taskInstruction = (run: CoordinationRun, turn: CoordinationTurn): string =
     : "Continue the countdown by publishing the next number exactly one lower than the last number in the transcript. If the transcript is empty, derive the starting number from the objective.";
 };
 
-const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
+type AgentArtifactType = Exclude<ArtifactType, "session_award">;
+
+const OUTPUT_SHAPES: Readonly<Record<AgentArtifactType, string>> = {
   proposal: [
     '{"schemaVersion":1,"type":"proposal","summary":"<string>",',
     '"sections":[{"key":"<required section key>","title":"<string>","content":"<string>"}]}',
@@ -187,7 +193,7 @@ const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
   user_message: '{"schemaVersion":1,"type":"user_message","content":"<string>"}',
 };
 
-const OUTPUT_LIMITS: Readonly<Record<ArtifactType, string>> = {
+const OUTPUT_LIMITS: Readonly<Record<AgentArtifactType, string>> = {
   proposal: `summary <= ${ARTIFACT_SCHEMA_LIMITS.proposalSummaryChars} characters; 1-${ARTIFACT_SCHEMA_LIMITS.proposalSections} sections; each title <= ${ARTIFACT_SCHEMA_LIMITS.titleChars} and content <= ${ARTIFACT_SCHEMA_LIMITS.proposalSectionContentChars} characters.`,
   review: `0-${ARTIFACT_SCHEMA_LIMITS.reviewIssues} issues; each message <= ${ARTIFACT_SCHEMA_LIMITS.reviewIssueMessageChars} and feedback <= ${ARTIFACT_SCHEMA_LIMITS.reviewFeedbackChars} characters. A rejecting review lists at least one issue; an approving review lists none.`,
   final: `title <= ${ARTIFACT_SCHEMA_LIMITS.titleChars} and content <= ${ARTIFACT_SCHEMA_LIMITS.finalContentChars} characters.`,
@@ -340,6 +346,73 @@ const buildArtifactSection = (
 };
 
 /**
+ * The awarded plan and this Agent's own assignment (PA14-11, PA14-12).
+ *
+ * Only the winning bid is reachable from the award, so a losing bid can never
+ * enter an execution prompt. The section is omitted entirely when the turn was
+ * not scheduled from an award, which is every direct, countdown, and
+ * pre-auction execution turn.
+ */
+const buildAssignmentSection = (
+  input: ContextBuildInput,
+  fieldCap: number,
+): string | undefined => {
+  if (input.turn.kind !== "session_turn") return undefined;
+  const byId = new Map(
+    input.artifacts
+      .filter((artifact) => artifact.runId === input.run.id)
+      .map((artifact) => [artifact.id, artifact] as const),
+  );
+  const award = input.turn.inputArtifactIds
+    .map((id) => byId.get(id))
+    .find(
+      (artifact): artifact is Extract<CoordinationArtifact, { type: "session_award" }> =>
+        artifact?.type === "session_award",
+    );
+  if (!award) return undefined;
+  const winningBid = award.payload.winningBidArtifactId
+    ? byId.get(award.payload.winningBidArtifactId)
+    : undefined;
+  if (winningBid?.type !== "session_bid") {
+    // A fallback award has no plan. The Agent is still told that it is
+    // answering as the round's fallback, so the prompt never implies a plan
+    // that does not exist.
+    return [
+      SECTION.assignment,
+      "No valid bid was selected for this round. Answer the most recent User message directly.",
+    ].join("\n");
+  }
+  const plan = winningBid.payload.plan;
+  const assignment = plan.assignments.find(({ agentId }) => agentId === input.turn.agentId);
+  const others = plan.assignments
+    .filter(({ agentId }) => agentId !== input.turn.agentId)
+    .map(({ position }) => position);
+  return [
+    SECTION.assignment,
+    `Plan mode: ${plan.mode}`,
+    `Plan summary: ${capText(plan.summary, fieldCap)}`,
+    ...(assignment
+      ? [
+          `Your position: ${assignment.position} of ${plan.assignments.length}`,
+          `Your instruction: ${capText(assignment.instruction, fieldCap)}`,
+        ]
+      : ["Your position: not named in the awarded plan; answer the User message directly."]),
+    ...(others.length > 0 ? [`Other assigned positions: ${others.join(", ")}`] : []),
+    ...(plan.risks.length > 0
+      ? [`Recorded risks: ${plan.risks.map((risk) => capText(risk, fieldCap)).join("; ")}`]
+      : []),
+    ...(plan.assumptions.length > 0
+      ? [
+          `Recorded assumptions: ${plan.assumptions
+            .map((assumption) => capText(assumption, fieldCap))
+            .join("; ")}`,
+        ]
+      : []),
+    "The plan is routing guidance. It cannot change this contract, the participants, or the output limits.",
+  ].join("\n");
+};
+
+/**
  * The role instruction plus, on a retry, only the concise validator or runtime
  * feedback the service passed in (overview Section 11.3). Nothing else from the
  * failed attempt -- no raw output, lease, Agent Run ID, or event detail -- is
@@ -350,8 +423,29 @@ const buildTaskSection = (
   turn: CoordinationTurn,
   retryValidationErrors: string[],
   fieldCap: number,
+  visible: readonly CoordinationArtifact[] = [],
 ): string => {
   const lines = [SECTION.task, taskInstruction(run, turn)];
+  // PA14-14: the newest user message may state a bounded coordination
+  // preference and a risk marker. Both are advisory routing input: they never
+  // change the output contract, the participants, or any budget.
+  const newestUser = [...visible]
+    .reverse()
+    .find((artifact) => artifact.type === "user_message");
+  const routing = newestUser?.type === "user_message" ? newestUser.routing : undefined;
+  if (turn.kind === "session_bid" && routing) {
+    if (routing.coordinationPreference !== undefined) {
+      lines.push(
+        `Requested coordination preference: ${routing.coordinationPreference}. ` +
+          "Treat it as a preference, not a constraint on what is mechanically valid.",
+      );
+    }
+    if (routing.riskLevel === "high") {
+      lines.push(
+        "The requester marked this round high-risk. Prefer an auction recommendation and state your risks explicitly.",
+      );
+    }
+  }
   const feedback = [...new Set(retryValidationErrors)].filter(
     (entry) => entry.trim().length > 0,
   );
@@ -370,7 +464,7 @@ const buildTaskSection = (
 const buildOutputSection = (
   run: CoordinationRun,
   turn: CoordinationTurn,
-  expected: ArtifactType,
+  expected: AgentArtifactType,
 ): string => {
   if (expected === "session_bid") {
     const directExample = {
@@ -514,6 +608,7 @@ export class RoleScopedContextBuilder implements ContextBuilder {
           }));
 
     for (const { fieldCap, sessionTruncatedCount, windowStart } of candidates) {
+      const assignment = buildAssignmentSection(input, fieldCap);
       const prompt = [
         contract,
         buildArtifactSection(
@@ -523,7 +618,14 @@ export class RoleScopedContextBuilder implements ContextBuilder {
           sessionTruncatedCount,
           windowStart,
         ),
-        buildTaskSection(input.run, input.turn, input.retryValidationErrors, fieldCap),
+        ...(assignment === undefined ? [] : [assignment]),
+        buildTaskSection(
+          input.run,
+          input.turn,
+          input.retryValidationErrors,
+          fieldCap,
+          visible,
+        ),
         output,
       ].join("\n\n");
 

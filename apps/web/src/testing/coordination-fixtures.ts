@@ -21,6 +21,8 @@ export type UiSessionFixtureName =
   | "sessionInterrupted"
   | "sessionCompleted";
 
+export type UiAuctionFixtureName = "auctionAwarded" | "auctionBidding" | "auctionFallback";
+
 const now = "2026-08-30T04:00:00.000Z";
 const participants = [
   { role: "planner" as const, agentId: "agent-planner", agentNameSnapshot: "Relay Planner" },
@@ -287,6 +289,207 @@ export const UI_COORDINATION_FIXTURES: Record<UiFixtureName, CoordinationRunDeta
   stopped: verifiedBase("stopped", "stopped", ["run.created", "run.stop_requested", "attempt.cancelled", "run.stopped"]),
   failed: verifiedBase("failed", "failed", ["run.created", "attempt.failed", "run.failed"]),
   interrupted: verifiedBase("interrupted", "failed", ["run.created", "attempt.cancelled", "run.interrupted", "run.failed"]),
+};
+
+/**
+ * One settled auction round: three bids, one award, one executed answer.
+ *
+ * The losing bids stay in `artifacts` because they are inspectable evidence;
+ * every transcript assertion in the UI tests depends on them being excluded
+ * from the rendered conversation.
+ */
+const auctionBase = (
+  name: UiAuctionFixtureName,
+  status: CoordinationRunStatus,
+  options: {
+    awarded?: boolean;
+    fallback?: boolean;
+    activeBidTurn?: boolean;
+    executed?: boolean;
+  } = {},
+): CoordinationRunDetails => {
+  const runId = `run-${name}`;
+  const userArtifactId = `artifact-${name}-user`;
+  const awardId = `artifact-${name}-award`;
+  const turns: CoordinationTurn[] = [];
+  const attempts: CoordinationAttempt[] = [];
+  const artifacts: CoordinationArtifact[] = [
+    {
+      id: userArtifactId,
+      runId,
+      type: "user_message",
+      payload: { schemaVersion: 1, type: "user_message", content: "Draft the rollback plan." },
+      createdBy: { kind: "user" },
+      transcriptSequence: 1,
+      sizeChars: 24,
+      createdAt: now,
+    },
+  ];
+  const events: CoordinationEvent[] = [
+    {
+      id: `event-${name}-1`, runId, sequence: 1, type: "user.message_appended",
+      actor: { type: "user" }, artifactId: userArtifactId,
+      message: "User message appended.", details: { transcriptSequence: 1 }, createdAt: now,
+    },
+  ];
+
+  sessionParticipants.forEach((participant, index) => {
+    const turnId = `turn-${name}-bid-${index + 1}`;
+    const bidId = `artifact-${name}-bid-${index + 1}`;
+    turns.push({
+      id: turnId, runId, sequence: index + 1, role: "participant",
+      agentId: participant.agentId, kind: "session_bid", wavePurpose: "session_bidding",
+      status: options.activeBidTurn ? "scheduled" : options.fallback ? "failed" : "committed",
+      attemptCount: 1, inputArtifactIds: [userArtifactId],
+      ...(options.activeBidTurn || options.fallback ? {} : { outputArtifactId: bidId }),
+      lastValidationErrors: [], createdAt: now,
+    });
+    attempts.push({
+      id: `attempt-${name}-bid-${index + 1}`, runId, turnId, number: 1,
+      agentId: participant.agentId,
+      status: options.activeBidTurn ? "running" : options.fallback ? "invalid_output" : "succeeded",
+      usage: { inputTokens: 120, cachedInputTokens: 0, outputTokens: 60 },
+      createdAt: now,
+    });
+    if (options.activeBidTurn || options.fallback) return;
+    artifacts.push({
+      id: bidId, runId, turnId, createdByRole: "participant",
+      createdByAgentId: participant.agentId, type: "session_bid",
+      payload: {
+        schemaVersion: 1,
+        type: "session_bid",
+        recommendation: "auction",
+        plan: {
+          summary: `Plan from ${participant.agentNameSnapshot}.`,
+          mode: "single",
+          assignments: [
+            { agentId: participant.agentId, position: 1, instruction: "Answer the request." },
+          ],
+          risks: [],
+          assumptions: [],
+        },
+        confidenceBps: 7_000 + index * 500,
+        estimatedOutputTokens: 900,
+      },
+      sizeChars: 200, createdAt: now,
+    });
+  });
+
+  if (options.awarded || options.fallback) {
+    const winner = sessionParticipants[options.fallback ? 0 : 2]!;
+    artifacts.push({
+      id: awardId,
+      runId,
+      type: "session_award",
+      createdBy: { kind: "system" },
+      payload: {
+        schemaVersion: 1,
+        type: "session_award",
+        userArtifactId,
+        ...(options.fallback ? {} : { winningBidArtifactId: `artifact-${name}-bid-3` }),
+        selectedAgentId: winner.agentId,
+        outcome: options.fallback ? "fallback_execution" : "execute_plan",
+        scoringVersion: "confidence_cost_v1",
+        scoreBps: options.fallback ? 0 : 5_600,
+        components: {
+          calibratedConfidenceBps: options.fallback ? 0 : 7_500,
+          normalizedProjectedCostBps: options.fallback ? 0 : 800,
+          reliabilityPenaltyBps: 0,
+        },
+        estimatedExecution: { inputTokens: 2_400, outputTokens: 900 },
+        ...(options.fallback ? { fallback: "round_robin" as const } : {}),
+      },
+      sizeChars: 300,
+      createdAt: now,
+    });
+    events.push({
+      id: `event-${name}-award`, runId, sequence: events.length + 1, type: "award.created",
+      actor: { type: "system" }, artifactId: awardId, message: "Session award committed.",
+      details: { agentId: winner.agentId, outcome: options.fallback ? "fallback_execution" : "execute_plan", scoreBps: options.fallback ? 0 : 5_600 },
+      createdAt: now,
+    });
+
+    if (options.executed !== false) {
+      const executionTurnId = `turn-${name}-exec`;
+      const messageId = `artifact-${name}-message`;
+      turns.push({
+        id: executionTurnId, runId, sequence: turns.length + 1, role: "participant",
+        agentId: winner.agentId, kind: "session_turn", wavePurpose: "session_execution",
+        status: "committed", attemptCount: 1,
+        inputArtifactIds: [userArtifactId, awardId], outputArtifactId: messageId,
+        lastValidationErrors: [], createdAt: now,
+      });
+      attempts.push({
+        id: `attempt-${name}-exec`, runId, turnId: executionTurnId, number: 1,
+        agentId: winner.agentId, status: "succeeded",
+        usage: { inputTokens: 2_600, cachedInputTokens: 100, outputTokens: 1_100 },
+        createdAt: now,
+      });
+      artifacts.push({
+        id: messageId, runId, turnId: executionTurnId, createdByRole: "participant",
+        createdByAgentId: winner.agentId, type: "session_message",
+        payload: { schemaVersion: 1, type: "session_message", content: "Roll back in three staged steps." },
+        transcriptSequence: 2, sizeChars: 33, createdAt: now,
+      });
+    }
+  }
+
+  return {
+    run: {
+      id: runId,
+      name: `${name} session`,
+      objective: "Answer operational questions together.",
+      requiredSections: [],
+      participants: sessionParticipants,
+      policy: {
+        workflow: "shared_session_v1",
+        maxRevisions: 0,
+        maxTurns: 20,
+        maxAttemptsPerTurn: 2,
+        perAttemptTimeoutMs: 120_000,
+        contextMaxChars: 40_000,
+        outputMaxChars: 20_000,
+        sessionProtocol: "free_chat",
+        auctionPolicy: {
+          routingMode: "auction",
+          directConfidenceThresholdBps: 8_000,
+          directOutputTokenBudget: 4_000,
+          minimumValidBids: 2,
+          maxBidOutputTokens: 2_048,
+          maxBidAttempts: 2,
+          auctionExecutionTokenBudget: 4_000,
+          auctionOnDirectFailure: false,
+          fallback: "round_robin",
+          scoringVersion: "confidence_cost_v1",
+        },
+      },
+      status,
+      phase: "sessioning",
+      revision: 0,
+      nextTurnSequence: turns.length + 1,
+      activeTurnIds: options.activeBidTurn ? turns.map(({ id }) => id) : [],
+      lastUserArtifactId: userArtifactId,
+      version: events.length,
+      createdAt: now,
+      updatedAt: now,
+    },
+    turns,
+    attempts,
+    usageTotals: { inputTokens: 2_960, cachedInputTokens: 100, outputTokens: 1_280 },
+    auctionUsage: {
+      actualBidding: { inputTokens: 360, cachedInputTokens: 0, outputTokens: 180 },
+      actualExecution: { inputTokens: 2_600, cachedInputTokens: 100, outputTokens: 1_100 },
+      projectedExecution: { inputTokens: 2_400, outputTokens: 900 },
+    },
+    artifacts,
+    events,
+  };
+};
+
+export const UI_AUCTION_FIXTURES: Record<UiAuctionFixtureName, CoordinationRunDetails> = {
+  auctionAwarded: auctionBase("auctionAwarded", "awaiting_input", { awarded: true }),
+  auctionBidding: auctionBase("auctionBidding", "running", { activeBidTurn: true }),
+  auctionFallback: auctionBase("auctionFallback", "awaiting_input", { fallback: true }),
 };
 
 export const UI_SESSION_FIXTURES: Record<UiSessionFixtureName, CoordinationRunDetails> = {

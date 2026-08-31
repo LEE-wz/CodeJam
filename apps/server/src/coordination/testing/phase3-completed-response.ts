@@ -88,6 +88,11 @@ const eventTypes: CoordinationEvent["type"][] = [
 /** Redacted, lease-free API fixture retained for Phase 4 UI work. */
 export const PHASE3_COMPLETED_RESPONSE: GetCoordinationRunResponse = {
   usageTotals: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+  auctionUsage: {
+    actualBidding: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+    actualExecution: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+    projectedExecution: { inputTokens: 0, outputTokens: 0 },
+  },
   run: {
     id: runId,
     name: "Completed handoff fixture",

@@ -19,7 +19,8 @@ export type CoordinationTurnKind =
   | "proposal_revision"
   | "proposal_review"
   | "finalization"
-  | "session_turn";
+  | "session_turn"
+  | "session_bid";
 export type CoordinationWavePurpose = "session_execution" | "session_bidding";
 export type CoordinationTurnStatus =
   | "scheduled"
@@ -43,7 +44,34 @@ export type CoordinationEventType =
   | "attempt.cancelled" | "attempt.stale_ignored" | "turn.committed"
   | "review.approved" | "review.rejected" | "run.stop_requested"
   | "run.stopped" | "run.completed" | "run.failed" | "run.interrupted"
-  | "run.reconciled" | "turn.failed" | "user.message_appended" | "run.awaiting_input";
+  | "run.reconciled" | "turn.failed" | "user.message_appended" | "run.awaiting_input"
+  | "bid.candidate_published" | "award.created" | "auction.fallback_applied"
+  | "award.feedback_recorded";
+
+export type SessionRoutingMode = "direct" | "auction" | "auto";
+export type SessionAuctionFallback = "default_agent" | "round_robin" | "fail";
+
+export interface SessionAuctionPolicy {
+  routingMode: SessionRoutingMode;
+  defaultAgentId?: string;
+  directConfidenceThresholdBps: number;
+  directOutputTokenBudget: number;
+  minimumValidBids: number;
+  maxBidOutputTokens: number;
+  maxBidAttempts: number;
+  auctionExecutionTokenBudget: number;
+  auctionOnDirectFailure: boolean;
+  fallback: SessionAuctionFallback;
+  scoringVersion: "confidence_cost_v1";
+}
+
+/** Bounded per-round routing a message may request. It carries no budget. */
+export interface SessionMessageRouting {
+  routingMode?: "direct" | "auction";
+  selectedAgentId?: string;
+  coordinationPreference?: "any" | "single" | "team";
+  riskLevel?: "standard" | "high";
+}
 
 export const SESSION_LIMITS = {
   minParticipants: 2,
@@ -71,6 +99,7 @@ export interface CoordinationPolicy {
   sessionWaveMode?: SessionWaveMode;
   sessionWavePurpose?: CoordinationWavePurpose;
   maxParallelTurns?: number;
+  auctionPolicy?: SessionAuctionPolicy;
 }
 
 export type SessionWaveMode = "sequential" | "parallel";
@@ -180,6 +209,59 @@ export interface FinalPayload {
   content: string;
 }
 
+export type SessionBidRecommendation = "direct" | "auction";
+export type SessionBidPlanMode = "single" | "sequential" | "parallel";
+
+export interface SessionBidPayload {
+  schemaVersion: 1;
+  type: "session_bid";
+  recommendation: SessionBidRecommendation;
+  candidateAnswer?: string;
+  plan: {
+    summary: string;
+    mode: SessionBidPlanMode;
+    assignments: Array<{ agentId: string; position: number; instruction: string }>;
+    risks: string[];
+    assumptions: string[];
+  };
+  confidenceBps: number;
+  estimatedOutputTokens: number;
+}
+
+export type SessionAwardOutcome =
+  | "publish_candidate"
+  | "execute_plan"
+  | "fallback_execution";
+
+export interface SessionAwardPayload {
+  schemaVersion: 1;
+  type: "session_award";
+  userArtifactId: string;
+  winningBidArtifactId?: string;
+  selectedAgentId: string;
+  outcome: SessionAwardOutcome;
+  scoringVersion: "confidence_cost_v1";
+  scoreBps: number;
+  components: {
+    calibratedConfidenceBps: number;
+    normalizedProjectedCostBps: number;
+    reliabilityPenaltyBps: number;
+  };
+  estimatedExecution: { inputTokens: number; outputTokens: number };
+  fallback?: "default_agent" | "round_robin";
+}
+
+export interface SessionAwardArtifact {
+  id: string;
+  runId: string;
+  type: "session_award";
+  payload: SessionAwardPayload;
+  createdBy: { kind: "system" };
+  sizeChars: number;
+  createdAt: string;
+  transcriptSequence?: undefined;
+}
+
 export interface SessionMessagePayload {
   schemaVersion: 1;
   type: "session_message";
@@ -211,6 +293,7 @@ interface UserMessageArtifact {
   payload: UserMessagePayload;
   createdBy: { kind: "user" };
   clientMessageId?: string;
+  routing?: SessionMessageRouting;
   transcriptSequence: number;
   sizeChars: number;
   createdAt: string;
@@ -220,7 +303,13 @@ export type CoordinationArtifact =
   | (CoordinationArtifactBase & { type: "proposal"; payload: ProposalPayload })
   | (CoordinationArtifactBase & { type: "review"; payload: ReviewPayload })
   | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload })
-  | (CoordinationArtifactBase & { type: "session_message"; payload: SessionMessagePayload })
+  | (CoordinationArtifactBase & { type: "session_bid"; payload: SessionBidPayload })
+  | (CoordinationArtifactBase & {
+      type: "session_message";
+      payload: SessionMessagePayload;
+      sourceBidArtifactId?: string;
+    })
+  | SessionAwardArtifact
   | UserMessageArtifact;
 
 export interface CoordinationEvent {
@@ -237,11 +326,19 @@ export interface CoordinationEvent {
   createdAt: string;
 }
 
+/** Actual bidding, actual awarded execution, and projected execution tokens. */
+export interface SessionAuctionUsage {
+  actualBidding: RunUsageTotals;
+  actualExecution: RunUsageTotals;
+  projectedExecution: { inputTokens: number; outputTokens: number };
+}
+
 export interface CoordinationRunDetails {
   run: CoordinationRun;
   turns: CoordinationTurn[];
   attempts: CoordinationAttempt[];
   usageTotals: RunUsageTotals;
+  auctionUsage?: SessionAuctionUsage;
   artifacts: CoordinationArtifact[];
   events: CoordinationEvent[];
   cursor?: number;
@@ -263,6 +360,11 @@ export interface CreateSessionRunRequest {
     sessionStartValue?: number;
     maxTurns?: number;
     perAttemptTimeoutMs?: number;
+    auctionPolicy?: {
+      routingMode?: SessionRoutingMode;
+      defaultAgentId?: string;
+      fallback?: SessionAuctionFallback;
+    };
   };
 }
 

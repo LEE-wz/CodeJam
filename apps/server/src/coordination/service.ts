@@ -14,6 +14,7 @@ import type {
 } from "./contracts.js";
 import { createHash } from "node:crypto";
 import { CoordinationError } from "./errors.js";
+import { resolveAuction } from "./auction-resolution.js";
 import { ARTIFACT_SCHEMA_LIMITS, SECTION_KEY_PATTERN } from "./schemas.js";
 import {
   DEFAULT_COORDINATION_POLICY,
@@ -790,6 +791,18 @@ export class CoordinationService implements CoordinationServiceContract {
     return result.run;
   }
 
+  async recordAwardFeedback(input: {
+    runId: CoordinationRunId;
+    awardArtifactId: string;
+    decision: "accepted" | "rejected";
+  }): Promise<CoordinationRun> {
+    const result = await this.dependencies.repository.recordAwardFeedback(input);
+    if (result.kind === "not_found") {
+      throw new CoordinationError(404, "NOT_FOUND", "Award not found");
+    }
+    return result.run;
+  }
+
   /**
    * Structured log line. The context type admits only identifiers, enum values,
    * counts, and digests, so a prompt, raw output, or lease token cannot be
@@ -876,23 +889,46 @@ export class CoordinationService implements CoordinationServiceContract {
         });
         return;
       }
-      if (decision.kind === "publish_bid_candidate") {
-        const published = await this.dependencies.repository.publishBidCandidate({
-          runId,
-          expectedRunVersion: details.run.version,
-          userArtifactId: decision.userArtifactId,
-          bidArtifactId: decision.bidArtifactId,
+      if (decision.kind === "resolve_auction") {
+        const resolution = resolveAuction({
+          run: details.run,
+          turns: details.turns,
+          artifacts: details.artifacts,
+          events: details.events,
+          decision,
+          contextBuilder: this.dependencies.contextBuilder,
         });
-        if (published.kind === "not_found") return;
-        if (published.kind === "stale") continue;
-        if (published.kind === "invalid") {
+        if (resolution.kind === "fail") {
           await this.dependencies.repository.failRun({
             runId,
-            code: "INVALID_STATE",
-            message: "Auto candidate no longer satisfies its publication gates",
+            code: "MAX_ATTEMPTS_EXCEEDED",
+            message: resolution.message,
           });
           return;
         }
+        const awarded = await this.dependencies.repository.awardSessionBid({
+          runId,
+          expectedRunVersion: details.run.version,
+          ...resolution.command,
+        });
+        if (awarded.kind === "not_found") return;
+        if (awarded.kind === "stale") continue;
+        if (awarded.kind === "invalid") {
+          await this.dependencies.repository.failRun({
+            runId,
+            code: "INVALID_STATE",
+            message: awarded.reason,
+          });
+          return;
+        }
+        this.log(
+          {
+            runId,
+            agentId: resolution.command.selectedAgentId,
+            status: resolution.command.outcome,
+          },
+          "Session award committed",
+        );
         reconciliations = 0;
         continue;
       }
@@ -1010,6 +1046,7 @@ export class CoordinationService implements CoordinationServiceContract {
           agentId: member.agentId,
           turnKind: member.turnKind,
           inputArtifactIds: member.inputArtifactIds,
+          threadPolicy: member.threadPolicy,
         },
         run.nextTurnSequence + index,
         decision.wavePurpose,
@@ -1092,10 +1129,17 @@ export class CoordinationService implements CoordinationServiceContract {
           "Bidding wave member retired",
         );
       }
-      // Zero valid bids is never silently successful. Phase 14 replaces this
-      // with its bounded fallback; until it exists, the run fails honestly
-      // rather than reporting a round that produced nothing.
-      if (committed.length === 0 && outcomes.every(({ outcome }) => outcome !== "abandoned")) {
+      // PA14-13: an auction round that produced no valid bid is not failed
+      // here. The wave has durably settled, so the loop re-derives and the
+      // configured bounded fallback — or the configured safe failure — is
+      // applied exactly once against committed evidence. A pre-auction bidding
+      // run has no such fallback, so it still fails honestly rather than
+      // reporting a round that produced nothing.
+      if (
+        run.policy.auctionPolicy === undefined &&
+        committed.length === 0 &&
+        outcomes.every(({ outcome }) => outcome !== "abandoned")
+      ) {
         await this.dependencies.repository.failRun({
           runId,
           code: "MAX_ATTEMPTS_EXCEEDED",
@@ -1165,6 +1209,7 @@ export class CoordinationService implements CoordinationServiceContract {
       agentId?: string | undefined;
       turnKind: CoordinationTurn["kind"];
       inputArtifactIds: readonly string[];
+      threadPolicy?: ExecutionThreadPolicy | undefined;
     },
     sequence: number = run.nextTurnSequence,
     wavePurpose: CoordinationWavePurpose = "session_execution",
@@ -1189,6 +1234,7 @@ export class CoordinationService implements CoordinationServiceContract {
       agentId: participant.agentId,
       kind: spec.turnKind,
       wavePurpose,
+      ...(spec.threadPolicy === undefined ? {} : { threadPolicy: spec.threadPolicy }),
       status: "scheduled",
       attemptCount: 0,
       inputArtifactIds: [...spec.inputArtifactIds],
@@ -1220,10 +1266,14 @@ export class CoordinationService implements CoordinationServiceContract {
     // PA13-09: bid-shaped turns always start from a fresh provider thread, so a
     // participant with a long Playground history and one with none receive
     // exactly the same explicit coordination context.
+    // PA14-11 widens this: an awarded execution turn also carries an explicit
+    // durable `threadPolicy`, so it starts fresh and its answer depends only on
+    // the committed plan and transcript.
     const threadPolicy: ExecutionThreadPolicy =
-      scheduledTurn.kind === "session_bid" || wavePurpose === "session_bidding"
+      scheduledTurn.threadPolicy ??
+      (scheduledTurn.kind === "session_bid" || wavePurpose === "session_bidding"
         ? "fresh"
-        : "agent_default";
+        : "agent_default");
     let validationErrors: string[] = [];
     let lastErrorCode: CoordinationErrorCode = "AGENT_EXECUTION_FAILED";
     let lastErrorMessage = "Agent execution failed";

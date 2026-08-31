@@ -9,11 +9,42 @@ const runIdParams = z.object({ id: z.string().uuid() });
 const detailQuery = z
   .object({ sinceSequence: z.coerce.number().int().min(0).optional() })
   .strict();
+/**
+ * PA14-14. The strict object is the escalation boundary: routing carries only
+ * bounded enums and a participant id, and any budget, concurrency, attempt, or
+ * participant field is rejected as an unknown key rather than silently ignored.
+ */
+const messageRoutingSchema = z
+  .object({
+    routingMode: z.enum(["direct", "auction"]).optional(),
+    selectedAgentId: z.string().trim().min(1).optional(),
+    coordinationPreference: z.enum(["any", "single", "team"]).optional(),
+    riskLevel: z.enum(["standard", "high"]).optional(),
+  })
+  .strict()
+  .superRefine((routing, context) => {
+    if (routing.riskLevel === "high" && routing.routingMode === "direct") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["routingMode"],
+        message: "A high-risk message cannot request direct routing",
+      });
+    }
+  });
+
 const userMessageBody = z
   .object({
     content: z.string().trim().min(1).max(4_000),
     clientMessageId: z.string().trim().min(1).max(128).optional(),
+    routing: messageRoutingSchema.optional(),
   })
+  .strict();
+const awardFeedbackParams = z.object({
+  id: z.string().uuid(),
+  awardId: z.string().trim().min(1).max(128),
+});
+const awardFeedbackBody = z
+  .object({ decision: z.enum(["accepted", "rejected"]) })
   .strict();
 const requiredSectionSchema = z
   .object({
@@ -301,6 +332,7 @@ export async function registerCoordinationRoutes(
       turns: deltaTurns,
       attempts: deltaAttempts,
       usageTotals: details.usageTotals,
+      auctionUsage: details.auctionUsage,
       artifacts: deltaArtifacts,
       events,
       cursor: Math.max(sinceSequence, (details.events.at(-1)?.sequence ?? -1) + 1),
@@ -313,6 +345,18 @@ export async function registerCoordinationRoutes(
     const run = await coordination.resumeRun(id, {
       content: body.content,
       ...(body.clientMessageId === undefined ? {} : { clientMessageId: body.clientMessageId }),
+      ...(body.routing === undefined ? {} : { routing: body.routing }),
+    });
+    return reply.code(202).send({ run, accepted: true });
+  });
+
+  app.post("/api/coordination-runs/:id/awards/:awardId/feedback", async (request, reply) => {
+    const { id, awardId } = parseInput(awardFeedbackParams, request.params);
+    const { decision } = parseInput(awardFeedbackBody, request.body);
+    const run = await coordination.recordAwardFeedback({
+      runId: id,
+      awardArtifactId: awardId,
+      decision,
     });
     return reply.code(202).send({ run, accepted: true });
   });

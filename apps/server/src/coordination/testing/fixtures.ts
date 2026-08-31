@@ -98,7 +98,7 @@ const artifactBase = {
   createdAt: FIXED_NOW,
 };
 
-export const VALID_PROPOSAL_ARTIFACT: CoordinationArtifact = {
+export const VALID_PROPOSAL_ARTIFACT: Extract<CoordinationArtifact, { type: "proposal" }> = {
   ...artifactBase,
   id: "artifact-proposal",
   turnId: "turn-proposal",
@@ -107,7 +107,7 @@ export const VALID_PROPOSAL_ARTIFACT: CoordinationArtifact = {
   payload: VALID_PROPOSAL_PAYLOAD,
 };
 
-export const REJECTING_REVIEW_ARTIFACT: CoordinationArtifact = {
+export const REJECTING_REVIEW_ARTIFACT: Extract<CoordinationArtifact, { type: "review" }> = {
   ...artifactBase,
   id: "artifact-review-reject",
   turnId: "turn-review-reject",
@@ -117,7 +117,7 @@ export const REJECTING_REVIEW_ARTIFACT: CoordinationArtifact = {
   payload: REJECTING_REVIEW_PAYLOAD,
 };
 
-export const APPROVING_REVIEW_ARTIFACT: CoordinationArtifact = {
+export const APPROVING_REVIEW_ARTIFACT: Extract<CoordinationArtifact, { type: "review" }> = {
   ...artifactBase,
   id: "artifact-review-approve",
   turnId: "turn-review-approve",
@@ -127,7 +127,7 @@ export const APPROVING_REVIEW_ARTIFACT: CoordinationArtifact = {
   payload: APPROVING_REVIEW_PAYLOAD,
 };
 
-export const VALID_FINAL_ARTIFACT: CoordinationArtifact = {
+export const VALID_FINAL_ARTIFACT: Extract<CoordinationArtifact, { type: "final" }> = {
   ...artifactBase,
   id: "artifact-final",
   turnId: "turn-final",

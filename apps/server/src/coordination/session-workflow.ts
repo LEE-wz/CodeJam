@@ -13,6 +13,7 @@ export type { SharedSessionWorkflow } from "./contracts.js";
 
 type SessionArtifact = Extract<CoordinationArtifact, { type: "session_message" }>;
 type BidArtifact = Extract<CoordinationArtifact, { type: "session_bid" }>;
+type AwardArtifact = Extract<CoordinationArtifact, { type: "session_award" }>;
 type UserArtifact = Extract<CoordinationArtifact, { type: "user_message" }>;
 
 const invalidState = (message: string): WorkflowDecision => ({
@@ -28,6 +29,7 @@ interface ValidSessionView {
   participants: CoordinationParticipant[];
   committedArtifacts: SessionArtifact[];
   bidArtifacts: BidArtifact[];
+  awardArtifacts: AwardArtifact[];
   transcriptArtifacts: Array<SessionArtifact | UserArtifact>;
   turns: WorkflowView["turns"];
 }
@@ -82,7 +84,10 @@ const validateSessionView = (
   if (
     artifacts.some(
       ({ type }) =>
-        type !== "session_bid" && type !== "session_message" && type !== "user_message",
+        type !== "session_bid" &&
+        type !== "session_award" &&
+        type !== "session_message" &&
+        type !== "user_message",
     )
   ) {
     return invalidState("Session run contains a non-session artifact");
@@ -188,8 +193,25 @@ const validateSessionView = (
   const userArtifacts = artifacts.filter(
     (artifact): artifact is UserArtifact => artifact.type === "user_message",
   );
-  if (committedArtifacts.length + bidArtifacts.length + userArtifacts.length !== artifacts.length) {
+  // Awards are backend-authored and turn-less, so they are counted here rather
+  // than derived from a committed turn like every Agent-authored artifact.
+  const awardArtifacts = artifacts.filter(
+    (artifact): artifact is AwardArtifact => artifact.type === "session_award",
+  );
+  if (
+    committedArtifacts.length +
+      bidArtifacts.length +
+      awardArtifacts.length +
+      userArtifacts.length !==
+    artifacts.length
+  ) {
     return invalidState("Session run contains an uncommitted artifact");
+  }
+  if (
+    awardArtifacts.length !==
+    new Set(awardArtifacts.map(({ payload }) => payload.userArtifactId)).size
+  ) {
+    return invalidState("Session run has more than one award for a user message");
   }
 
   const transcriptArtifacts = [...committedArtifacts, ...userArtifacts].sort((left, right) => {
@@ -198,7 +220,14 @@ const validateSessionView = (
     return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);
   });
 
-  return { participants, committedArtifacts, bidArtifacts, transcriptArtifacts, turns };
+  return {
+    participants,
+    committedArtifacts,
+    bidArtifacts,
+    awardArtifacts,
+    transcriptArtifacts,
+    turns,
+  };
 };
 
 const validateCountdownState = (
@@ -261,6 +290,20 @@ export const buildSessionBidWaveDecision = (input: {
     })),
 });
 
+/**
+ * Sticky follow-up ownership: the Agent awarded the previous round of this
+ * session, if any. Awards are ordered by creation, so the newest award that is
+ * not the current round is the previous owner.
+ */
+const previousAwardedAgentId = (
+  awards: readonly AwardArtifact[],
+  currentUserArtifactId: CoordinationArtifactId,
+): AgentId | undefined =>
+  [...awards]
+    .filter(({ payload }) => payload.userArtifactId !== currentUserArtifactId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .at(-1)?.payload.selectedAgentId;
+
 export const qualifiesForAutoDirectPublication = (
   bid: BidArtifact,
   run: WorkflowView["run"],
@@ -284,7 +327,14 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
     if ("kind" in validated) return validated;
 
     const { run } = view;
-    const { participants, committedArtifacts, bidArtifacts, transcriptArtifacts, turns } = validated;
+    const {
+      participants,
+      committedArtifacts,
+      bidArtifacts,
+      awardArtifacts,
+      transcriptArtifacts,
+      turns,
+    } = validated;
     const lastArtifactId = finalArtifactId(committedArtifacts);
 
     if (run.policy.sessionProtocol === "countdown") {
@@ -327,14 +377,135 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
       );
 
       if (run.policy.auctionPolicy !== undefined) {
+        const auctionPolicy = run.policy.auctionPolicy;
         if (!activeUser) {
           return invalidState("Auction routing requires a current user message");
         }
+        // PA14-14: a message may pick `direct` or `auction` for its own round
+        // and may name a participant. It carries no budget, so every ceiling
+        // below still comes from durable policy.
+        const requestedRouting = activeUser.routing;
+        const routingMode = requestedRouting?.routingMode ?? auctionPolicy.routingMode;
+        const explicitAgentId = requestedRouting?.selectedAgentId;
+        const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
+        const roundBidTurns = turns.filter(
+          (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
+        );
+        const roundExecutionTurns = turns.filter(
+          (turn) => turn.kind === "session_turn" && turn.inputArtifactIds.includes(activeUser.id),
+        );
+        const award = awardArtifacts.find(
+          (artifact) => artifact.payload.userArtifactId === activeUser.id,
+        );
+
+        // An awarded round is driven entirely by its own committed evidence, so
+        // a restart at any boundary re-derives the same next assignment instead
+        // of re-ranking with different inputs.
+        if (award) {
+          if (award.payload.outcome === "publish_candidate") {
+            return { kind: "await_input" };
+          }
+          const winningBid = award.payload.winningBidArtifactId
+            ? bidArtifacts.find(({ id }) => id === award.payload.winningBidArtifactId)
+            : undefined;
+          if (award.payload.outcome === "execute_plan" && !winningBid) {
+            return invalidState("Awarded plan is missing its winning bid");
+          }
+          const assignments = winningBid
+            ? winningBid.payload.plan.assignments
+            : [
+                {
+                  agentId: award.payload.selectedAgentId,
+                  position: 1,
+                  instruction: "",
+                },
+              ];
+          if (roundExecutionTurns.some(({ status }) => status === "failed")) {
+            return {
+              kind: "fail",
+              code: "MAX_ATTEMPTS_EXCEEDED",
+              message: "Awarded execution did not complete",
+            };
+          }
+          const attemptedAgentIds = new Set(roundExecutionTurns.map(({ agentId }) => agentId));
+          const remaining = assignments.filter(
+            ({ agentId }) => !attemptedAgentIds.has(agentId),
+          );
+          if (remaining.length === 0) {
+            return { kind: "await_input" };
+          }
+          // The award artifact is an explicit input so the executing Agent's
+          // prompt carries the winning plan and its own assignment. Losing bids
+          // are never referenced here and so can never reach an execution
+          // prompt.
+          const executionInputIds = [...inputArtifactIds, award.id];
+          const mode = winningBid?.payload.plan.mode ?? "single";
+          if (mode === "parallel") {
+            if (turns.length + remaining.length > run.policy.maxTurns) {
+              return {
+                kind: "fail",
+                code: "MAX_TURNS_EXCEEDED",
+                message: "Awarded parallel plan would exceed the session turn limit",
+              };
+            }
+            return {
+              kind: "schedule_wave",
+              wavePurpose: "session_execution",
+              phase: "sessioning",
+              revision: 0,
+              members: remaining.map(({ agentId }) => ({
+                role: "participant" as const,
+                agentId,
+                turnKind: "session_turn" as const,
+                inputArtifactIds: [...executionInputIds],
+                expectedArtifactType: "session_message" as const,
+                threadPolicy: "fresh" as const,
+              })),
+            };
+          }
+          if (turns.length + 1 > run.policy.maxTurns) {
+            return {
+              kind: "fail",
+              code: "MAX_TURNS_EXCEEDED",
+              message: "Awarded execution would exceed the session turn limit",
+            };
+          }
+          // `single` has exactly one assignment; `sequential` is ordered
+          // strictly by position, so every later Agent sees the earlier
+          // committed messages of this same round.
+          const next = [...remaining].sort(
+            (left, right) => left.position - right.position,
+          )[0]!;
+          return {
+            kind: "schedule",
+            role: "participant",
+            agentId: next.agentId,
+            turnKind: "session_turn",
+            phase: "sessioning",
+            revision: 0,
+            inputArtifactIds: executionInputIds,
+            expectedArtifactType: "session_message",
+            // PA14-11: the awarded prompt is fully explicit, so it starts from
+            // a fresh thread and cannot inherit a bid thread or a private
+            // Playground history.
+            threadPolicy: "fresh",
+          };
+        }
+
         if (currentWave.length > 0) {
           return { kind: "await_input" };
         }
-        const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
-        if (run.policy.auctionPolicy.routingMode === "direct") {
+
+        if (routingMode === "direct") {
+          if (roundExecutionTurns.length > 0) {
+            return roundExecutionTurns.some(({ status }) => status === "failed")
+              ? {
+                  kind: "fail",
+                  code: "MAX_ATTEMPTS_EXCEEDED",
+                  message: "Direct execution did not complete",
+                }
+              : { kind: "await_input" };
+          }
           if (turns.length + 1 > run.policy.maxTurns) {
             return {
               kind: "fail",
@@ -345,7 +516,9 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           const selection = selectPrimaryAgent({
             participants,
             userMessage: activeUser.payload.content,
-            defaultAgentId: run.policy.auctionPolicy.defaultAgentId,
+            explicitAgentId,
+            previousAwardedAgentId: previousAwardedAgentId(awardArtifacts, activeUser.id),
+            defaultAgentId: auctionPolicy.defaultAgentId,
           });
           if (!selection.selectedAgentId) {
             return invalidState("Direct routing found no available participant");
@@ -361,12 +534,24 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             expectedArtifactType: "session_message",
           };
         }
-        if (run.policy.auctionPolicy.routingMode === "auction") {
-          const currentBidTurns = turns.filter(
-            (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
-          );
-          if (currentBidTurns.length > 0) {
-            return invalidState("Settled bids require the PA14 award decision");
+
+        const roundBids = bidArtifacts.filter((bid) =>
+          roundBidTurns.some((turn) => turn.outputArtifactId === bid.id),
+        );
+        const resolve = (
+          directCandidateBidArtifactId?: CoordinationArtifactId,
+        ): WorkflowDecision => ({
+          kind: "resolve_auction",
+          userArtifactId: activeUser.id,
+          bidArtifactIds: roundBids.map(({ id }) => id),
+          ...(directCandidateBidArtifactId === undefined
+            ? {}
+            : { directCandidateBidArtifactId }),
+        });
+
+        if (routingMode === "auction") {
+          if (roundBidTurns.length > 0) {
+            return resolve();
           }
           if (turns.length + participants.length > run.policy.maxTurns) {
             return {
@@ -377,13 +562,8 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           }
           return buildSessionBidWaveDecision({ participants, inputArtifactIds });
         }
-        const currentBidTurns = turns.filter(
-          (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
-        );
-        const currentBids = bidArtifacts.filter((bid) =>
-          currentBidTurns.some((turn) => turn.outputArtifactId === bid.id),
-        );
-        if (currentBidTurns.length === 0) {
+
+        if (roundBidTurns.length === 0) {
           if (turns.length + 1 > run.policy.maxTurns) {
             return {
               kind: "fail",
@@ -394,7 +574,9 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           const selection = selectPrimaryAgent({
             participants,
             userMessage: activeUser.payload.content,
-            defaultAgentId: run.policy.auctionPolicy.defaultAgentId,
+            explicitAgentId,
+            previousAwardedAgentId: previousAwardedAgentId(awardArtifacts, activeUser.id),
+            defaultAgentId: auctionPolicy.defaultAgentId,
           });
           if (!selection.selectedAgentId) {
             return invalidState("Auto routing found no available primary participant");
@@ -412,19 +594,15 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           };
         }
 
-        const primaryTurn = currentBidTurns.reduce((earliest, turn) =>
+        const primaryTurn = roundBidTurns.reduce((earliest, turn) =>
           turn.sequence < earliest.sequence ? turn : earliest,
         );
-        const primaryBid = currentBids.find((bid) => bid.id === primaryTurn.outputArtifactId);
+        const primaryBid = roundBids.find((bid) => bid.id === primaryTurn.outputArtifactId);
         if (primaryBid && qualifiesForAutoDirectPublication(primaryBid, run)) {
-          return {
-            kind: "publish_bid_candidate",
-            userArtifactId: activeUser.id,
-            bidArtifactId: primaryBid.id,
-          };
+          return resolve(primaryBid.id);
         }
 
-        const attemptedAgentIds = new Set(currentBidTurns.map(({ agentId }) => agentId));
+        const attemptedAgentIds = new Set(roundBidTurns.map(({ agentId }) => agentId));
         const remaining = participants.filter(({ agentId }) => !attemptedAgentIds.has(agentId));
         if (remaining.length > 0) {
           if (turns.length + remaining.length > run.policy.maxTurns) {
@@ -440,7 +618,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             priorBidAgentIds: attemptedAgentIds,
           });
         }
-        return invalidState("Settled Auto bids require the PA14 scoring decision");
+        return resolve();
       }
 
       const latestByParticipant = new Map<string, SessionArtifact>();

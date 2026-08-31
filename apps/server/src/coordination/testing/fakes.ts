@@ -18,8 +18,10 @@ import type {
   FinishAttemptInput,
   NonTerminalRunSummary,
   PromptEnvelope,
-  PublishBidCandidateInput,
-  PublishBidCandidateResult,
+  AwardSessionBidInput,
+  AwardSessionBidResult,
+  RecordAwardFeedbackInput,
+  RecordAwardFeedbackResult,
   ReconcileRunResult,
   RuntimeExecutionInput,
   RuntimeOutcome,
@@ -149,10 +151,14 @@ export class FakeCoordinationRepository implements CoordinationRepository {
     return notImplemented("FakeCoordinationRepository.commitAcceptedArtifact");
   }
 
-  async publishBidCandidate(
-    _input: PublishBidCandidateInput,
-  ): Promise<PublishBidCandidateResult> {
-    return notImplemented("FakeCoordinationRepository.publishBidCandidate");
+  async awardSessionBid(_input: AwardSessionBidInput): Promise<AwardSessionBidResult> {
+    return notImplemented("FakeCoordinationRepository.awardSessionBid");
+  }
+
+  async recordAwardFeedback(
+    _input: RecordAwardFeedbackInput,
+  ): Promise<RecordAwardFeedbackResult> {
+    return notImplemented("FakeCoordinationRepository.recordAwardFeedback");
   }
 
   async finishAttempt(_input: FinishAttemptInput): Promise<"finished" | "stale"> {

@@ -30,7 +30,7 @@ import type {
   CoordinationRunId,
   CoordinationTurn,
 } from "../types.js";
-import { aggregateRunUsage } from "../types.js";
+import { aggregateRunUsage, splitAuctionUsage } from "../types.js";
 
 /**
  * In-memory stand-in for the durable repository, sufficient to prove Phase 1
@@ -48,6 +48,8 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
   private readonly turns: CoordinationTurn[] = [];
   private readonly attempts: CoordinationAttempt[] = [];
   private readonly artifacts: CoordinationArtifact[] = [];
+  /** PA14-17 ratings. Kept out of the artifacts list: an award is immutable. */
+  readonly awardFeedback: Array<{ awardArtifactId: string; decision: string }> = [];
 
   constructor(private readonly clock: Clock) {}
 
@@ -70,6 +72,11 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
       turns: this.turns.filter((turn) => turn.runId === id),
       attempts,
       usageTotals: aggregateRunUsage(attempts),
+      auctionUsage: splitAuctionUsage({
+        turns: this.turns.filter((turn) => turn.runId === id),
+        attempts,
+        artifacts: this.artifacts.filter((artifact) => artifact.runId === id),
+      }),
       artifacts: this.artifacts.filter((artifact) => artifact.runId === id),
       events: [],
     });
@@ -330,51 +337,146 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     };
   }
 
-  async publishBidCandidate(input: import("../contracts.js").PublishBidCandidateInput) {
+  async awardSessionBid(input: import("../contracts.js").AwardSessionBidInput) {
     const run = this.runs.get(input.runId);
     if (!run) return { kind: "not_found" } as const;
+    const existingAward = this.artifacts.find(
+      (artifact) =>
+        artifact.type === "session_award" &&
+        artifact.runId === run.id &&
+        artifact.payload.userArtifactId === input.userArtifactId,
+    );
+    if (existingAward && existingAward.type === "session_award") {
+      const published = this.artifacts.find(
+        (artifact) =>
+          artifact.type === "session_message" &&
+          artifact.sourceBidArtifactId !== undefined &&
+          artifact.sourceBidArtifactId === existingAward.payload.winningBidArtifactId,
+      );
+      return {
+        kind: "already_awarded",
+        run: structuredClone(run),
+        award: structuredClone(existingAward),
+        ...(published ? { publishedArtifact: structuredClone(published) } : {}),
+      } as const;
+    }
     if (run.status !== "running" || run.version !== input.expectedRunVersion) {
       return { kind: "stale", currentRun: structuredClone(run) } as const;
     }
-    const bid = this.artifacts.find((artifact) => artifact.id === input.bidArtifactId);
-    const user = this.artifacts.find((artifact) => artifact.id === input.userArtifactId);
-    const turn = bid?.turnId ? this.findTurn(bid.turnId) : undefined;
+    const invalid = (reason: string) =>
+      ({ kind: "invalid", currentRun: structuredClone(run), reason }) as const;
     const policy = run.policy.auctionPolicy;
+    const user = this.artifacts.find((artifact) => artifact.id === input.userArtifactId);
     if (
+      !policy ||
+      policy.scoringVersion !== input.scoringVersion ||
       run.lastUserArtifactId !== input.userArtifactId ||
       run.activeTurnIds.length > 0 ||
-      !policy || policy.routingMode !== "auto" ||
-      !user || user.type !== "user_message" ||
-      !bid || bid.type !== "session_bid" ||
-      !turn || turn.status !== "committed" || turn.outputArtifactId !== bid.id ||
-      !turn.inputArtifactIds.includes(user.id) ||
-      bid.payload.recommendation !== "direct" ||
-      bid.payload.candidateAnswer === undefined ||
-      bid.payload.confidenceBps < policy.directConfidenceThresholdBps ||
-      bid.payload.estimatedOutputTokens > policy.directOutputTokenBudget
-    ) return { kind: "invalid", currentRun: structuredClone(run) } as const;
-    const existing = this.artifacts.find(
-      (artifact) => artifact.type === "session_message" && artifact.sourceBidArtifactId === bid.id,
-    );
-    if (existing) return { kind: "published", run: structuredClone(run), artifact: structuredClone(existing) } as const;
-    const content = bid.payload.candidateAnswer.trim();
-    const artifact: import("../types.js").CoordinationArtifact = {
-      id: `published-${bid.id}`,
-      runId: run.id,
-      turnId: turn.id,
-      createdByRole: "participant",
-      createdByAgentId: bid.createdByAgentId,
-      type: "session_message",
-      payload: { schemaVersion: 1, type: "session_message", content },
-      sourceBidArtifactId: bid.id,
-      transcriptSequence: this.nextTranscriptSequence(run.id),
-      sizeChars: content.length,
-      createdAt: this.clock.nowIso(),
+      !user ||
+      user.type !== "user_message" ||
+      !run.participants.some(({ agentId }) => agentId === input.selectedAgentId)
+    ) {
+      return invalid("Award does not match the current auction round");
+    }
+
+    let winningBid: Extract<
+      import("../types.js").CoordinationArtifact,
+      { type: "session_bid" }
+    > | undefined;
+    if (input.outcome === "fallback_execution") {
+      if (input.winningBidArtifactId !== undefined || input.fallback === undefined) {
+        return invalid("A fallback award carries no winning bid");
+      }
+    } else {
+      const bid = this.artifacts.find((artifact) => artifact.id === input.winningBidArtifactId);
+      const turn = bid?.turnId ? this.findTurn(bid.turnId) : undefined;
+      if (
+        !bid ||
+        bid.type !== "session_bid" ||
+        bid.createdByAgentId !== input.selectedAgentId ||
+        !turn ||
+        turn.status !== "committed" ||
+        turn.outputArtifactId !== bid.id ||
+        !turn.inputArtifactIds.includes(user.id)
+      ) {
+        return invalid("Award does not name a committed bid from this round");
+      }
+      winningBid = bid;
+    }
+
+    const now = this.clock.nowIso();
+    const payload: import("../types.js").SessionAwardPayload = {
+      schemaVersion: 1,
+      type: "session_award",
+      userArtifactId: input.userArtifactId,
+      ...(winningBid ? { winningBidArtifactId: winningBid.id } : {}),
+      selectedAgentId: input.selectedAgentId,
+      outcome: input.outcome,
+      scoringVersion: input.scoringVersion,
+      scoreBps: input.scoreBps,
+      components: { ...input.components },
+      estimatedExecution: { ...input.estimatedExecution },
+      ...(input.fallback ? { fallback: input.fallback } : {}),
     };
-    this.artifacts.push(artifact);
+    const award: import("../types.js").SessionAwardArtifact = {
+      id: `award-${input.userArtifactId}`,
+      runId: run.id,
+      type: "session_award",
+      payload,
+      createdBy: { kind: "system" },
+      sizeChars: JSON.stringify(payload).length,
+      createdAt: now,
+    };
+
+    let publishedArtifact:
+      | Extract<import("../types.js").CoordinationArtifact, { type: "session_message" }>
+      | undefined;
+    if (input.outcome === "publish_candidate") {
+      const candidate = winningBid?.payload.candidateAnswer?.trim();
+      if (
+        !winningBid ||
+        !candidate ||
+        winningBid.payload.recommendation !== "direct" ||
+        winningBid.payload.confidenceBps < policy.directConfidenceThresholdBps ||
+        winningBid.payload.estimatedOutputTokens > policy.directOutputTokenBudget
+      ) {
+        return invalid("Winning candidate no longer satisfies its publication gates");
+      }
+      publishedArtifact = {
+        id: `published-${winningBid.id}`,
+        runId: run.id,
+        turnId: winningBid.turnId,
+        createdByRole: "participant",
+        createdByAgentId: winningBid.createdByAgentId,
+        type: "session_message",
+        payload: { schemaVersion: 1, type: "session_message", content: candidate },
+        sourceBidArtifactId: winningBid.id,
+        transcriptSequence: this.nextTranscriptSequence(run.id),
+        sizeChars: candidate.length,
+        createdAt: now,
+      };
+    }
+
+    this.artifacts.push(award);
+    if (publishedArtifact) this.artifacts.push(publishedArtifact);
     run.version += 1;
-    run.updatedAt = this.clock.nowIso();
-    return { kind: "published", run: structuredClone(run), artifact: structuredClone(artifact) } as const;
+    run.updatedAt = now;
+    return {
+      kind: "awarded",
+      run: structuredClone(run),
+      award: structuredClone(award),
+      ...(publishedArtifact ? { publishedArtifact: structuredClone(publishedArtifact) } : {}),
+    } as const;
+  }
+
+  async recordAwardFeedback(input: import("../contracts.js").RecordAwardFeedbackInput) {
+    const run = this.runs.get(input.runId);
+    const award = this.artifacts.find(
+      (artifact) => artifact.id === input.awardArtifactId && artifact.type === "session_award",
+    );
+    if (!run || !award) return { kind: "not_found" } as const;
+    this.awardFeedback.push({ awardArtifactId: award.id, decision: input.decision });
+    return { kind: "recorded", run: structuredClone(run) } as const;
   }
 
   async finishAttempt(input: FinishAttemptInput): Promise<"finished" | "stale"> {

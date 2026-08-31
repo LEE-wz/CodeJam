@@ -160,4 +160,37 @@ describe("confidence_cost_v1", () => {
     expect(rankSessionBids({ run: strictRun, bids: [{ ...scoreInput(), run: strictRun }] }))
       .toMatchObject({ kind: "insufficient_valid_bids", validBidCount: 1, requiredBidCount: 2 });
   });
+
+  it("rejects a bid whose run declares an unsupported scoring version", () => {
+    const foreignRun = {
+      ...run,
+      policy: {
+        ...run.policy,
+        auctionPolicy: {
+          ...DEFAULT_SESSION_AUCTION_POLICY,
+          scoringVersion: "confidence_cost_v2" as unknown as "confidence_cost_v1",
+        },
+      },
+    };
+    expect(scoreSessionBid({ ...scoreInput(), run: foreignRun })).toMatchObject({
+      eligible: false,
+      reason: "Unsupported or missing auction scoring policy",
+    });
+  });
+
+  it("ranks the same field identically whatever order the bids arrive in", () => {
+    const forward = [ids[0], ids[1], ids[2]].map((agentId) => scoreInput(bid(agentId)));
+    const reversed = [...forward].reverse();
+    const rankedForward = rankSessionBids({ run, bids: forward });
+    const rankedReversed = rankSessionBids({ run, bids: reversed });
+    expect(rankedForward.kind).toBe("ranked");
+    if (rankedForward.kind === "ranked" && rankedReversed.kind === "ranked") {
+      // Only stored participant order and Agent ID break ties, so the input
+      // array order cannot change the winner.
+      expect(rankedReversed.ranked.map(({ agentId }) => agentId)).toEqual(
+        rankedForward.ranked.map(({ agentId }) => agentId),
+      );
+      expect(rankedReversed.winner.scoreBps).toBe(rankedForward.winner.scoreBps);
+    }
+  });
 });

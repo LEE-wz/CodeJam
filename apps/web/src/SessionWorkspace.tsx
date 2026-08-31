@@ -11,6 +11,9 @@ import type {
   CoordinationTurn,
   CreateSessionRunRequest,
   RunUsage,
+  SessionAwardArtifact,
+  SessionMessageRouting,
+  SessionRoutingMode,
 } from "./coordination-types";
 import { SESSION_LIMITS } from "./coordination-types";
 import type { Agent } from "./types";
@@ -39,7 +42,21 @@ interface FormState {
   sessionAgentIds: string[];
   maxTurns: string;
   perAttemptTimeoutSeconds: string;
+  routingMode: SessionRoutingMode;
+  defaultAgentId: string;
 }
+
+const ROUTING_MODE_LABELS: Record<SessionRoutingMode, string> = {
+  auto: "Auto",
+  direct: "Direct",
+  auction: "Auction",
+};
+
+const ROUTING_MODE_HELP: Record<SessionRoutingMode, string> = {
+  auto: "One call answers simple requests; anything else escalates to a bid round.",
+  direct: "One Agent answers every round. No bids are collected.",
+  auction: "Every participant bids each round and the highest-ranked valid bid is awarded.",
+};
 
 const initialForm = (agents: Agent[]): FormState => {
   const ready = agents.filter(({ status }) => status === "ready");
@@ -49,6 +66,8 @@ const initialForm = (agents: Agent[]): FormState => {
     sessionAgentIds: ready.slice(0, 3).map(({ id }) => id),
     maxTurns: String(SESSION_LIMITS.defaultSessionTurns),
     perAttemptTimeoutSeconds: "120",
+    routingMode: "auto",
+    defaultAgentId: "",
   };
 };
 
@@ -305,6 +324,182 @@ function SessionTranscript({ details }: { details: CoordinationRunDetails }) {
   );
 }
 
+const bpsToPercent = (value: number): string => `${(value / 100).toFixed(1)}%`;
+
+/**
+ * What the session is actually doing right now (PA14-16).
+ *
+ * Bidding and executing look identical from `running` alone, and telling a user
+ * that Agents are "working" while a bid round is priced hides most of the wait.
+ */
+function workingLabel(details: CoordinationRunDetails): string {
+  if (!activeStatuses.has(details.run.status)) return "";
+  const generic = "Agents are working…";
+  if (!details.run.policy.auctionPolicy) return generic;
+  const active = new Set(details.run.activeTurnIds);
+  const activeTurns = details.turns.filter(({ id }) => active.has(id));
+  if (activeTurns.length === 0) return generic;
+  return activeTurns.every(({ kind }) => kind === "session_bid")
+    ? `Collecting and evaluating bids (${activeTurns.length})…`
+    : `Executing the awarded plan (${activeTurns.length})…`;
+}
+
+/**
+ * Award evidence for one round. It reports the highest-ranked valid bid under
+ * the configured scoring version — never "the best Agent" — and shows the
+ * estimate beside what the awarded execution actually cost.
+ */
+function AwardSummary({
+  award,
+  details,
+  onFeedback,
+  feedback,
+  busy,
+}: {
+  award: SessionAwardArtifact;
+  details: CoordinationRunDetails;
+  onFeedback: (awardId: string, decision: "accepted" | "rejected") => void;
+  feedback: string | undefined;
+  busy: boolean;
+}) {
+  const payload = award.payload;
+  const winningBid = details.artifacts.find(
+    (artifact) => artifact.id === payload.winningBidArtifactId,
+  );
+  const plan = winningBid?.type === "session_bid" ? winningBid.payload.plan : undefined;
+  const executionTurnIds = new Set(
+    details.turns
+      .filter((turn) => turn.inputArtifactIds.includes(award.id))
+      .map(({ id }) => id),
+  );
+  const actual = details.attempts
+    .filter(({ turnId }) => executionTurnIds.has(turnId))
+    .reduce(
+      (total, attempt) => ({
+        inputTokens: total.inputTokens + (attempt.usage?.inputTokens ?? 0),
+        outputTokens: total.outputTokens + (attempt.usage?.outputTokens ?? 0),
+      }),
+      { inputTokens: 0, outputTokens: 0 },
+    );
+  return (
+    <article className="award-summary" aria-label="Award summary">
+      <header>
+        <strong>{participantName(details.run, payload.selectedAgentId)}</strong>
+        <span className={`award-outcome award-outcome-${payload.outcome}`}>
+          {humanize(payload.outcome)}
+        </span>
+      </header>
+      <p className="award-claim">
+        {payload.outcome === "fallback_execution"
+          ? `No bid met the minimum, so the ${humanize(payload.fallback ?? "configured")} fallback Agent answered this round.`
+          : `Highest-ranked valid bid under ${payload.scoringVersion} — not a claim that this Agent is objectively best.`}
+      </p>
+      {payload.outcome !== "fallback_execution" && (
+        <dl className="award-components">
+          <div><dt>Score</dt><dd>{bpsToPercent(payload.scoreBps)}</dd></div>
+          <div>
+            <dt>Calibrated confidence</dt>
+            <dd>{bpsToPercent(payload.components.calibratedConfidenceBps)}</dd>
+          </div>
+          <div>
+            <dt>Normalised projected cost</dt>
+            <dd>{bpsToPercent(payload.components.normalizedProjectedCostBps)}</dd>
+          </div>
+          <div>
+            <dt>Reliability penalty</dt>
+            <dd>{bpsToPercent(payload.components.reliabilityPenaltyBps)}</dd>
+          </div>
+        </dl>
+      )}
+      {plan && (
+        <p className="award-plan">
+          Plan: {humanize(plan.mode)} · {plan.assignments.length} assignment
+          {plan.assignments.length === 1 ? "" : "s"} · {plan.summary}
+        </p>
+      )}
+      <dl className="award-usage">
+        <div>
+          <dt>Projected execution tokens</dt>
+          <dd>
+            {payload.estimatedExecution.inputTokens} in ·{" "}
+            {payload.estimatedExecution.outputTokens} out
+          </dd>
+        </div>
+        <div>
+          <dt>Actual execution tokens</dt>
+          <dd>{actual.inputTokens} in · {actual.outputTokens} out</dd>
+        </div>
+      </dl>
+      <div className="award-feedback">
+        <span>Was this round useful?</span>
+        <button
+          type="button"
+          className="button button-ghost"
+          disabled={busy}
+          aria-pressed={feedback === "accepted"}
+          onClick={() => onFeedback(award.id, "accepted")}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className="button button-ghost"
+          disabled={busy}
+          aria-pressed={feedback === "rejected"}
+          onClick={() => onFeedback(award.id, "rejected")}
+        >
+          Reject
+        </button>
+        {feedback && <small>Recorded: {feedback}. Confidence remains self-reported until enough rounds are rated.</small>}
+      </div>
+    </article>
+  );
+}
+
+/**
+ * Losing and escalated bids, on request only. They are evidence: they never
+ * enter the transcript and never reach another Agent's prompt.
+ */
+function BidEvidencePanel({ details }: { details: CoordinationRunDetails }) {
+  const bids = details.artifacts.filter(
+    (artifact): artifact is Extract<CoordinationArtifact, { type: "session_bid" }> =>
+      artifact.type === "session_bid",
+  );
+  if (bids.length === 0) return null;
+  const awardedBidIds = new Set(
+    details.artifacts.flatMap((artifact) =>
+      artifact.type === "session_award" && artifact.payload.winningBidArtifactId
+        ? [artifact.payload.winningBidArtifactId]
+        : [],
+    ),
+  );
+  return (
+    <details className="bid-evidence">
+      <summary>Bid evidence ({bids.length})</summary>
+      <p className="session-muted">
+        Bids are evidence only. Losing bids never appear in the transcript and are never shown to another Agent.
+      </p>
+      <ul className="bid-list">
+        {bids.map((artifact) => (
+          <li key={artifact.id} className={awardedBidIds.has(artifact.id) ? "bid-row bid-awarded" : "bid-row"}>
+            <header>
+              <strong>{participantName(details.run, artifact.createdByAgentId)}</strong>
+              <span>{humanize(artifact.payload.recommendation)}</span>
+              {awardedBidIds.has(artifact.id) && <span className="bid-award-badge">awarded</span>}
+            </header>
+            <p>{artifact.payload.plan.summary}</p>
+            <small>
+              Self-reported confidence {bpsToPercent(artifact.payload.confidenceBps)} ·
+              estimated {artifact.payload.estimatedOutputTokens} output tokens ·
+              {" "}{humanize(artifact.payload.plan.mode)} plan
+            </small>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 const mergeById = <T extends { id: string }>(current: T[], incoming: T[]): T[] => {
   const merged = new Map(current.map((item) => [item.id, item]));
   for (const item of incoming) merged.set(item.id, item);
@@ -319,6 +514,7 @@ const mergeDetails = (
   turns: mergeById(current.turns, delta.turns).sort((a, b) => a.sequence - b.sequence),
   attempts: mergeById(current.attempts, delta.attempts),
   usageTotals: delta.usageTotals,
+  ...(delta.auctionUsage ? { auctionUsage: delta.auctionUsage } : {}),
   artifacts: mergeById(current.artifacts, delta.artifacts),
   events: mergeById(current.events, delta.events).sort((a, b) => a.sequence - b.sequence),
   cursor: delta.cursor ?? current.cursor,
@@ -429,6 +625,11 @@ function CreationForm({
         sessionProtocol: "free_chat",
         maxTurns: Number(form.maxTurns),
         perAttemptTimeoutMs: Number(form.perAttemptTimeoutSeconds) * 1_000,
+        auctionPolicy: {
+          routingMode: form.routingMode,
+          ...(form.defaultAgentId ? { defaultAgentId: form.defaultAgentId } : {}),
+          fallback: form.defaultAgentId ? "default_agent" : "round_robin",
+        },
       },
     };
 
@@ -463,6 +664,39 @@ function CreationForm({
         focusRef={sessionParticipantRef}
         onChange={(sessionAgentIds) => setForm({ ...form, sessionAgentIds })}
       />
+
+      <fieldset className="session-routing-controls">
+        <legend>Routing</legend>
+        <div className="routing-mode-options" role="radiogroup" aria-label="Routing mode">
+          {(["auto", "direct", "auction"] as const).map((mode) => (
+            <label className="routing-mode-option" key={mode}>
+              <input
+                type="radio"
+                name="routing-mode"
+                value={mode}
+                checked={form.routingMode === mode}
+                onChange={() => setForm({ ...form, routingMode: mode })}
+              />
+              <strong>{ROUTING_MODE_LABELS[mode]}</strong>
+              <span>{ROUTING_MODE_HELP[mode]}</span>
+            </label>
+          ))}
+        </div>
+        <label>
+          Default Agent (optional)
+          <select
+            value={form.defaultAgentId}
+            onChange={(event) => setForm({ ...form, defaultAgentId: event.target.value })}
+          >
+            <option value="">No default — use participant order</option>
+            {form.sessionAgentIds.map((id) => (
+              <option value={id} key={id}>
+                {agents.find((agent) => agent.id === id)?.name ?? id}
+              </option>
+            ))}
+          </select>
+        </label>
+      </fieldset>
 
       <details className="policy-controls" open>
         <summary>Safety limits</summary>
@@ -507,8 +741,10 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [action, setAction] = useState<"send" | "stop" | "end" | null>(null);
+  const [action, setAction] = useState<"send" | "stop" | "end" | "feedback" | null>(null);
   const [message, setMessage] = useState("");
+  const [messageRouting, setMessageRouting] = useState<SessionMessageRouting>({});
+  const [awardFeedback, setAwardFeedback] = useState<Record<string, string>>({});
   const [pollEpoch, setPollEpoch] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
@@ -591,13 +827,32 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
     setError(null);
     try {
       const clientMessageId = crypto.randomUUID();
-      const { run } = await coordinationApi.sendMessage(details.run.id, content, clientMessageId);
+      const { run } = await coordinationApi.sendMessage(
+        details.run.id,
+        content,
+        clientMessageId,
+        messageRouting,
+      );
       setMessage("");
       const nextDetails = { ...details, run };
       detailsRef.current = nextDetails;
       setDetails(nextDetails);
       setRuns((current) => current.map((item) => item.id === run.id ? run : item));
       setPollEpoch((current) => current + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const sendFeedback = async (awardId: string, decision: "accepted" | "rejected") => {
+    if (!details || action !== null) return;
+    setAction("feedback");
+    setError(null);
+    try {
+      await coordinationApi.awardFeedback(details.run.id, awardId, decision);
+      setAwardFeedback((current) => ({ ...current, [awardId]: decision }));
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -646,6 +901,14 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
   // evidence stays reachable, but this app no longer drives that workflow.
   const legacy = Boolean(selectedRun) && !session;
   const ungroupedEvents = useMemo(() => details?.events.filter(({ turnId }) => !turnId) ?? [], [details]);
+  const awards = useMemo(
+    () =>
+      details?.artifacts.filter(
+        (artifact): artifact is SessionAwardArtifact => artifact.type === "session_award",
+      ) ?? [],
+    [details],
+  );
+  const working = details ? workingLabel(details) : "";
   const readyCount = agents.filter(({ status }) => status === "ready").length;
 
   if (showCreate) return <CreationForm agents={agents} onCreated={(run) => void created(run)} onCancel={() => setShowCreate(false)} />;
@@ -716,6 +979,47 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                 </section>
               )}
 
+              {session && selectedRun.policy.auctionPolicy && (
+                <section className="auction-state" aria-label="Auction routing">
+                  <div>
+                    <span>Routing</span>
+                    <strong>{ROUTING_MODE_LABELS[selectedRun.policy.auctionPolicy.routingMode]}</strong>
+                  </div>
+                  <div>
+                    <span>Minimum valid bids</span>
+                    <strong>{selectedRun.policy.auctionPolicy.minimumValidBids}</strong>
+                  </div>
+                  <div>
+                    <span>No-bid fallback</span>
+                    <strong>{humanize(selectedRun.policy.auctionPolicy.fallback)}</strong>
+                  </div>
+                  <div>
+                    <span>Scoring</span>
+                    <strong>{selectedRun.policy.auctionPolicy.scoringVersion}</strong>
+                  </div>
+                </section>
+              )}
+
+              {session && awards.length > 0 && (
+                <section className="evidence-section awards-section">
+                  <div className="session-section-heading">
+                    <div><span className="eyebrow">Selection</span><h3>Awards</h3></div>
+                    <span className="evidence-count">{awards.length}</span>
+                  </div>
+                  {awards.map((awardArtifact) => (
+                    <AwardSummary
+                      key={awardArtifact.id}
+                      award={awardArtifact}
+                      details={details}
+                      feedback={awardFeedback[awardArtifact.id]}
+                      busy={action !== null}
+                      onFeedback={(awardId, decision) => void sendFeedback(awardId, decision)}
+                    />
+                  ))}
+                  <BidEvidencePanel details={details} />
+                </section>
+              )}
+
               <ParticipantMap details={details} />
 
               {session && (
@@ -731,10 +1035,72 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                       rows={3}
                       disabled={selectedRun.status !== "created" && selectedRun.status !== "awaiting_input"}
                       onChange={(event) => setMessage(event.target.value)}
-                      placeholder={activeStatuses.has(selectedRun.status) ? "Agents are working…" : "Ask the Agents what to do next"}
+                      placeholder={activeStatuses.has(selectedRun.status) ? working : "Ask the Agents what to do next"}
                     />
+                    {selectedRun.policy.auctionPolicy && (
+                      <div className="composer-routing" aria-label="Message routing">
+                        <label>
+                          Routing for this message
+                          <select
+                            value={messageRouting.routingMode ?? ""}
+                            onChange={(event) =>
+                              setMessageRouting((current) => ({
+                                ...current,
+                                routingMode:
+                                  event.target.value === ""
+                                    ? undefined
+                                    : (event.target.value as "direct" | "auction"),
+                              }))
+                            }
+                          >
+                            <option value="">
+                              Session default ({ROUTING_MODE_LABELS[selectedRun.policy.auctionPolicy.routingMode]})
+                            </option>
+                            <option value="direct">Direct</option>
+                            <option value="auction">Auction</option>
+                          </select>
+                        </label>
+                        <label>
+                          Agent for this message
+                          <select
+                            value={messageRouting.selectedAgentId ?? ""}
+                            onChange={(event) =>
+                              setMessageRouting((current) => ({
+                                ...current,
+                                selectedAgentId:
+                                  event.target.value === "" ? undefined : event.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Let the backend choose</option>
+                            {selectedRun.participants.map((participant) => (
+                              <option value={participant.agentId} key={participant.agentId}>
+                                {participant.agentNameSnapshot}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="composer-risk">
+                          <input
+                            type="checkbox"
+                            checked={messageRouting.riskLevel === "high"}
+                            onChange={(event) =>
+                              setMessageRouting((current) => ({
+                                ...current,
+                                riskLevel: event.target.checked ? "high" : undefined,
+                                ...(event.target.checked ? { routingMode: "auction" as const } : {}),
+                              }))
+                            }
+                          />
+                          High-risk request (always runs an auction)
+                        </label>
+                        <p className="session-muted">
+                          Routing changes this round only. Budgets, attempt limits, and participants stay fixed by session policy.
+                        </p>
+                      </div>
+                    )}
                     <div className="session-composer-actions">
-                      <p>{activeStatuses.has(selectedRun.status) ? "Agents are working. Stop ends only this wave; End session permanently closes the conversation." : selectedRun.status === "completed" ? "This session has ended." : "Send starts the next wave. Stop cancels a wave; End session permanently closes the conversation."}</p>
+                      <p>{activeStatuses.has(selectedRun.status) ? `${working.replace(/…$/, ".")} Stop ends only this wave; End session permanently closes the conversation.` : selectedRun.status === "completed" ? "This session has ended." : "Send starts the next wave. Stop cancels a wave; End session permanently closes the conversation."}</p>
                       <button className="button button-primary" disabled={!message.trim() || action !== null || (selectedRun.status !== "created" && selectedRun.status !== "awaiting_input")}>{action === "send" ? "Sending…" : "Send message"}</button>
                     </div>
                   </form>
@@ -752,6 +1118,13 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                     {details.usageTotals && (
                       <span className="usage-totals" aria-label="Total token usage">
                         {` \u00b7 ${details.usageTotals.inputTokens} in \u00b7 ${details.usageTotals.cachedInputTokens} cached \u00b7 ${details.usageTotals.outputTokens} out`}
+                      </span>
+                    )}
+                    {details.auctionUsage && (
+                      <span className="usage-split" aria-label="Bidding and execution token usage">
+                        {` \u00b7 bids ${details.auctionUsage.actualBidding.inputTokens} in / ${details.auctionUsage.actualBidding.outputTokens} out`}
+                        {` \u00b7 execution ${details.auctionUsage.actualExecution.inputTokens} in / ${details.auctionUsage.actualExecution.outputTokens} out`}
+                        {` \u00b7 projected execution ${details.auctionUsage.projectedExecution.inputTokens} in / ${details.auctionUsage.projectedExecution.outputTokens} out`}
                       </span>
                     )}
                   </span>

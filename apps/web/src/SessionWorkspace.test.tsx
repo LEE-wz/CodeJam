@@ -118,7 +118,13 @@ describe("SessionWorkspace", () => {
     await user.click(await screen.findByRole("button", { name: "Create session" }));
 
     // The workflow and protocol choices are gone: there is nothing to select.
-    expect(screen.queryByRole("radio")).toBeNull();
+    // The only radio group is the auction routing mode; protocol is fixed to free chat.
+    expect(screen.getAllByRole("radio").map((input) => (input as HTMLInputElement).value)).toEqual([
+      "auto",
+      "direct",
+      "auction",
+    ]);
+    expect(screen.queryByRole("radio", { name: /countdown/i })).toBeNull();
     expect(screen.queryByLabelText(/Countdown start/i)).toBeNull();
 
     await user.type(screen.getByLabelText("Objective"), "Agree a launch checklist.");
@@ -133,6 +139,9 @@ describe("SessionWorkspace", () => {
       agents: ["agent-planner", "agent-finalizer", "agent-critic"],
       policy: {
         sessionProtocol: "free_chat",
+        // Auto is the proposed default routing mode; no default Agent is chosen,
+        // so the no-valid-bid fallback stays round-robin.
+        auctionPolicy: { routingMode: "auto", fallback: "round_robin" },
         maxTurns: SESSION_LIMITS.defaultSessionTurns,
         perAttemptTimeoutMs: 120_000,
       },
