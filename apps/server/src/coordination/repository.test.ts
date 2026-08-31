@@ -69,6 +69,7 @@ const runRecord = (overrides: Partial<CoordinationRun> = {}): CoordinationRun =>
   phase: "drafting",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
@@ -139,6 +140,7 @@ const sessionRunRecord = (overrides: Partial<CoordinationRun> = {}): Coordinatio
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   sharedState: { nextExpectedNumber: 2 },
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
@@ -647,6 +649,64 @@ describe("startRun readiness and reservations", () => {
 });
 
 describe("scheduleTurn and beginAttempt", () => {
+  it("schedules a contiguous wave atomically with deterministic events", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: runRecord() });
+    const started = await harness.repository.startRun("run-1");
+    if (started.kind !== "started") throw new Error("run did not start");
+    const turns = [
+      turnRecord({ id: "turn-1", sequence: 1 }),
+      turnRecord({ id: "turn-2", sequence: 2, role: "critic", agentId: CRITIC_AGENT.id }),
+      turnRecord({ id: "turn-3", sequence: 3, role: "finalizer", agentId: FINALIZER_AGENT.id }),
+    ];
+
+    const result = await harness.repository.scheduleTurns({
+      runId: "run-1",
+      expectedRunVersion: started.run.version,
+      turns,
+      nextPhase: "drafting",
+      nextRevision: 0,
+    });
+
+    expect(result).toMatchObject({
+      kind: "scheduled",
+      run: { activeTurnIds: ["turn-1", "turn-2", "turn-3"], nextTurnSequence: 4 },
+    });
+    if (result.kind !== "scheduled") return;
+    expect(result.run.version).toBe(started.run.version + 1);
+    expect(result.turns.map((turn) => turn.sequence)).toEqual([1, 2, 3]);
+    expect((await harness.repository.getRunDetails("run-1"))?.events.map((event) => [event.type, event.turnId])).toEqual([
+      ["run.created", undefined],
+      ["run.started", undefined],
+      ["turn.scheduled", "turn-1"],
+      ["turn.scheduled", "turn-2"],
+      ["turn.scheduled", "turn-3"],
+    ]);
+  });
+
+  it("rejects a non-contiguous wave without persisting a partial batch", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: runRecord() });
+    const started = await harness.repository.startRun("run-1");
+    if (started.kind !== "started") throw new Error("run did not start");
+
+    const result = await harness.repository.scheduleTurns({
+      runId: "run-1",
+      expectedRunVersion: started.run.version,
+      turns: [turnRecord(), turnRecord({ id: "turn-3", sequence: 3 })],
+      nextPhase: "drafting",
+      nextRevision: 0,
+    });
+
+    expect(result.kind).toBe("stale");
+    expect(harness.store.snapshot().coordinationTurns).toEqual([]);
+    expect((await harness.repository.getRunDetails("run-1"))?.run).toMatchObject({
+      activeTurnIds: [],
+      nextTurnSequence: 1,
+      version: started.run.version,
+    });
+  });
+
   it("consumes the sequence, applies the revision, and bumps the version", async () => {
     const harness = await createHarness();
     await harness.repository.createRun({ run: runRecord() });
@@ -663,7 +723,7 @@ describe("scheduleTurn and beginAttempt", () => {
 
     expect(result.kind).toBe("scheduled");
     if (result.kind !== "scheduled") return;
-    expect(result.run.activeTurnId).toBe("turn-1");
+    expect(result.run.activeTurnIds).toEqual(["turn-1"]);
     expect(result.run.nextTurnSequence).toBe(2);
     expect(result.run.version).toBe(started.run.version + 1);
     expect(await eventTypes(harness)).toEqual(["run.created", "run.started", "turn.scheduled"]);
@@ -701,6 +761,9 @@ describe("scheduleTurn and beginAttempt", () => {
     });
 
     expect(second.kind).toBe("stale");
+    const details = await harness.repository.getRunDetails("run-1");
+    expect(details?.run.activeTurnIds).toEqual(["turn-1"]);
+    expect(details?.run.activeTurnIds).toHaveLength(1);
   });
 
   it("records the truncated context flag on attempt.started", async () => {
@@ -776,6 +839,53 @@ describe("attachAgentRun", () => {
 });
 
 describe("commitAcceptedArtifact", () => {
+  it("commits siblings independently and clears only the committing turn", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: runRecord() });
+    const started = await harness.repository.startRun("run-1");
+    if (started.kind !== "started") throw new Error("run did not start");
+    const scheduled = await harness.repository.scheduleTurns({
+      runId: "run-1",
+      expectedRunVersion: started.run.version,
+      turns: [turnRecord(), turnRecord({ id: "turn-2", sequence: 2 })],
+      nextPhase: "drafting",
+      nextRevision: 0,
+    });
+    if (scheduled.kind !== "scheduled") throw new Error("wave did not schedule");
+    await harness.repository.beginAttempt({
+      runId: "run-1",
+      turnId: "turn-1",
+      attempt: attemptRecord(),
+    });
+    await harness.repository.beginAttempt({
+      runId: "run-1",
+      turnId: "turn-2",
+      attempt: attemptRecord({ id: "attempt-2", turnId: "turn-2", leaseToken: "lease-0002" }),
+    });
+
+    const first = await harness.repository.commitAcceptedArtifact({
+      runId: "run-1",
+      turnId: "turn-1",
+      attemptId: "attempt-1",
+      leaseToken: "lease-0001",
+      artifact: proposalArtifact(),
+    });
+    expect(first.kind).toBe("committed");
+    expect((await harness.repository.getRunDetails("run-1"))?.run.activeTurnIds).toEqual([
+      "turn-2",
+    ]);
+
+    const second = await harness.repository.commitAcceptedArtifact({
+      runId: "run-1",
+      turnId: "turn-2",
+      attemptId: "attempt-2",
+      leaseToken: "lease-0002",
+      artifact: proposalArtifact({ id: "artifact-2", turnId: "turn-2" }),
+    });
+    expect(second.kind).toBe("committed");
+    expect((await harness.repository.getRunDetails("run-1"))?.run.activeTurnIds).toEqual([]);
+  });
+
   it("commits atomically with the correct lease and records the output digest", async () => {
     const harness = await createHarness();
     await runWithRunningAttempt(harness);
@@ -787,12 +897,13 @@ describe("commitAcceptedArtifact", () => {
       leaseToken: "lease-0001",
       artifact: proposalArtifact(),
       outputDigest: "sha256:output",
+      usage: { inputTokens: 100, cachedInputTokens: 25, outputTokens: 40 },
     });
 
     expect(result.kind).toBe("committed");
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.run.latestProposalArtifactId).toBe("artifact-1");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.turns[0]).toMatchObject({
       status: "committed",
       outputArtifactId: "artifact-1",
@@ -801,6 +912,12 @@ describe("commitAcceptedArtifact", () => {
     expect(details?.attempts[0]).toMatchObject({
       status: "succeeded",
       outputDigest: "sha256:output",
+      usage: { inputTokens: 100, cachedInputTokens: 25, outputTokens: 40 },
+    });
+    expect(details?.usageTotals).toEqual({
+      inputTokens: 100,
+      cachedInputTokens: 25,
+      outputTokens: 40,
     });
     expect(details?.artifacts).toHaveLength(1);
     expect(await eventTypes(harness)).toEqual([
@@ -873,7 +990,7 @@ describe("commitAcceptedArtifact", () => {
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.artifacts).toHaveLength(0);
     expect(details?.run.latestProposalArtifactId).toBeUndefined();
-    expect(details?.run.activeTurnId).toBe("turn-1");
+    expect(details?.run.activeTurnIds).toEqual(["turn-1"]);
     expect(details?.attempts[0]?.status).toBe("running");
     expect(await eventTypes(harness)).toContain("attempt.stale_ignored");
   });
@@ -1043,6 +1160,7 @@ describe("finishAttempt", () => {
         errorCode: "INVALID_AGENT_OUTPUT",
         errorMessage: "schema mismatch",
         validationErrors: ["sections: missing 'risks'"],
+        usage: { inputTokens: 70, cachedInputTokens: 10, outputTokens: 7 },
       }),
     ).toBe("finished");
 
@@ -1050,6 +1168,12 @@ describe("finishAttempt", () => {
     expect(details?.attempts[0]).toMatchObject({
       status: "invalid_output",
       errorCode: "INVALID_AGENT_OUTPUT",
+      usage: { inputTokens: 70, cachedInputTokens: 10, outputTokens: 7 },
+    });
+    expect(details?.usageTotals).toEqual({
+      inputTokens: 70,
+      cachedInputTokens: 10,
+      outputTokens: 7,
     });
     expect(details?.turns[0]?.status).toBe("scheduled");
     expect(details?.turns[0]?.activeAttemptId).toBeUndefined();
@@ -1074,7 +1198,7 @@ describe("finishAttempt", () => {
 
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.turns[0]?.status).toBe("cancelled");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(await eventTypes(harness)).toContain("attempt.cancelled");
   });
 
@@ -1122,6 +1246,38 @@ describe("finishAttempt", () => {
 });
 
 describe("terminal commands", () => {
+  it("settles and clears every member of an active wave on stop", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: runRecord() });
+    const started = await harness.repository.startRun("run-1");
+    if (started.kind !== "started") throw new Error("run did not start");
+    const scheduled = await harness.repository.scheduleTurns({
+      runId: "run-1",
+      expectedRunVersion: started.run.version,
+      turns: [turnRecord(), turnRecord({ id: "turn-2", sequence: 2 })],
+      nextPhase: "drafting",
+      nextRevision: 0,
+    });
+    if (scheduled.kind !== "scheduled") throw new Error("wave did not schedule");
+    await harness.repository.beginAttempt({ runId: "run-1", turnId: "turn-1", attempt: attemptRecord() });
+    await harness.repository.beginAttempt({
+      runId: "run-1",
+      turnId: "turn-2",
+      attempt: attemptRecord({ id: "attempt-2", turnId: "turn-2", leaseToken: "lease-0002" }),
+    });
+
+    await harness.repository.requestStop("run-1");
+    await harness.repository.finishStopped("run-1");
+    const details = await harness.repository.getRunDetails("run-1");
+    expect(details?.run.activeTurnIds).toEqual([]);
+    expect(details?.turns.map((turn) => turn.status)).toEqual(["cancelled", "cancelled"]);
+    expect(details?.attempts.map((attempt) => attempt.status)).toEqual(["cancelled", "cancelled"]);
+    expect(details?.events.filter((event) => event.type === "attempt.cancelled").map((event) => event.turnId)).toEqual([
+      "turn-1",
+      "turn-2",
+    ]);
+  });
+
   it("completes a running run and refuses to be overwritten afterwards", async () => {
     const harness = await createHarness();
     await runWithRunningAttempt(harness);
@@ -1164,7 +1320,7 @@ describe("terminal commands", () => {
 
     expect(failed).toMatchObject({ status: "failed", errorCode: "MAX_TURNS_EXCEEDED" });
     const details = await harness.repository.getRunDetails("run-1");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.turns[0]?.status).toBe("failed");
     expect(details?.attempts[0]).toMatchObject({
       status: "cancelled",
@@ -1234,7 +1390,7 @@ describe("listNonTerminalRuns", () => {
     const started = await harness.repository.startRun("run-1");
     if (started.kind !== "started") throw new Error("run did not start");
     expect(await harness.repository.listNonTerminalRuns()).toEqual([
-      { runId: "run-1", status: "running", hasRunningAttempt: false },
+      { runId: "run-1", status: "running", activeTurnIds: [], hasRunningAttempt: false },
     ]);
 
     await harness.repository.scheduleTurn({
@@ -1253,7 +1409,7 @@ describe("listNonTerminalRuns", () => {
       {
         runId: "run-1",
         status: "running",
-        activeTurnId: "turn-1",
+        activeTurnIds: ["turn-1"],
         hasRunningAttempt: true,
       },
     ]);
@@ -1283,7 +1439,7 @@ describe("reconcileRun", () => {
     const details = await harness.repository.getRunDetails("run-1");
     // The run is still running and has no active turn: schedulable again.
     expect(details?.run.status).toBe("running");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.run.version).toBe((before?.run.version ?? 0) + 1);
     expect(details?.turns[0]?.status).toBe("failed");
     expect(details?.attempts[0]).toMatchObject({
@@ -1368,7 +1524,7 @@ describe("interruptActiveRuns", () => {
 
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.run).toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.turns[0]?.status).toBe("failed");
     expect(details?.attempts[0]).toMatchObject({
       status: "cancelled",
@@ -1500,7 +1656,7 @@ describe("durable shared-session commits and races", () => {
       (run) => run.id === "run-session",
     );
     expect(persistedRun).toMatchObject({ sharedState: { nextExpectedNumber: 1 } });
-    expect(persistedRun?.activeTurnId).toBeUndefined();
+    expect(persistedRun?.activeTurnIds).toEqual([]);
     expect(reloaded.snapshot().coordinationArtifacts).toHaveLength(1);
     expect(reloaded.snapshot().coordinationEvents.map((event) => event.type)).toEqual([
       "run.created",

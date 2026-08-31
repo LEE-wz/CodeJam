@@ -95,6 +95,31 @@ afterEach(() => {
 });
 
 describe("Agent recovery (P11-07)", () => {
+  it("edits structured bidding specialization in Agent settings", async () => {
+    const specialized = agent({
+      specialization: {
+        perspective: "Security reviewer",
+        focusAreas: ["security", "risk"],
+        biddingInstructions: "Prefer measurable evidence.",
+      },
+    });
+    await mountWith([specialized]);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect((screen.getByLabelText("Bidding perspective") as HTMLInputElement).value).toBe("Security reviewer");
+    expect((screen.getByLabelText("Focus areas (comma-separated)") as HTMLInputElement).value).toBe("security, risk");
+    await userEvent.clear(screen.getByLabelText("Focus areas (comma-separated)"));
+    await userEvent.type(screen.getByLabelText("Focus areas (comma-separated)"), "Performance, Cost");
+    mockedApi.updateAgent.mockResolvedValue({ agent: specialized });
+    mockedApi.listAgents.mockResolvedValue({ agents: [specialized] });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(mockedApi.updateAgent).toHaveBeenCalledWith(
+      "agent-1",
+      expect.objectContaining({
+        specialization: expect.objectContaining({ focusAreas: ["Performance", "Cost"] }),
+      }),
+    ));
+  });
+
   it("shows the failure message and resets an errored Agent to ready", async () => {
     const errored = agent({ status: "error", lastError: "Codex exited with code 1" });
     await mountWith([errored]);

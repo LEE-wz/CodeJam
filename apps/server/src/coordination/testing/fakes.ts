@@ -22,6 +22,8 @@ import type {
   RuntimeStartResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
+  ScheduleTurnsInput,
+  ScheduleTurnsResult,
   StartRunCommitResult,
   VerifiedHandoffWorkflow,
   WorkflowDecision,
@@ -115,6 +117,10 @@ export class FakeCoordinationRepository implements CoordinationRepository {
 
   async scheduleTurn(_input: ScheduleTurnInput): Promise<ScheduleTurnResult> {
     return notImplemented("FakeCoordinationRepository.scheduleTurn");
+  }
+
+  async scheduleTurns(_input: ScheduleTurnsInput): Promise<ScheduleTurnsResult> {
+    return notImplemented("FakeCoordinationRepository.scheduleTurns");
   }
 
   async beginAttempt(_input: BeginAttemptInput): Promise<BeginAttemptResult> {

@@ -39,7 +39,7 @@ const validateSessionView = (
   ) {
     return invalidState("Session decisions require a live session run");
   }
-  if (run.activeTurnId) {
+  if (run.activeTurnIds.length > 0) {
     return invalidState("Session workflow cannot schedule while a turn is active");
   }
   if (!isPositiveInteger(run.nextTurnSequence) || run.revision !== 0) {

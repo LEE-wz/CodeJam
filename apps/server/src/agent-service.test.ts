@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -109,11 +109,12 @@ async function reserveAgent(
     phase: "drafting",
     revision: 0,
     nextTurnSequence: 1,
+    activeTurnIds: [],
     version: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
     startedAt: timestamp,
-    ...(withRunningAttempt ? { activeTurnId: "turn-1" } : {}),
+    ...(withRunningAttempt ? { activeTurnIds: ["turn-1"] } : {}),
   };
   const turn: CoordinationTurn = {
     id: "turn-1",
@@ -160,6 +161,29 @@ describe("Agent lifecycle", () => {
     expect((await service.startAgent(agent.id)).status).toBe("ready");
     await service.deleteAgent(agent.id);
     expect(service.listAgents()).toHaveLength(0);
+  });
+
+  it("normalizes bounded specialization and renders it into managed instructions", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({
+      name: "Bidder",
+      specialization: {
+        perspective: "  Security reviewer  ",
+        focusAreas: [" Security ", "PERFORMANCE", "security"],
+        biddingInstructions: "  Prefer measurable risks.  ",
+      },
+    });
+    expect(agent.specialization).toEqual({
+      perspective: "Security reviewer",
+      focusAreas: ["security", "performance"],
+      biddingInstructions: "Prefer measurable risks.",
+    });
+    const instructions = await readFile(path.join(agent.workspacePath, "AGENTS.md"), "utf8");
+    expect(instructions).toContain("## Bidding specialisation");
+    expect(instructions).toContain("Focus areas: security, performance");
+
+    const legacy = await service.createAgent({ name: "Legacy" });
+    expect(legacy.specialization).toBeUndefined();
   });
 
   it("persists a playground conversation", async () => {
@@ -254,7 +278,11 @@ describe("Agent lifecycle", () => {
     expect(service.getMessages(agent.id)).toHaveLength(1);
 
     finish({ output: "proposal", threadId: "relay-thread", usage: { outputTokens: 3 } });
-    await expect(handle.completion).resolves.toEqual({ status: "completed", output: "proposal" });
+    await expect(handle.completion).resolves.toEqual({
+      status: "completed",
+      output: "proposal",
+      usage: { outputTokens: 3 },
+    });
     expect(service.getAgent(agent.id).codexThreadId).toBe("relay-thread");
     expect(service.getMessages(agent.id).map((message) => message.role)).toEqual([
       "user",
@@ -295,6 +323,7 @@ describe("Agent lifecycle", () => {
     await expect(second.completion).resolves.toEqual({
       status: "completed",
       output: "second result",
+      usage: null,
     });
   });
 

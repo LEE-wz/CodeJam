@@ -14,7 +14,13 @@ const emptyForm = {
   description: "",
   instructions:
     "Help me build and test software in this workspace. Keep changes small and explain the result.",
+  specialization: { perspective: "", focusAreas: "", biddingInstructions: "" },
 };
+
+const specializationFromForm = (specialization: typeof emptyForm.specialization) => ({
+  ...specialization,
+  focusAreas: specialization.focusAreas.split(",").map((value) => value.trim()).filter(Boolean).slice(0, 10),
+});
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -138,6 +144,9 @@ export default function App() {
         name: selected.name,
         description: selected.description,
         instructions: selected.instructions,
+        specialization: selected.specialization
+          ? { ...selected.specialization, focusAreas: selected.specialization.focusAreas.join(", ") }
+          : { perspective: "", focusAreas: "", biddingInstructions: "" },
       });
     }
   }, [selected]);
@@ -151,7 +160,10 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      const { agent } = await api.createAgent(form);
+      const { agent } = await api.createAgent({
+        ...form,
+        specialization: specializationFromForm(form.specialization),
+      });
       await refreshAgents();
       setSelectedId(agent.id);
       setWorkspaceView("agents");
@@ -170,7 +182,10 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      await api.updateAgent(selected.id, form);
+      await api.updateAgent(selected.id, {
+        ...form,
+        specialization: specializationFromForm(form.specialization),
+      });
       await refreshAgents();
       setShowSettings(false);
     } catch (reason) {
@@ -550,6 +565,32 @@ export default function App() {
                     maxLength={10_000}
                   />
                 </label>
+                <div className="form-grid">
+                  <label>
+                    Bidding perspective
+                    <input
+                      value={form.specialization.perspective}
+                      onChange={(event) => setForm({ ...form, specialization: { ...form.specialization, perspective: event.target.value } })}
+                      maxLength={500}
+                    />
+                  </label>
+                  <label>
+                    Focus areas (comma-separated)
+                    <input
+                      value={form.specialization.focusAreas}
+                      onChange={(event) => setForm({ ...form, specialization: { ...form.specialization, focusAreas: event.target.value } })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  Bidding instructions
+                  <textarea
+                    value={form.specialization.biddingInstructions}
+                    onChange={(event) => setForm({ ...form, specialization: { ...form.specialization, biddingInstructions: event.target.value } })}
+                    rows={4}
+                    maxLength={5_000}
+                  />
+                </label>
                 <div className="panel-footer">
                   <code>{selected.workspacePath}</code>
                   <button className="button button-primary" disabled={busy}>
@@ -730,6 +771,30 @@ export default function App() {
                 }
                 rows={6}
                 maxLength={10_000}
+              />
+            </label>
+            <label>
+              Bidding perspective
+              <input
+                value={form.specialization.perspective}
+                onChange={(event) => setForm({ ...form, specialization: { ...form.specialization, perspective: event.target.value } })}
+                maxLength={500}
+              />
+            </label>
+            <label>
+              Focus areas (comma-separated)
+              <input
+                value={form.specialization.focusAreas}
+                onChange={(event) => setForm({ ...form, specialization: { ...form.specialization, focusAreas: event.target.value } })}
+              />
+            </label>
+            <label>
+              Bidding instructions
+              <textarea
+                value={form.specialization.biddingInstructions}
+                onChange={(event) => setForm({ ...form, specialization: { ...form.specialization, biddingInstructions: event.target.value } })}
+                rows={4}
+                maxLength={5_000}
               />
             </label>
             <div className="modal-footer">

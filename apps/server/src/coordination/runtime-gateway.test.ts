@@ -58,11 +58,16 @@ describe("AgentServiceCoordinationRuntime", () => {
     });
     expect(JSON.stringify(control.starts[0])).not.toContain(input.leaseToken);
 
-    control.resolve({ status: "completed", output: "validated raw output" });
+    control.resolve({
+      status: "completed",
+      output: "validated raw output",
+      usage: { inputTokens: 80, cachedInputTokens: 20, outputTokens: 12 },
+    });
     if (started.kind !== "started") throw new Error("runtime did not start");
     await expect(started.handle.completion).resolves.toEqual({
       kind: "succeeded",
       rawOutput: "validated raw output",
+      usage: { inputTokens: 80, cachedInputTokens: 20, outputTokens: 12 },
     });
     expect(runtime.activeAttemptCount()).toBe(0);
   });

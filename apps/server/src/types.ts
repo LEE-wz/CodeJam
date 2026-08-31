@@ -7,7 +7,11 @@ import type {
   CoordinationRunId,
   CoordinationTurn,
   CoordinationTurnId,
+  AgentSpecialization,
+  RunUsage,
 } from "./coordination/types.js";
+
+export type { RunUsage } from "./coordination/types.js";
 
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -18,6 +22,7 @@ export interface Agent {
   name: string;
   description: string;
   instructions: string;
+  specialization?: AgentSpecialization;
   status: AgentStatus;
   workspacePath: string;
   codexThreadId: string | null;
@@ -33,12 +38,6 @@ export interface Message {
   role: MessageRole;
   content: string;
   createdAt: string;
-}
-
-export interface RunUsage {
-  inputTokens?: number;
-  cachedInputTokens?: number;
-  outputTokens?: number;
 }
 
 /**
@@ -100,12 +99,14 @@ export interface CreateAgentInput {
   name: string;
   description?: string | undefined;
   instructions?: string | undefined;
+  specialization?: AgentSpecialization | undefined;
 }
 
 export interface UpdateAgentInput {
   name?: string | undefined;
   description?: string | undefined;
   instructions?: string | undefined;
+  specialization?: AgentSpecialization | undefined;
 }
 
 export interface RunnerResult {

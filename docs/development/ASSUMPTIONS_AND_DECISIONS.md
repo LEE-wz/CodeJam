@@ -624,3 +624,71 @@ would hold its reservations forever. The Phase 11 sweep closes it by calling
 `finishStopped`, which is idempotent and is exactly the transition `stopRun`
 would have made next, so racing an in-flight stop request is harmless. Recorded
 here because it extends `P11-06` beyond the sweep's literal wording.
+
+---
+
+## Mini-RFC: auction-track parallel waves
+
+**Status:** Approved by the user on 2026-08-31 for `PA13-01` on branch
+`bidding-agent-implementation`.
+**Authority:**
+[`phases/parallel/13-auction-foundation.md`](./phases/parallel/13-auction-foundation.md)
+and
+[`phases/parallel/14-adaptive-auction-coordination.md`](./phases/parallel/14-adaptive-auction-coordination.md)
+govern this branch's Phase 13 and Phase 14 work. They do not amend the main
+coordinator-planning track.
+
+**Common base.** This branch starts at `aa17407`, the completed Checkpoint 12
+merge also used by `main` when the parallel tracks diverged. It inherits the
+Phase 12 multi-prompt lifecycle, transcript ordering, delta reads, loop fencing,
+Stop-versus-End behaviour, and restart guarantees unchanged. The auction and
+main coordinator tracks must remain separate until both have been exercised
+against the documented manual comparison suite.
+
+**Current contract and blocker.** The Session v2 mini-RFC authorises bounded
+parallel fan-out, but it does not distinguish why a wave exists. Fair bidding
+also cannot be built safely from mutable Agent descriptions, hidden prior model
+thread context, or estimated token use. Treating bid failures like execution
+failures would let one unavailable bidder fail an otherwise healthy round;
+treating execution failures like bid failures would silently weaken the existing
+session contract. The following additions are therefore required before Phase
+14 may introduce selection or award logic.
+
+### Approved additions
+
+| # | Addition | Contract |
+|---|---|---|
+| 1 | Purpose-aware waves | Session turns may carry backend-owned `session_bidding` or `session_execution` purpose. Old history and verified-handoff turns normalize to execution. A single active wave cannot mix purposes for one user-message round. |
+| 2 | Concurrent active turns | `CoordinationRun.activeTurnIds` replaces the singular pointer. Scheduling a wave is one version-checked mutation; sibling settlement removes only that sibling, while stop, failure, and restart settle the whole active set atomically. |
+| 3 | Agent specialisation snapshot | Agents may have bounded optional `perspective`, normalized `focusAreas`, and `biddingInstructions`. Session creation snapshots that structure into the participant, so later Agent edits cannot change an existing round's routing evidence or prompt digest. Specialisation remains subordinate to system, policy, and output contracts. |
+| 4 | Actual attempt usage | Runtime `RunUsage` crosses the execution-completion boundary and is stored on the attempt that incurred it, including failed, cancelled, and retried attempts. Public reads expose numeric input, cached-input, and output counts only. |
+| 5 | Isolated execution threads | The Agent execution boundary gains an `agent_default` / `fresh` thread policy. Bids always use `fresh`; awarded execution defaults to `fresh` and receives its complete bounded context explicitly. No provider thread identifier becomes public or durable coordination evidence. |
+| 6 | Purpose-specific settlement | Execution siblings retain the strict Phase 13 rule: retry exhaustion fails the run after all siblings settle. Bid failures mark only that bidder unavailable; healthy bids remain usable. Phase 14 owns the bounded zero-valid-bid fallback and cannot interpret zero bids as success. |
+| 7 | Bid and award evidence | Phase 14 may add durable bid, award, and execution-plan artifacts keyed by `lastUserArtifactId`. They travel through ledger-sequenced delta reads but are not automatically chat-visible; only an accepted direct candidate or final execution result enters the transcript. No second mutable current-auction pointer is added. |
+
+**Migration behaviour.** No eager file or database migration is written. On
+read, legacy `activeTurnId` becomes a zero- or one-element `activeTurnIds` array;
+missing wave purpose normalizes to `session_execution`; missing Agent
+specialisation, participant snapshots, attempt usage, and thread policy retain
+their pre-auction meanings. Historical fields may remain in stored files and
+must not be destructively rewritten. New optional public fields are additive.
+
+**Trust and privacy boundaries.** Wave purpose, membership, concurrency,
+budgets, retries, leases, settlement, and award validation remain backend-owned.
+Agent-authored text cannot select a purpose or alter policy. Events and public
+attempt reads continue to exclude prompts, raw outputs, lease tokens,
+credentials, provider thread identifiers, and mutable runtime handles.
+
+**Verified-handoff non-regression.** `workflow.ts` decision logic remains outside
+the auction implementation paths; `PA13-02` may mechanically adapt its active-
+turn guard from the singular pointer to `activeTurnIds.length` so the frozen
+invalid-state behaviour still compiles and passes unchanged. `scheduleTurn`
+stays a one-turn wrapper, verified runs must always have zero or one active
+turn, and the existing verified-handoff workflow, event, API, persistence, and
+restart regression matrices must pass unchanged at Auction Checkpoint 13.
+
+**Required evidence.** The `PA13-15` through `PA13-20` race, supervisor, usage,
+specialisation, isolation, web, and real ten-participant tests are the acceptance
+matrix. Auction Phase 14 must not begin while a purpose-aware wave race is
+flaky, while actual usage attribution is incomplete, or while an earlier Agent
+thread can influence a bid.

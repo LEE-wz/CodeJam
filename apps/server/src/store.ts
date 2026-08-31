@@ -55,6 +55,36 @@ const requireArrays = (
   }
 };
 
+type LegacyCoordinationRun = Database["coordinationRuns"][number] & {
+  activeTurnId?: string;
+};
+
+/**
+ * Materialise the Phase 13 active-wave shape without rewriting legacy data.
+ * The singular property is deliberately retained on the in-memory stored row,
+ * so a later unrelated mutation does not drop history that was loaded from
+ * disk. Repository read models expose only `activeTurnIds`.
+ */
+const normalizeCoordinationRuns = (database: Database): Database => {
+  for (const run of database.coordinationRuns as LegacyCoordinationRun[]) {
+    if (!Array.isArray(run.activeTurnIds)) {
+      run.activeTurnIds = run.activeTurnId === undefined ? [] : [run.activeTurnId];
+    }
+  }
+  return database;
+};
+
+/** Old and verified-handoff turns have execution semantics on every read. */
+const normalizeCoordinationTurns = (database: Database): Database => {
+  for (const turn of database.coordinationTurns) {
+    turn.wavePurpose ??= "session_execution";
+  }
+  return database;
+};
+
+const normalizeCoordinationState = (database: Database): Database =>
+  normalizeCoordinationTurns(normalizeCoordinationRuns(database));
+
 /**
  * Parse a database document without discarding anything (overview Section 10.2).
  *
@@ -96,7 +126,10 @@ export const parseDatabaseDocument = (
 
   if (version === 2) {
     requireArrays(parsed, [...BASE_COLLECTIONS, ...COORDINATION_COLLECTIONS], 2);
-    return { database: parsed as unknown as Database, migratedFromVersion: null };
+    return {
+      database: normalizeCoordinationState(parsed as unknown as Database),
+      migratedFromVersion: null,
+    };
   }
 
   throw new DatabaseVersionError(
@@ -133,13 +166,17 @@ export class JsonStore {
   }
 
   snapshot(): Database {
-    return structuredClone(this.data);
+    const snapshot = normalizeCoordinationState(structuredClone(this.data));
+    for (const run of snapshot.coordinationRuns as LegacyCoordinationRun[]) {
+      delete run.activeTurnId;
+    }
+    return snapshot;
   }
 
   async mutate<T>(mutation: (database: Database) => T | Promise<T>): Promise<T> {
     let result!: T;
     const operation = this.queue.then(async () => {
-      const next = structuredClone(this.data);
+      const next = normalizeCoordinationState(structuredClone(this.data));
       result = await mutation(next);
       await this.persist(next);
       this.data = next;

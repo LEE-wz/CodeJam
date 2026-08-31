@@ -130,37 +130,37 @@ award, or execution remains from committed artifacts for that user message.
 
 ### Contract and durable wave model
 
-- [ ] **PA13-01** Record the auction-track mini-RFC. State the common Checkpoint
+- [x] **PA13-01** Record the auction-track mini-RFC. State the common Checkpoint
   12 base, new Agent specialisation snapshot, attempt usage, thread policy,
   purpose-aware waves, forthcoming bid/award artifacts, migration behaviour,
   and verified-handoff non-regression requirement.
-- [ ] **PA13-02** Replace `CoordinationRun.activeTurnId` with
+- [x] **PA13-02** Replace `CoordinationRun.activeTurnId` with
   `activeTurnIds: CoordinationTurnId[]` across types, persistence loading,
   repository methods, service, workflow validation, fixtures, and the web read
   model. An old `activeTurnId` loads as a single-element array. Verified handoff
   must retain zero-or-one active turn.
-- [ ] **PA13-03** Add `CoordinationWavePurpose = "session_execution" |
+- [x] **PA13-03** Add `CoordinationWavePurpose = "session_execution" |
   "session_bidding"` to session turn scheduling metadata. Old and
   verified-handoff turns behave as `session_execution`; the field is optional on
   stored history and normalized on read.
-- [ ] **PA13-04** Implement atomic `scheduleTurns` with a single expected-version
+- [x] **PA13-04** Implement atomic `scheduleTurns` with a single expected-version
   check, contiguous turn sequences, deterministic event order, and an all-or-
   nothing mutation. Keep `scheduleTurn` as the verified-compatible one-turn
   wrapper.
-- [ ] **PA13-05** Make attempt commit, failure, cancellation, and settlement
+- [x] **PA13-05** Make attempt commit, failure, cancellation, and settlement
   remove only their own turn from `activeTurnIds`. Whole-run stop, failure, and
   restart settlement still clear every member of the active wave atomically.
 
 ### Agent specialisation, usage, and isolation
 
-- [ ] **PA13-06** Add the optional bounded `AgentSpecialization` type, API
+- [x] **PA13-06** Add the optional bounded `AgentSpecialization` type, API
   validation, create/update service support, generated instruction rendering,
   web settings controls, and old-record loading tests. Normalize `focusAreas`
   for matching while preserving the human-readable perspective.
-- [ ] **PA13-07** Snapshot specialisation into session participants at creation.
+- [x] **PA13-07** Snapshot specialisation into session participants at creation.
   Prove that later Agent edits do not alter an existing session's prompt digest
   or routing metadata.
-- [ ] **PA13-08** Propagate `RunUsage` through the execution completion boundary
+- [x] **PA13-08** Propagate `RunUsage` through the execution completion boundary
   and persist it on `CoordinationAttempt`. Add API read fields and aggregate
   helpers for input, cached-input, and output tokens without exposing provider
   thread IDs, prompts, raw output, or leases.
@@ -253,4 +253,3 @@ Auction Phase 13 is complete only when:
 Record the auction-branch checkpoint commit, wave timings, actual token totals,
 concurrency cap, partial-failure evidence, and isolation proof. Do not implement
 award scoring while any purpose-aware wave race remains flaky.
-

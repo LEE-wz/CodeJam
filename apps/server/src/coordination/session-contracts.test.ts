@@ -257,6 +257,7 @@ describe("shared session workflow registration", () => {
         phase: "sessioning",
         revision: 0,
         nextTurnSequence: 1,
+        activeTurnIds: [],
         sharedState: { nextExpectedNumber: SESSION_START_VALUE },
         version: 1,
         createdAt: FIXED_NOW,

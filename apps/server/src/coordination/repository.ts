@@ -19,6 +19,8 @@ import type {
   ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
+  ScheduleTurnsInput,
+  ScheduleTurnsResult,
   StartRunCommitResult,
 } from "./contracts.js";
 import type {
@@ -34,6 +36,7 @@ import type {
   CoordinationRunId,
   CoordinationTurn,
 } from "./types.js";
+import { aggregateRunUsage } from "./types.js";
 
 export type {
   BeginAttemptInput,
@@ -48,6 +51,8 @@ export type {
   ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
+  ScheduleTurnsInput,
+  ScheduleTurnsResult,
   StartRunCommitResult,
 } from "./contracts.js";
 
@@ -391,7 +396,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       const run = database.coordinationRuns.find((candidate) => candidate.id === id);
       if (!run) return undefined;
       if (run.status !== "running") return structuredClone(run);
-      delete run.activeTurnId;
+      run.activeTurnIds = [];
       run.status = "awaiting_input";
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
@@ -435,6 +440,12 @@ export class DurableCoordinationRepository implements CoordinationRepository {
   }
 
   async scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult> {
+    const result = await this.scheduleTurns({ ...input, turns: [input.turn] });
+    if (result.kind !== "scheduled") return result;
+    return { kind: "scheduled", run: result.run, turn: result.turns[0]! };
+  }
+
+  async scheduleTurns(input: ScheduleTurnsInput): Promise<ScheduleTurnsResult> {
     return this.store.mutate((database) => {
       const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
       if (!run) {
@@ -442,24 +453,32 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       }
       if (
         run.status !== "running" ||
-        run.activeTurnId !== undefined ||
-        run.version !== input.expectedRunVersion
+        run.activeTurnIds.length > 0 ||
+        run.version !== input.expectedRunVersion ||
+        input.turns.length === 0 ||
+        input.turns.some((turn, index) =>
+          turn.runId !== run.id ||
+          turn.sequence !== run.nextTurnSequence + index ||
+          input.turns.some((candidate, candidateIndex) =>
+            candidateIndex !== index && candidate.id === turn.id,
+          ),
+        )
       ) {
         return { kind: "stale", currentRun: structuredClone(run) } as const;
       }
 
-      const turn = structuredClone(input.turn);
-      database.coordinationTurns.push(turn);
-      run.activeTurnId = turn.id;
-      run.nextTurnSequence += 1;
+      const turns = structuredClone(input.turns);
+      for (const turn of turns) turn.wavePurpose ??= "session_execution";
+      database.coordinationTurns.push(...turns);
+      run.activeTurnIds = turns.map((turn) => turn.id);
+      run.nextTurnSequence += turns.length;
       run.phase = input.nextPhase;
       run.revision = input.nextRevision;
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
 
-      this.append(
-        database,
-        this.events.turnScheduled({
+      for (const turn of turns) {
+        this.append(database, this.events.turnScheduled({
           runId: run.id,
           turnId: turn.id,
           sequence: turn.sequence,
@@ -470,12 +489,12 @@ export class DurableCoordinationRepository implements CoordinationRepository {
           revision: run.revision,
           expectedArtifactType: expectedArtifactTypeForTurn(turn),
           inputArtifactCount: turn.inputArtifactIds.length,
-        }),
-      );
+        }));
+      }
       return {
         kind: "scheduled",
         run: structuredClone(run),
-        turn: structuredClone(turn),
+        turns: structuredClone(turns),
       } as const;
     });
   }
@@ -580,7 +599,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       // late result from a superseded attempt.
       if (
         run.status !== "running" ||
-        run.activeTurnId !== turn.id ||
+        !run.activeTurnIds.includes(turn.id) ||
         turn.status !== "running" ||
         turn.activeAttemptId !== attempt.id ||
         attempt.status !== "running" ||
@@ -608,6 +627,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
       attempt.status = "succeeded";
       attempt.finishedAt = now;
+      if (input.usage !== undefined) attempt.usage = input.usage;
       if (input.outputDigest !== undefined) {
         attempt.outputDigest = input.outputDigest;
       }
@@ -618,7 +638,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       turn.lastValidationErrors = [];
       delete turn.activeAttemptId;
 
-      delete run.activeTurnId;
+      run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
       if (artifact.type === "proposal") {
         run.latestProposalArtifactId = artifact.id;
       }
@@ -696,13 +716,14 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       attempt.errorCode = input.errorCode;
       attempt.errorMessage = input.errorMessage;
       attempt.finishedAt = now;
+      if (input.usage !== undefined) attempt.usage = input.usage;
       turn.lastValidationErrors = [...(input.validationErrors ?? [])];
       delete turn.activeAttemptId;
 
       if (input.status === "cancelled") {
         turn.status = "cancelled";
         turn.completedAt = now;
-        delete run.activeTurnId;
+        run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
       } else {
         // The turn stays schedulable so the service can retry within its ceiling.
         turn.status = "scheduled";
@@ -888,7 +909,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
   /**
    * Every run that still needs an owner, with the two facts a reconciler needs:
-   * the turn the run points at, and whether any of its attempts is still
+   * the turns the run points at, and whether any of its attempts is still
    * durably `running` (P11-04). `created` runs are excluded: nothing is
    * orchestrating them, so nothing can have stranded them.
    */
@@ -904,7 +925,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       .map((run) => ({
         runId: run.id,
         status: run.status as "running" | "stop_requested",
-        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        activeTurnIds: [...run.activeTurnIds],
         hasRunningAttempt: runIdsWithRunningAttempt.has(run.id),
       }));
   }
@@ -925,7 +946,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
    * `completed`/`failed`/`stopped` are immutable, `stop_requested` belongs to
    * the stop path, and `created` has no orchestration to reconcile.
    *
-   * Idempotent: a run with no `activeTurnId` returns `noop` without appending an
+   * Idempotent: a run with no `activeTurnIds` returns `noop` without appending an
    * event or bumping the version, so running this twice changes nothing.
    */
   async reconcileRun(input: {
@@ -943,11 +964,14 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       if (run.status !== "running") {
         return { kind: "owned", run: structuredClone(run) } as const;
       }
-      if (run.activeTurnId === undefined) {
+      if (run.activeTurnIds.length === 0) {
         return { kind: "noop", run: structuredClone(run) } as const;
       }
 
-      const turnId = run.activeTurnId;
+      const [turnId] = run.activeTurnIds;
+      if (turnId === undefined) {
+        return { kind: "noop", run: structuredClone(run) } as const;
+      }
       this.settleActiveWork(
         database,
         run,
@@ -972,7 +996,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
   // -------------------------------------------------------------- helpers
 
-  /** Cancel the active attempt and close the active turn of a run going terminal. */
+  /** Cancel active attempts and close every active turn of a run going terminal. */
   private settleActiveWork(
     database: Database,
     run: CoordinationRun,
@@ -980,11 +1004,9 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     code: CoordinationErrorCode,
     message: string,
   ): void {
-    const turn = run.activeTurnId
-      ? database.coordinationTurns.find((candidate) => candidate.id === run.activeTurnId)
-      : undefined;
-
-    if (turn) {
+    for (const turnId of run.activeTurnIds) {
+      const turn = database.coordinationTurns.find((candidate) => candidate.id === turnId);
+      if (!turn) continue;
       const now = this.clock.nowIso();
       const attempt = turn.activeAttemptId
         ? database.coordinationAttempts.find((candidate) => candidate.id === turn.activeAttemptId)
@@ -1014,7 +1036,7 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       turn.completedAt = now;
       delete turn.activeAttemptId;
     }
-    delete run.activeTurnId;
+    run.activeTurnIds = [];
   }
 
   private attemptSettlementEvent(
@@ -1288,5 +1310,12 @@ const buildRunDetails = (database: Database, run: CoordinationRun): Coordination
     .filter((event) => event.runId === run.id)
     .sort((left, right) => left.sequence - right.sequence);
 
-  return structuredClone({ run, turns, attempts, artifacts, events }) as CoordinationRunDetails;
+  return structuredClone({
+    run,
+    turns,
+    attempts,
+    usageTotals: aggregateRunUsage(attempts),
+    artifacts,
+    events,
+  }) as CoordinationRunDetails;
 };

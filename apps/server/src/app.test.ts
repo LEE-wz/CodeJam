@@ -9,6 +9,47 @@ const service = {
 } as unknown as AgentService;
 
 describe("HTTP boundary", () => {
+  it("validates specialization bounds before creating an Agent", async () => {
+    let received: unknown;
+    const specializedService = {
+      ...service,
+      createAgent: async (input: unknown) => {
+        received = input;
+        return { id: "agent" };
+      },
+    } as unknown as AgentService;
+    const app = await createApp(loadConfig({ NODE_ENV: "test" }), specializedService);
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      payload: {
+        name: "Bidder",
+        specialization: {
+          perspective: "Security",
+          focusAreas: ["risk", "performance"],
+          biddingInstructions: "Prefer measurable evidence.",
+        },
+      },
+    });
+    expect(accepted.statusCode).toBe(201);
+    expect(received).toMatchObject({ specialization: { focusAreas: ["risk", "performance"] } });
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      payload: {
+        name: "Bidder",
+        specialization: {
+          perspective: "Security",
+          focusAreas: Array.from({ length: 11 }, (_, index) => `area-${index}`),
+          biddingInstructions: "Bid.",
+        },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    await app.close();
+  });
+
   it("protects API routes with the configured shared token", async () => {
     const app = await createApp(
       loadConfig({ NODE_ENV: "test", APP_AUTH_TOKEN: "a-strong-test-token" }),

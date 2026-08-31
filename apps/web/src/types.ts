@@ -1,11 +1,18 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
+export interface AgentSpecialization {
+  perspective: string;
+  focusAreas: string[];
+  biddingInstructions: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
   description: string;
   instructions: string;
+  specialization?: AgentSpecialization;
   status: AgentStatus;
   workspacePath: string;
   codexThreadId: string | null;

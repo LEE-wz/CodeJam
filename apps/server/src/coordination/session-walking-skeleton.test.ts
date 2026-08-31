@@ -369,6 +369,7 @@ describe("session walking skeleton", () => {
       phase: "sessioning",
       revision: 0,
       nextTurnSequence: 1,
+      activeTurnIds: [],
       sharedState: { nextExpectedNumber: 4 },
       version: 1,
       createdAt: timestamp,

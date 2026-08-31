@@ -142,14 +142,23 @@ export class AgentServiceCoordinationRuntime implements CoordinationRuntime {
     result: Awaited<AgentExecutionHandle["completion"]>,
   ): RuntimeOutcome {
     if (result.status === "completed") {
-      return { kind: "succeeded", rawOutput: result.output ?? "" };
+      return {
+        kind: "succeeded",
+        rawOutput: result.output ?? "",
+        ...(result.usage === undefined ? {} : { usage: result.usage }),
+      };
     }
     if (result.status === "cancelled") {
-      return { kind: "cancelled", message: "Agent execution was cancelled" };
+      return {
+        kind: "cancelled",
+        message: "Agent execution was cancelled",
+        ...(result.usage === undefined ? {} : { usage: result.usage }),
+      };
     }
     return {
       kind: "failed",
       message: this.safeMessage(result.error, "Agent execution failed"),
+      ...(result.usage === undefined ? {} : { usage: result.usage }),
     };
   }
 

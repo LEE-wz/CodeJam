@@ -61,6 +61,9 @@ const agentDirectory: CoordinationAgentDirectory = {
         id: agent.id,
         name: agent.name,
         status: agent.status,
+        ...(agent.specialization
+          ? { specialization: structuredClone(agent.specialization) }
+          : {}),
       }));
   },
 };

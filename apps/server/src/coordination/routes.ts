@@ -184,6 +184,7 @@ export async function registerCoordinationRoutes(
       run: details.run,
       turns: deltaTurns,
       attempts: deltaAttempts,
+      usageTotals: details.usageTotals,
       artifacts: deltaArtifacts,
       events,
       cursor: Math.max(sinceSequence, (details.events.at(-1)?.sequence ?? -1) + 1),

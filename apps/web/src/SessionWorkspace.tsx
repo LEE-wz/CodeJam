@@ -297,6 +297,7 @@ const mergeDetails = (
   run: delta.run,
   turns: mergeById(current.turns, delta.turns).sort((a, b) => a.sequence - b.sequence),
   attempts: mergeById(current.attempts, delta.attempts),
+  usageTotals: delta.usageTotals,
   artifacts: mergeById(current.artifacts, delta.artifacts),
   events: mergeById(current.events, delta.events).sort((a, b) => a.sequence - b.sequence),
   cursor: delta.cursor ?? current.cursor,

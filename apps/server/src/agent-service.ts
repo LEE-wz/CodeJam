@@ -27,6 +27,14 @@ import { WorkspaceManager } from "./workspace.js";
 
 const now = () => new Date().toISOString();
 
+const normalizeSpecialization = (
+  specialization: NonNullable<CreateAgentInput["specialization"]>,
+): NonNullable<Agent["specialization"]> => ({
+  perspective: specialization.perspective.trim(),
+  focusAreas: [...new Set(specialization.focusAreas.map((area) => area.trim().toLowerCase()))],
+  biddingInstructions: specialization.biddingInstructions.trim(),
+});
+
 /**
  * Refusal text for an Agent a coordination run is currently driving (P11-08).
  * It names the session so the user knows where to look, and carries nothing
@@ -95,6 +103,9 @@ export class AgentService {
       name: input.name.trim(),
       description: input.description?.trim() ?? "",
       instructions: input.instructions?.trim() ?? "",
+      ...(input.specialization
+        ? { specialization: normalizeSpecialization(input.specialization) }
+        : {}),
       status: "ready",
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
@@ -125,6 +136,9 @@ export class AgentService {
       if (input.name !== undefined) agent.name = input.name.trim();
       if (input.description !== undefined) agent.description = input.description.trim();
       if (input.instructions !== undefined) agent.instructions = input.instructions.trim();
+      if (input.specialization !== undefined) {
+        agent.specialization = normalizeSpecialization(input.specialization);
+      }
       agent.lastError = null;
       agent.updatedAt = now();
       return structuredClone(agent);
@@ -377,7 +391,7 @@ export class AgentService {
         agent.lastError = null;
         agent.updatedAt = completedAt;
       });
-      return { status: "completed", output: result.output };
+      return { status: "completed", output: result.output, usage: result.usage };
     } catch (error) {
       const completedAt = now();
       const cancelled = error instanceof RunCancelledError;

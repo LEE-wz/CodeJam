@@ -20,6 +20,7 @@ export type CoordinationTurnKind =
   | "proposal_review"
   | "finalization"
   | "session_turn";
+export type CoordinationWavePurpose = "session_execution" | "session_bidding";
 export type CoordinationTurnStatus =
   | "scheduled"
   | "running"
@@ -86,7 +87,7 @@ export interface CoordinationRun {
   phase: CoordinationPhase;
   revision: number;
   nextTurnSequence: number;
-  activeTurnId?: string;
+  activeTurnIds: string[];
   latestProposalArtifactId?: string;
   latestReviewArtifactId?: string;
   finalArtifactId?: string;
@@ -111,6 +112,7 @@ export interface CoordinationTurn {
   role: CoordinationRole;
   agentId: string;
   kind: CoordinationTurnKind;
+  wavePurpose?: CoordinationWavePurpose;
   status: CoordinationTurnStatus;
   attemptCount: number;
   activeAttemptId?: string;
@@ -130,12 +132,25 @@ export interface CoordinationAttempt {
   agentId: string;
   status: CoordinationAttemptStatus;
   agentRunId?: string;
+  usage?: RunUsage | null;
   promptDigest?: string;
   outputDigest?: string;
   errorCode?: string;
   errorMessage?: string;
   createdAt: string;
   finishedAt?: string;
+}
+
+export interface RunUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface RunUsageTotals {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
 }
 
 export interface ProposalPayload {
@@ -221,6 +236,7 @@ export interface CoordinationRunDetails {
   run: CoordinationRun;
   turns: CoordinationTurn[];
   attempts: CoordinationAttempt[];
+  usageTotals: RunUsageTotals;
   artifacts: CoordinationArtifact[];
   events: CoordinationEvent[];
   cursor?: number;

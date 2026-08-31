@@ -31,6 +31,41 @@ export type CoordinationTurnKind =
   | "finalization"
   | "session_turn";
 
+/** Backend-owned reason a session wave was scheduled. */
+export type CoordinationWavePurpose = "session_execution" | "session_bidding";
+
+export interface AgentSpecialization {
+  perspective: string;
+  focusAreas: string[];
+  biddingInstructions: string;
+}
+
+/** Provider-neutral token accounting safe to expose in coordination reads. */
+export interface RunUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface RunUsageTotals {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}
+
+/** Counts every attempt with usage, whether or not that attempt produced an artifact. */
+export const aggregateRunUsage = (
+  attempts: ReadonlyArray<Pick<CoordinationAttempt, "usage">>,
+): RunUsageTotals =>
+  attempts.reduce<RunUsageTotals>(
+    (total, attempt) => ({
+      inputTokens: total.inputTokens + (attempt.usage?.inputTokens ?? 0),
+      cachedInputTokens: total.cachedInputTokens + (attempt.usage?.cachedInputTokens ?? 0),
+      outputTokens: total.outputTokens + (attempt.usage?.outputTokens ?? 0),
+    }),
+    { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+  );
+
 export type CoordinationTurnStatus =
   | "scheduled"
   | "running"
@@ -100,6 +135,7 @@ export interface CoordinationParticipant {
   role: CoordinationRole;
   agentId: AgentId;
   agentNameSnapshot: string;
+  specializationSnapshot?: AgentSpecialization;
 }
 
 export interface CoordinationPolicy {
@@ -157,7 +193,8 @@ export interface CoordinationRun {
   phase: CoordinationPhase;
   revision: number;
   nextTurnSequence: number;
-  activeTurnId?: CoordinationTurnId;
+  /** Turn leases currently owned by this run, in scheduling order. */
+  activeTurnIds: CoordinationTurnId[];
   latestProposalArtifactId?: CoordinationArtifactId;
   latestReviewArtifactId?: CoordinationArtifactId;
   finalArtifactId?: CoordinationArtifactId;
@@ -185,6 +222,8 @@ export interface CoordinationTurn {
   role: CoordinationRole;
   agentId: AgentId;
   kind: CoordinationTurnKind;
+  /** Missing only on pre-auction stored history; reads normalize it to execution. */
+  wavePurpose?: CoordinationWavePurpose;
   status: CoordinationTurnStatus;
   attemptCount: number;
   activeAttemptId?: CoordinationAttemptId;
@@ -205,6 +244,8 @@ export interface CoordinationAttempt {
   leaseToken: string;
   status: CoordinationAttemptStatus;
   agentRunId?: AgentRunId;
+  /** Missing on pre-auction history and null when the provider supplied no usage. */
+  usage?: RunUsage | null;
   promptDigest?: string;
   outputDigest?: string;
   errorCode?: CoordinationErrorCode;
@@ -371,6 +412,7 @@ export interface CoordinationRunDetails {
   run: CoordinationRun;
   turns: CoordinationTurn[];
   attempts: CoordinationAttempt[];
+  usageTotals: RunUsageTotals;
   artifacts: CoordinationArtifact[];
   events: CoordinationEvent[];
   /** Present only for a delta detail response. */

@@ -381,7 +381,14 @@ export class CoordinationService implements CoordinationServiceContract {
       if (!agent) {
         throw new CoordinationError(404, "NOT_FOUND", "Selected Agent was not found");
       }
-      return { role: "participant" as const, agentId, agentNameSnapshot: agent.name };
+      return {
+        role: "participant" as const,
+        agentId,
+        agentNameSnapshot: agent.name,
+        ...(agent.specialization
+          ? { specializationSnapshot: structuredClone(agent.specialization) }
+          : {}),
+      };
     });
 
     const timestamp = this.dependencies.clock.nowIso();
@@ -396,6 +403,7 @@ export class CoordinationService implements CoordinationServiceContract {
       phase: "sessioning",
       revision: 0,
       nextTurnSequence: 1,
+      activeTurnIds: [],
       ...(startValue !== undefined ? { sharedState: { nextExpectedNumber: startValue } } : {}),
       version: 1,
       createdAt: timestamp,
@@ -458,6 +466,7 @@ export class CoordinationService implements CoordinationServiceContract {
       phase: "drafting",
       revision: 0,
       nextTurnSequence: 1,
+      activeTurnIds: [],
       version: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -842,6 +851,7 @@ export class CoordinationService implements CoordinationServiceContract {
       role: decision.role,
       agentId: participant.agentId,
       kind: decision.turnKind,
+      wavePurpose: "session_execution",
       status: "scheduled",
       attemptCount: 0,
       inputArtifactIds: [...decision.inputArtifactIds],
@@ -979,6 +989,7 @@ export class CoordinationService implements CoordinationServiceContract {
             leaseToken: attempt.leaseToken,
             artifact: validation.artifact,
             outputDigest: digestOutput(outcome.rawOutput),
+            usage: outcome.usage,
           });
           this.log({
             runId: scheduledRun.id,
@@ -1003,6 +1014,7 @@ export class CoordinationService implements CoordinationServiceContract {
             lastErrorCode,
             lastErrorMessage,
             validationErrors,
+            outcome.usage,
           ))
         ) {
           return "abandoned";
@@ -1011,7 +1023,14 @@ export class CoordinationService implements CoordinationServiceContract {
       }
 
       if (outcome.kind === "cancelled") {
-        if (!(await this.finishAttempt(attempt, "cancelled", "STOPPED_BY_USER", outcome.message))) {
+        if (!(await this.finishAttempt(
+          attempt,
+          "cancelled",
+          "STOPPED_BY_USER",
+          outcome.message,
+          undefined,
+          outcome.usage,
+        ))) {
           return "abandoned";
         }
         const afterCancellation = await this.dependencies.repository.getRunDetails(
@@ -1031,7 +1050,14 @@ export class CoordinationService implements CoordinationServiceContract {
       lastErrorMessage = outcome.message;
       validationErrors = boundedRetryFeedback([lastErrorMessage]);
       const status = outcome.kind === "timed_out" ? "timed_out" : "failed";
-      if (!(await this.finishAttempt(attempt, status, lastErrorCode, lastErrorMessage))) {
+      if (!(await this.finishAttempt(
+        attempt,
+        status,
+        lastErrorCode,
+        lastErrorMessage,
+        undefined,
+        outcome.usage,
+      ))) {
         return "abandoned";
       }
     }
@@ -1050,6 +1076,7 @@ export class CoordinationService implements CoordinationServiceContract {
     errorCode: CoordinationErrorCode,
     errorMessage: string,
     validationErrors?: string[],
+    usage?: import("./types.js").RunUsage | null,
   ): Promise<boolean> {
     const result = await this.dependencies.repository.finishAttempt({
       runId: attempt.runId,
@@ -1060,6 +1087,7 @@ export class CoordinationService implements CoordinationServiceContract {
       errorCode,
       errorMessage,
       ...(validationErrors ? { validationErrors } : {}),
+      usage,
     });
     return result === "finished";
   }

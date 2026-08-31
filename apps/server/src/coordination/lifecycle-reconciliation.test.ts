@@ -435,7 +435,7 @@ describe("P11-09 stale-path regressions", () => {
     const details = await settle(context.service, context.runId);
 
     expect(details.run.status).toBe("completed");
-    expect(details.run.activeTurnId).toBeUndefined();
+    expect(details.run.activeTurnIds).toEqual([]);
     await assertReservationInvariant(context.durable, context.store);
     expect(await context.durable.listReservedAgentIds()).toEqual([]);
   });
@@ -448,7 +448,7 @@ describe("P11-09 stale-path regressions", () => {
     const details = await settle(context.service, context.runId);
 
     expect(details.run.status).toBe("completed");
-    expect(details.run.activeTurnId).toBeUndefined();
+    expect(details.run.activeTurnIds).toEqual([]);
     // A reconciled turn is settled, not left running.
     expect(
       details.turns.every((turn) => turn.status !== "running" && turn.status !== "scheduled"),
@@ -463,7 +463,7 @@ describe("P11-09 stale-path regressions", () => {
     const details = await settle(context.service, context.runId);
 
     expect(details.run.status).toBe("completed");
-    expect(details.run.activeTurnId).toBeUndefined();
+    expect(details.run.activeTurnIds).toEqual([]);
     await assertReservationInvariant(context.durable, context.store);
     expect(await context.durable.listReservedAgentIds()).toEqual([]);
   });
@@ -493,7 +493,7 @@ describe("P11-09 stale-path regressions", () => {
     const details = await settle(context.service, context.runId);
 
     expect(TERMINAL.has(details.run.status)).toBe(true);
-    expect(details.run.activeTurnId).toBeUndefined();
+    expect(details.run.activeTurnIds).toEqual([]);
     await assertReservationInvariant(context.durable, context.store);
     expect(await context.durable.listReservedAgentIds()).toEqual([]);
   });
@@ -506,12 +506,12 @@ describe("P11-09 stale-path regressions", () => {
     // the run: it stayed `running` with nothing driving it and no way back.
     await until(async () => {
       const current = await context.service.getRun(context.runId);
-      return current?.run.status === "running" && current.run.activeTurnId === undefined;
+      return current?.run.status === "running" && current.run.activeTurnIds.length === 0;
     });
 
     const stranded = await context.service.getRun(context.runId);
     expect(stranded?.run.status).toBe("running");
-    expect(stranded?.run.activeTurnId).toBeUndefined();
+    expect(stranded?.run.activeTurnIds).toEqual([]);
     // No attempt ever began, so nothing is reserved even while stranded.
     expect(await context.durable.listReservedAgentIds()).toEqual([]);
 
@@ -596,7 +596,7 @@ describe("P11-10 lifecycle invariants", () => {
     const settled = await restarted.getRun(context.runId);
     expect(settled?.run.status).toBe("failed");
     expect(settled?.run.errorCode).toBe("SERVER_RESTARTED");
-    expect(settled?.run.activeTurnId).toBeUndefined();
+    expect(settled?.run.activeTurnIds).toEqual([]);
     expect(await context.durable.listReservedAgentIds()).toEqual([]);
     await assertReservationInvariant(context.durable, context.store);
 

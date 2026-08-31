@@ -129,13 +129,37 @@ class MemoryRepository implements CoordinationRepository {
       return { kind: "stale" as const, currentRun: structuredClone(run) };
     }
     const turn = structuredClone(input.turn);
+    turn.wavePurpose ??= "session_execution";
     this.turns.push(turn);
-    run.activeTurnId = turn.id;
+    run.activeTurnIds = [turn.id];
     run.nextTurnSequence += 1;
     run.phase = input.nextPhase;
     run.revision = input.nextRevision;
     run.version += 1;
     return { kind: "scheduled" as const, run: structuredClone(run), turn: structuredClone(turn) };
+  }
+
+  async scheduleTurns(input: {
+    runId: string;
+    expectedRunVersion: number;
+    turns: CoordinationTurn[];
+    nextPhase: CoordinationRun["phase"];
+    nextRevision: number;
+  }) {
+    const run = this.runs.get(input.runId);
+    if (!run) return { kind: "not_found" as const };
+    if (run.status !== "running" || run.activeTurnIds.length > 0 || run.version !== input.expectedRunVersion) {
+      return { kind: "stale" as const, currentRun: structuredClone(run) };
+    }
+    const turns = structuredClone(input.turns);
+    for (const turn of turns) turn.wavePurpose ??= "session_execution";
+    this.turns.push(...turns);
+    run.activeTurnIds = turns.map((turn) => turn.id);
+    run.nextTurnSequence += turns.length;
+    run.phase = input.nextPhase;
+    run.revision = input.nextRevision;
+    run.version += 1;
+    return { kind: "scheduled" as const, run: structuredClone(run), turns };
   }
 
   async beginAttempt(input: { runId: string; turnId: string; attempt: CoordinationAttempt }) {
@@ -179,7 +203,7 @@ class MemoryRepository implements CoordinationRepository {
     turn.status = "committed";
     turn.activeAttemptId = undefined;
     turn.outputArtifactId = input.artifact.id;
-    run.activeTurnId = undefined;
+    run.activeTurnIds = [];
     run.version += 1;
     this.artifacts.push(structuredClone(input.artifact));
     return {
@@ -219,7 +243,7 @@ class MemoryRepository implements CoordinationRepository {
     turn.activeAttemptId = undefined;
     turn.lastValidationErrors = input.validationErrors ?? [];
     turn.status = input.status === "cancelled" ? "cancelled" : "scheduled";
-    if (input.status === "cancelled") run.activeTurnId = undefined;
+    if (input.status === "cancelled") run.activeTurnIds = [];
     return "finished";
   }
 
@@ -235,7 +259,7 @@ class MemoryRepository implements CoordinationRepository {
     if (!run) return undefined;
     run.status = "stopped";
     run.stoppedAt = clock.nowIso();
-    run.activeTurnId = undefined;
+    run.activeTurnIds = [];
     return structuredClone(run);
   }
 
@@ -268,7 +292,7 @@ class MemoryRepository implements CoordinationRepository {
       .map((run) => ({
         runId: run.id,
         status: run.status as "running" | "stop_requested",
-        ...(run.activeTurnId === undefined ? {} : { activeTurnId: run.activeTurnId }),
+        activeTurnIds: [...run.activeTurnIds],
         hasRunningAttempt: this.attempts.some(
           (attempt) => attempt.runId === run.id && attempt.status === "running",
         ),
@@ -284,17 +308,19 @@ class MemoryRepository implements CoordinationRepository {
     if (run.status !== "running") {
       return { kind: "owned" as const, run: structuredClone(run) };
     }
-    if (run.activeTurnId === undefined) {
+    if (run.activeTurnIds.length === 0) {
       return { kind: "noop" as const, run: structuredClone(run) };
     }
-    const turn = this.turns.find((candidate) => candidate.id === run.activeTurnId);
-    if (turn) {
-      const attempt = this.attempts.find((candidate) => candidate.id === turn.activeAttemptId);
-      if (attempt && attempt.status === "running") attempt.status = "cancelled";
-      turn.status = "failed";
-      delete turn.activeAttemptId;
+    for (const turnId of run.activeTurnIds) {
+      const turn = this.turns.find((candidate) => candidate.id === turnId);
+      if (turn) {
+        const attempt = this.attempts.find((candidate) => candidate.id === turn.activeAttemptId);
+        if (attempt && attempt.status === "running") attempt.status = "cancelled";
+        turn.status = "failed";
+        delete turn.activeAttemptId;
+      }
     }
-    delete run.activeTurnId;
+    run.activeTurnIds = [];
     return { kind: "reconciled" as const, run: structuredClone(run) };
   }
 }
@@ -451,13 +477,13 @@ function protocol(ids: IdGenerator): ArtifactProtocol {
 
 function makeService(
   outputs: string[] = ["proposal", "review", "final"],
-  overrides: { contextBuilder?: ContextBuilder } = {},
+  overrides: { contextBuilder?: ContextBuilder; agentDirectory?: CoordinationAgentDirectory } = {},
 ) {
   const ids = new TestIds();
   const repository = new MemoryRepository();
   const runtime = new ScriptedRuntime(outputs);
   const service = new CoordinationService({
-    agentDirectory: agents,
+    agentDirectory: overrides.agentDirectory ?? agents,
     repository,
     workflow,
     contextBuilder: overrides.contextBuilder ?? contextBuilder,
@@ -470,6 +496,40 @@ function makeService(
 }
 
 describe("CoordinationService", () => {
+  it("snapshots session specialization independently from later Agent edits", async () => {
+    const records = ["agent-one", "agent-two"].map((id) => ({
+      id,
+      name: id,
+      status: "ready" as const,
+      specialization: {
+        perspective: `${id} perspective`,
+        focusAreas: ["security"],
+        biddingInstructions: "Bid with evidence.",
+      },
+    }));
+    const directory: CoordinationAgentDirectory = {
+      async getAgentsByIds(ids) { return records.filter((record) => ids.includes(record.id)); },
+    };
+    const { service } = makeService([], { agentDirectory: directory });
+    const run = await service.createRun({
+      workflow: "shared_session_v1",
+      name: "Specialized session",
+      objective: "Compare approaches.",
+      agents: records.map((record) => record.id),
+      policy: { sessionProtocol: "free_chat", maxTurns: 4 },
+    });
+    const snapshot = structuredClone(run.participants);
+    records[0]!.specialization.focusAreas = ["mutated"];
+    records[0]!.specialization.biddingInstructions = "Changed later.";
+
+    expect((await service.getRun(run.id))?.run.participants).toEqual(snapshot);
+    expect(snapshot[0]?.specializationSnapshot).toEqual({
+      perspective: "agent-one perspective",
+      focusAreas: ["security"],
+      biddingInstructions: "Bid with evidence.",
+    });
+  });
+
   it("snapshots selected Agents and rejects duplicate participant IDs", async () => {
     const { service } = makeService();
     const run = await service.createRun(request);

@@ -171,6 +171,100 @@ describe("database v2 migration", () => {
     expect(await readDatabaseFile(filePath)).toEqual(store.snapshot());
   });
 
+  it("normalizes a legacy active turn on read without rewriting or dropping it", async () => {
+    const filePath = await newTemporaryDatabasePath();
+    const legacyRun = {
+      id: "run-legacy",
+      name: "Legacy run",
+      objective: "Prove additive loading.",
+      requiredSections: [],
+      participants: [],
+      policy: {},
+      status: "running",
+      phase: "drafting",
+      revision: 0,
+      nextTurnSequence: 2,
+      activeTurnId: "turn-legacy",
+      version: 4,
+      createdAt: "2026-08-30T00:00:00.000Z",
+      updatedAt: "2026-08-30T00:00:01.000Z",
+    };
+    const document = {
+      version: 2,
+      agents: [],
+      messages: [],
+      runs: [],
+      coordinationRuns: [legacyRun],
+      coordinationTurns: [
+        {
+          id: "turn-legacy",
+          runId: "run-legacy",
+          sequence: 1,
+          role: "planner",
+          agentId: "agent-legacy",
+          kind: "initial_proposal",
+          status: "running",
+          attemptCount: 1,
+          inputArtifactIds: [],
+          lastValidationErrors: [],
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+        {
+          id: "turn-bid",
+          runId: "run-legacy",
+          sequence: 2,
+          role: "participant",
+          agentId: "agent-bid",
+          kind: "session_turn",
+          wavePurpose: "session_bidding",
+          status: "scheduled",
+          attemptCount: 0,
+          inputArtifactIds: [],
+          lastValidationErrors: [],
+          createdAt: "2026-08-30T00:00:01.000Z",
+        },
+      ],
+      coordinationAttempts: [],
+      coordinationArtifacts: [],
+      coordinationEvents: [],
+    };
+    await writeFile(filePath, JSON.stringify(document, null, 2) + "\n", "utf8");
+
+    const store = new JsonStore(filePath);
+    await store.initialize();
+
+    expect(store.snapshot().coordinationRuns[0]).toMatchObject({
+      id: "run-legacy",
+      activeTurnIds: ["turn-legacy"],
+    });
+    expect(store.snapshot().coordinationRuns[0]).not.toHaveProperty("activeTurnId");
+    expect(store.snapshot().coordinationTurns.map((turn) => turn.wavePurpose)).toEqual([
+      "session_execution",
+      "session_bidding",
+    ]);
+    expect(await readDatabaseFile(filePath)).toEqual(document);
+
+    await store.mutate((database) => {
+      database.messages.push({
+        id: "message-unrelated",
+        agentId: "agent-1",
+        runId: "agent-run-1",
+        role: "user",
+        content: "Unrelated mutation",
+        createdAt: "2026-08-30T00:00:02.000Z",
+      });
+    });
+    const persisted = await readDatabaseFile(filePath);
+    expect((persisted.coordinationRuns as Record<string, unknown>[])[0]).toMatchObject({
+      activeTurnId: "turn-legacy",
+      activeTurnIds: ["turn-legacy"],
+    });
+    expect(persisted.coordinationTurns).toEqual([
+      { ...document.coordinationTurns[0], wavePurpose: "session_execution" },
+      document.coordinationTurns[1],
+    ]);
+  });
+
   it("migrates a realistic v1 database without losing or rewriting any value", async () => {
     const filePath = await newTemporaryDatabasePath();
     const original = realisticV1Database();
@@ -183,6 +277,7 @@ describe("database v2 migration", () => {
     expect(migrated.version).toBe(2);
     // Every pre-existing record, field, and timestamp survives byte-for-byte.
     expect(migrated.agents).toEqual(original.agents);
+    expect(migrated.agents.every((agent) => agent.specialization === undefined)).toBe(true);
     expect(migrated.messages).toEqual(original.messages);
     expect(migrated.runs).toEqual(original.runs);
     for (const collection of COORDINATION_COLLECTIONS) {

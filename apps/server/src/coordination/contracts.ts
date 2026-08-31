@@ -1,6 +1,7 @@
 import type {
   AgentId,
   AgentRunId,
+  AgentSpecialization,
   ArtifactType,
   CoordinationArtifact,
   CoordinationArtifactId,
@@ -16,6 +17,7 @@ import type {
   AppendUserMessageRequest,
   CreateCoordinationRunRequest,
   CreateRunRequest,
+  RunUsage,
 } from "./types.js";
 
 export interface Clock {
@@ -46,6 +48,7 @@ export interface CoordinationAgentView {
   id: AgentId;
   name: string;
   status: "ready" | "busy" | "stopped" | "error";
+  specialization?: AgentSpecialization;
 }
 
 export interface CoordinationAgentDirectory {
@@ -168,8 +171,21 @@ export interface ScheduleTurnInput {
   nextRevision: number;
 }
 
+export interface ScheduleTurnsInput {
+  runId: CoordinationRunId;
+  expectedRunVersion: number;
+  turns: CoordinationTurn[];
+  nextPhase: CoordinationRun["phase"];
+  nextRevision: number;
+}
+
 export type ScheduleTurnResult =
   | { kind: "scheduled"; run: CoordinationRun; turn: CoordinationTurn }
+  | { kind: "stale"; currentRun: CoordinationRun }
+  | { kind: "not_found" };
+
+export type ScheduleTurnsResult =
+  | { kind: "scheduled"; run: CoordinationRun; turns: CoordinationTurn[] }
   | { kind: "stale"; currentRun: CoordinationRun }
   | { kind: "not_found" };
 
@@ -201,6 +217,7 @@ export interface CommitAcceptedArtifactInput {
    * `attempt.outputDigest` on commit, per the confirmed handoff decision 1.3.
    */
   outputDigest?: string | undefined;
+  usage?: RunUsage | null | undefined;
 }
 
 export type CommitAcceptedArtifactResult =
@@ -222,17 +239,18 @@ export interface FinishAttemptInput {
   errorCode: CoordinationErrorCode;
   errorMessage: string;
   validationErrors?: string[];
+  usage?: RunUsage | null | undefined;
 }
 
 /**
  * A run that is not terminal, plus the two facts a reconciler needs to decide
- * whether anything is stranded: which turn the run still points at, and whether
+ * whether anything is stranded: which turns the run still points at, and whether
  * any attempt of the run is durably `running` (P11-04).
  */
 export interface NonTerminalRunSummary {
   runId: CoordinationRunId;
   status: "running" | "stop_requested";
-  activeTurnId?: CoordinationTurnId;
+  activeTurnIds: CoordinationTurnId[];
   hasRunningAttempt: boolean;
 }
 
@@ -281,6 +299,7 @@ export interface CoordinationRepository {
     | { kind: "not_found" }
   >;
   scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult>;
+  scheduleTurns(input: ScheduleTurnsInput): Promise<ScheduleTurnsResult>;
   beginAttempt(input: BeginAttemptInput): Promise<BeginAttemptResult>;
   attachAgentRun(input: {
     attemptId: CoordinationAttemptId;
@@ -330,10 +349,10 @@ export interface RuntimeExecutionInput {
 }
 
 export type RuntimeOutcome =
-  | { kind: "succeeded"; rawOutput: string }
-  | { kind: "timed_out"; message: string }
-  | { kind: "cancelled"; message: string }
-  | { kind: "failed"; message: string };
+  | { kind: "succeeded"; rawOutput: string; usage?: RunUsage | null }
+  | { kind: "timed_out"; message: string; usage?: RunUsage | null }
+  | { kind: "cancelled"; message: string; usage?: RunUsage | null }
+  | { kind: "failed"; message: string; usage?: RunUsage | null };
 
 export interface RuntimeExecutionHandle {
   agentRunId: AgentRunId;
@@ -374,6 +393,7 @@ export interface AgentExecutionHandle {
     status: "completed" | "failed" | "cancelled";
     output?: string;
     error?: string;
+    usage?: RunUsage | null;
   }>;
 }
 

@@ -1,4 +1,4 @@
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type { Agent, AgentRun, AgentSpecialization, Message, SystemInfo } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -55,6 +55,7 @@ export const api = {
     name: string;
     description: string;
     instructions: string;
+    specialization: AgentSpecialization;
   }) =>
     request<{ agent: Agent }>("/api/agents", {
       method: "POST",
@@ -62,7 +63,7 @@ export const api = {
     }),
   updateAgent: (
     id: string,
-    body: { name: string; description: string; instructions: string },
+    body: { name: string; description: string; instructions: string; specialization: AgentSpecialization },
   ) =>
     request<{ agent: Agent }>("/api/agents/" + id, {
       method: "PATCH",

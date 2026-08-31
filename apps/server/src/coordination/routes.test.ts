@@ -29,6 +29,7 @@ const run: CoordinationRun = {
   phase: "drafting",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
@@ -37,7 +38,19 @@ const run: CoordinationRun = {
 const details: CoordinationRunDetails = {
   run,
   turns: [],
-  attempts: [],
+  attempts: [{
+    id: "attempt-1",
+    runId,
+    turnId: "turn-1",
+    number: 1,
+    agentId: "planner",
+    leaseToken: "lease-secret",
+    status: "succeeded",
+    usage: { inputTokens: 100, cachedInputTokens: 25, outputTokens: 40 },
+    createdAt: "2026-08-29T00:00:00.000Z",
+    finishedAt: "2026-08-29T00:00:01.000Z",
+  }],
+  usageTotals: { inputTokens: 100, cachedInputTokens: 25, outputTokens: 40 },
   artifacts: [],
   events: [],
 };
@@ -120,7 +133,17 @@ describe("Coordination HTTP routes", () => {
       headers,
     });
     expect(detailResponse.statusCode).toBe(200);
-    expect(detailResponse.json()).toMatchObject({ run: { id: runId }, events: [] });
+    expect(detailResponse.json()).toMatchObject({
+      run: { id: runId },
+      attempts: [{ usage: { inputTokens: 100, cachedInputTokens: 25, outputTokens: 40 } }],
+      usageTotals: { inputTokens: 100, cachedInputTokens: 25, outputTokens: 40 },
+      events: [],
+    });
+    expect(detailResponse.body).not.toContain("lease-secret");
+    expect(detailResponse.body).not.toContain("leaseToken");
+    expect(detailResponse.body).not.toContain("threadId");
+    expect(detailResponse.body).not.toContain("prompt");
+    expect(detailResponse.body).not.toContain("rawOutput");
 
     const removedEventsResponse = await app.inject({
       method: "GET",

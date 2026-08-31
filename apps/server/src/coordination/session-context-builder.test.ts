@@ -38,6 +38,7 @@ const sessionRun = (protocol: "countdown" | "free_chat", contextMaxChars = 12_00
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 4,
+  activeTurnIds: [],
   ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 9 } } : {}),
   version: 1,
   createdAt: FIXED_NOW,

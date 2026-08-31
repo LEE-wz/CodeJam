@@ -13,10 +13,16 @@ import type { AgentService } from "./agent-service.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
+const agentSpecialization = z.object({
+  perspective: z.string().trim().max(500),
+  focusAreas: z.array(z.string().trim().min(1).max(64)).max(10),
+  biddingInstructions: z.string().trim().max(5_000),
+});
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
   instructions: z.string().max(10_000).optional(),
+  specialization: agentSpecialization.optional(),
 });
 const updateAgentBody = createAgentBody.partial().refine(
   (value) => Object.keys(value).length > 0,

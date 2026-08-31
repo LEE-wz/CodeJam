@@ -30,6 +30,7 @@ const run: CoordinationRun = {
   phase: "drafting",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
@@ -327,7 +328,7 @@ describe("VerifiedHandoffWorkflowV1 invalid-state table", () => {
     },
     {
       name: "active turn",
-      input: () => withRun(view([], []), { activeTurnId: "turn-active" }),
+      input: () => withRun(view([], []), { activeTurnIds: ["turn-active"] }),
     },
     {
       name: "invalid next sequence",

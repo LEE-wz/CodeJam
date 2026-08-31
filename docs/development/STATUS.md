@@ -1,13 +1,13 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (Checkpoint 12 passed)
-**Audited checkpoint:** Phase 12 implementation on `phase-12`, based on `main` at `3b11bef`
-**Implementation branch:** `phase-12` (base `3b11bef`)
+**Last audit:** 2026-08-31 (`PA13-01`–`PA13-07` complete; Auction Checkpoint 13 in progress)
+**Audited checkpoint:** Phase 12 implementation merged at `aa17407`
+**Implementation branch:** `bidding-agent-implementation` (base `aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 12 - Durable Multi-Prompt Sessions
-**Current gate:** Checkpoint 12 passed
+**Current phase:** Parallel Phase 13 - Auction Foundation and Purpose-Aware Waves
+**Current gate:** Auction Checkpoint 13 in progress
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 11-12 `complete`; Phases 13-15 `not_started`
+Phases 11-12 `complete`; auction Phase 13 `in_progress`; later phases `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -31,7 +31,7 @@ they name a past checkpoint.
 | 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
-| 13 | Parallel waves | `not_started` (sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
+| 13 | Auction foundation and purpose-aware parallel waves | `in_progress` on `bidding-agent-implementation` (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
 | 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
@@ -46,9 +46,8 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Start `P13-01`: record the Phase 13 mini-RFC for bounded
-parallel waves while preserving the Phase 12 lifecycle, transcript, and delta
-contracts unchanged.
+**Resume here.** Start `PA13-09`: add the execution thread policy and prove
+bid-shaped turns use explicit context on fresh provider threads.
 
 ### Checkpoint 11 final verification
 
@@ -636,13 +635,44 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 13
 
-- Not started. `P13-01` is next: freeze the bounded-parallel-wave mini-RFC
-  without changing the Phase 12 lifecycle or transcript contracts.
+- Auction alternative in progress on `bidding-agent-implementation`.
+  `PA13-01` records the branch mini-RFC. `PA13-02` replaces the singular active-
+  turn pointer with the required `activeTurnIds` array across durable and web
+  types, repository and reconciliation paths, service/workflow validation, and
+  fixtures. Legacy v2 rows normalize `activeTurnId` to a one-element array on
+  read without an eager rewrite; an unrelated later mutation retains the old
+  field. Single-turn scheduling refuses a second member, preserving verified-
+  handoff's zero-or-one invariant. The one-line verified workflow guard change
+  is the recorded mechanical compatibility exception; its decisions are
+  unchanged. `PA13-03` adds backend-owned execution/bidding wave purpose;
+  legacy and verified turns normalize to `session_execution`, while explicit
+  `session_bidding` survives reads and later persistence. `PA13-04` adds atomic
+  batch scheduling with contiguous sequences, one version check, deterministic
+  events, and the verified-compatible `scheduleTurn` wrapper. `PA13-05` proves
+  independent sibling commits and whole-wave settlement with deterministic
+  cancellation evidence. `PA13-06` adds bounded optional Agent specialisation,
+  normalized focus tags, managed-instruction rendering, API validation, web
+  create/settings controls, and legacy loading. `PA13-07` snapshots that
+  structure into session participants; later Agent edits do not alter the
+  durable session routing metadata. `PA13-08` carries provider-neutral token
+  usage through Agent completion and runtime outcomes into the same atomic
+  mutation that settles each durable attempt. Full and delta detail reads expose
+  lease-free per-attempt usage plus deterministic input, cached-input, and
+  output totals across every recorded attempt, without thread IDs, prompts, or
+  raw output. `PA13-09` is next.
 
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 03:05 UTC | `bidding-agent-implementation` working tree | `PA13-08` usage-propagation gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 525 tests, 3 web files / 44 tests, both typechecks, and both production builds (569 tests total). The focused Compose suite passed 4 files / 88 tests and covers completion/runtime propagation, atomic success and failure persistence, cached-input aggregation, lease stripping, and exclusion of thread IDs, prompts, and raw output. |
+| 2026-08-31 02:56 UTC | `bidding-agent-implementation` working tree | `PA13-07` specialization-snapshot gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 525 tests, 3 web files / 44 tests, both typechecks, and both production builds (569 tests total). The service test mutates the Agent directory after creation and proves the session snapshot remains byte-stable. |
+| 2026-08-31 02:53 UTC | `bidding-agent-implementation` working tree | `PA13-06` Agent-specialisation gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 524 tests, 3 web files / 44 tests, both typechecks, and both production builds (568 tests total). Tests cover bounds, trimming/tag normalization, generated instructions, legacy Agents, and editable web controls. |
+| 2026-08-31 02:47 UTC | `bidding-agent-implementation` working tree | `PA13-05` wave-settlement gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 522 tests, 3 web files / 43 tests, both typechecks, and both production builds (565 tests total). Focused repository/reconciliation coverage passed 2 files / 80 tests; sibling commits and deterministic whole-wave cancellation are explicit. |
+| 2026-08-31 02:45 UTC | `bidding-agent-implementation` working tree | `PA13-04` atomic-scheduling gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 520 tests, 3 web files / 43 tests, both typechecks, and both production builds (563 tests total). Batch tests prove contiguous sequences, one run-version bump, deterministic event order, and no partial persistence on malformed input. |
+| 2026-08-31 02:40 UTC | `bidding-agent-implementation` working tree | `PA13-03` wave-purpose gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 518 tests, 3 web files / 43 tests, both typechecks, and both production builds (561 tests total). Focused purpose/loading and workflow coverage passed 4 files / 118 tests. |
+| 2026-08-31 02:36 UTC | `bidding-agent-implementation` working tree | `PA13-02` active-turn-array gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 518 tests, 3 web files / 43 tests, both workspace typechecks, and both production builds (561 tests total). Before the full gate, the focused store/repository/reconciliation/workflow/service set passed 8 files / 185 tests. Legacy normalization, non-destructive persistence, and verified zero-or-one behavior are explicitly covered. |
+| 2026-08-31 02:25 UTC | `bidding-agent-implementation` working tree | `PA13-01` contract gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 517 tests, 3 web files / 43 tests, both workspace typechecks, and both production builds (560 tests total). The branch mini-RFC is recorded and `PA13-02` is the next implementation task. The unchanged dependency audit reports 1 moderate and 5 high vulnerabilities. |
 | 2026-08-31 01:11-01:13 UTC | `phase-12` working tree | Checkpoint 12 live Compose rehearsal | **Passed:** one three-Agent run accepted three real prompts, survived an idle server restart, continued the same transcript, produced 12 ordered artifacts and 35 pre-End gapless events, then ended explicitly and rejected a later send. Prompt sizes 144/166/156 characters; wave latencies 7.183/6.231/5.589s. Visual automation was unavailable and is not claimed. |
 | 2026-08-31 01:08 UTC | `phase-12` working tree | **Checkpoint 12 gate** — final scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 517 tests, 3 web files / 43 tests, both typechecks, and both production builds (560 tests total). The focused 124-test durability set then passed three consecutive runs. |
 | 2026-08-31 | `3b11bef` | Checkpoint 11 final gate and manual restart check | **Passed:** 28 server files / 503 tests, 3 web files / 37 tests, both typechecks/builds (540 total), followed by the user's successful mid-attempt restart and Agent recovery check. |

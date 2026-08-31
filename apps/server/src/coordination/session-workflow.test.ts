@@ -50,6 +50,7 @@ const sessionRun = (
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 10 } } : {}),
   version: 1,
   createdAt: now,
@@ -111,6 +112,7 @@ const committedView = (
     run: sessionRun(protocol, {
       participants: runParticipants,
       nextTurnSequence: payloads.length + 1,
+      activeTurnIds: [],
       policy: {
         ...DEFAULT_COORDINATION_POLICY,
         workflow: "shared_session_v1",

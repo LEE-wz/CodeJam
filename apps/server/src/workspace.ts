@@ -46,6 +46,16 @@ export class WorkspaceManager {
       "",
       agent.instructions ||
         "Help the user complete coding tasks in this workspace. Explain material results concisely.",
+      ...(agent.specialization
+        ? [
+            "",
+            "## Bidding specialisation",
+            "",
+            "Perspective: " + agent.specialization.perspective,
+            "Focus areas: " + agent.specialization.focusAreas.join(", "),
+            "Bidding instructions: " + agent.specialization.biddingInstructions,
+          ]
+        : []),
       "",
       "## Workspace rules",
       "",

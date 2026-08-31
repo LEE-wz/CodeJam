@@ -65,6 +65,7 @@ const baseRun: CoordinationRun = {
   phase: "drafting",
   revision: 0,
   nextTurnSequence: 5,
+  activeTurnIds: [],
   version: 1,
   createdAt: FIXED_NOW,
   updatedAt: FIXED_NOW,

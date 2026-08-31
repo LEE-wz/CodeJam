@@ -87,6 +87,7 @@ const eventTypes: CoordinationEvent["type"][] = [
 
 /** Redacted, lease-free API fixture retained for Phase 4 UI work. */
 export const PHASE3_COMPLETED_RESPONSE: GetCoordinationRunResponse = {
+  usageTotals: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
   run: {
     id: runId,
     name: "Completed handoff fixture",
@@ -102,6 +103,7 @@ export const PHASE3_COMPLETED_RESPONSE: GetCoordinationRunResponse = {
     phase: "done",
     revision: 0,
     nextTurnSequence: 4,
+    activeTurnIds: [],
     latestProposalArtifactId: "artifact-proposal",
     latestReviewArtifactId: "artifact-review-approve",
     finalArtifactId: "artifact-final",

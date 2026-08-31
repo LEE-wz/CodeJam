@@ -99,6 +99,7 @@ const verifiedBase = (
       phase: status === "completed" ? "done" : "drafting",
       revision: name === "rejectionRevision" ? 1 : 0,
       nextTurnSequence: 2,
+      activeTurnIds: [],
       version: 2,
       ...(isTerminalFailure ? {
         errorCode: name === "interrupted" ? "SERVER_RESTARTED" : name === "stopped" ? "STOPPED_BY_USER" : "MAX_ATTEMPTS_EXCEEDED",
@@ -109,6 +110,7 @@ const verifiedBase = (
     },
     turns: [turn],
     attempts,
+    usageTotals: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
     artifacts,
     events: eventTypes.map((type, index) => ({
       id: `event-${name}-${index + 1}`,
@@ -258,6 +260,7 @@ const sessionBase = (
       phase: status === "completed" ? "done" : "sessioning",
       revision: 0,
       nextTurnSequence: turns.length + 1,
+      activeTurnIds: [],
       ...(latestCountdown === undefined ? {} : { sharedState: { nextExpectedNumber: latestCountdown } }),
       version: events.length,
       ...(status === "stopped" ? { errorCode: "STOPPED_BY_USER", errorMessage: "The run was stopped by the user." } : {}),
@@ -270,6 +273,7 @@ const sessionBase = (
     },
     turns,
     attempts,
+    usageTotals: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
     artifacts,
     events,
   };

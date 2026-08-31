@@ -40,6 +40,7 @@ const sessionRun = (): CoordinationRun => ({
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 2,
+  activeTurnIds: [],
   version: 1,
   createdAt: FIXED_NOW,
   updatedAt: FIXED_NOW,
