@@ -29,23 +29,23 @@ Everything asked for is achievable on the existing engine. Nothing requires repl
 
 These are the specific mechanisms each request has to move.
 
-**Run lifecycle.** [`CoordinationRun.status`](apps/server/src/coordination/types.ts) is `created | running | stop_requested | completed | failed | stopped`. Terminal states are immutable — [`repository.ts:614`](apps/server/src/coordination/repository.ts#L614) refuses to re-open a terminal run. There is no "alive but idle" state.
+**Run lifecycle.** [`CoordinationRun.status`](../../../apps/server/src/coordination/types.ts) is `created | running | stop_requested | completed | failed | stopped`. Terminal states are immutable — [`repository.ts:614`](../../../apps/server/src/coordination/repository.ts#L614) refuses to re-open a terminal run. There is no "alive but idle" state.
 
-**One active turn.** [`CoordinationRun.activeTurnId`](apps/server/src/coordination/types.ts) is a single optional pointer. `scheduleTurn` refuses to schedule while it is set ([`repository.ts:465`](apps/server/src/coordination/repository.ts#L465)), and `commitAcceptedArtifact`, `finishAttempt`, `settleActiveWork`, and `finishStopped` all read and clear it. 34 references across the tree.
+**One active turn.** [`CoordinationRun.activeTurnId`](../../../apps/server/src/coordination/types.ts) is a single optional pointer. `scheduleTurn` refuses to schedule while it is set ([`repository.ts:465`](../../../apps/server/src/coordination/repository.ts#L465)), and `commitAcceptedArtifact`, `finishAttempt`, `settleActiveWork`, and `finishStopped` all read and clear it. 34 references across the tree.
 
-**Orchestration is a strictly sequential `while` loop.** [`CoordinationService.runLoop`](apps/server/src/coordination/service.ts) decides, schedules one turn, awaits `executeTurnWithRetries`, repeats. `WorkflowDecision` is `schedule | complete | fail` ([`contracts.ts`](apps/server/src/coordination/contracts.ts)).
+**Orchestration is a strictly sequential `while` loop.** [`CoordinationService.runLoop`](../../../apps/server/src/coordination/service.ts) decides, schedules one turn, awaits `executeTurnWithRetries`, repeats. `WorkflowDecision` is `schedule | complete | fail` ([`contracts.ts`](../../../apps/server/src/coordination/contracts.ts)).
 
-**Turn selection is pure round-robin.** `participants[committedArtifacts.length % participants.length]` in [`session-workflow.ts`](apps/server/src/coordination/session-workflow.ts). The workflow also re-validates the entire committed history on every decision, which is why any change to turn shape ripples into `validateSessionView`.
+**Turn selection is pure round-robin.** `participants[committedArtifacts.length % participants.length]` in [`session-workflow.ts`](../../../apps/server/src/coordination/session-workflow.ts). The workflow also re-validates the entire committed history on every decision, which is why any change to turn shape ripples into `validateSessionView`.
 
-**Reservations are derived, not stored.** An agent is reserved while it appears in a run whose status is `running` or `stop_requested` ([`repository.ts:133`](apps/server/src/coordination/repository.ts#L133), mirrored in [`agent-service.ts`](apps/server/src/agent-service.ts)). Reservation blocks Playground use, edit, delete, start/stop of that agent.
+**Reservations are derived, not stored.** An agent is reserved while it appears in a run whose status is `running` or `stop_requested` ([`repository.ts:133`](../../../apps/server/src/coordination/repository.ts#L133), mirrored in [`agent-service.ts`](../../../apps/server/src/agent-service.ts)). Reservation blocks Playground use, edit, delete, start/stop of that agent.
 
-**Start requires every participant to be `ready`.** [`repository.ts:206`](apps/server/src/coordination/repository.ts#L206) returns `AGENT_NOT_READY` if any participant's agent status is not exactly `ready`; a failed Codex run leaves the agent in `error` ([`agent-service.ts`](apps/server/src/agent-service.ts), `executeRun` catch branch).
+**Start requires every participant to be `ready`.** [`repository.ts:206`](../../../apps/server/src/coordination/repository.ts#L206) returns `AGENT_NOT_READY` if any participant's agent status is not exactly `ready`; a failed Codex run leaves the agent in `error` ([`agent-service.ts`](../../../apps/server/src/agent-service.ts), `executeRun` catch branch).
 
-**Storage.** [`JsonStore.mutate`](apps/server/src/store.ts) deep-clones the entire database, runs the mutation, serialises the whole document to JSON, writes a temp file and renames — **on every single mutation**. One committed turn costs roughly four such whole-file writes (schedule, begin attempt, commit, plus events inside them).
+**Storage.** [`JsonStore.mutate`](../../../apps/server/src/store.ts) deep-clones the entire database, runs the mutation, serialises the whole document to JSON, writes a temp file and renames — **on every single mutation**. One committed turn costs roughly four such whole-file writes (schedule, begin attempt, commit, plus events inside them).
 
-**Read model.** `GET /api/coordination-runs/:id` returns every turn, attempt, artifact, and event for the run, unpaginated ([`routes.ts`](apps/server/src/coordination/routes.ts)), and the UI polls it every 1.5s while active ([`RelayWorkspace.tsx`](apps/web/src/RelayWorkspace.tsx)).
+**Read model.** `GET /api/coordination-runs/:id` returns every turn, attempt, artifact, and event for the run, unpaginated ([`routes.ts`](../../../apps/server/src/coordination/routes.ts)), and the UI polls it every 1.5s while active ([`RelayWorkspace.tsx`](../../../apps/web/src/RelayWorkspace.tsx)).
 
-**Prompting.** [`RoleScopedContextBuilder`](apps/server/src/coordination/context-builder.ts) renders the full transcript as `Name: content` lines, with a fixed truncation ladder against `policy.contextMaxChars` (default 12,000). Session turn instructions are hard-coded per protocol.
+**Prompting.** [`RoleScopedContextBuilder`](../../../apps/server/src/coordination/context-builder.ts) renders the full transcript as `Name: content` lines, with a fixed truncation ladder against `policy.contextMaxChars` (default 12,000). Session turn instructions are hard-coded per protocol.
 
 **There is no user-message concept anywhere.** Artifacts are always produced by an agent turn and always carry `turnId`, `createdByRole`, `createdByAgentId`.
 
@@ -53,7 +53,7 @@ These are the specific mechanisms each request has to move.
 
 ## 3. Contract amendments required (blocking)
 
-[`docs/development/README.md`](docs/development/README.md) forbids silently editing frozen contracts, and [`overview-sessions.md`](docs/development/overview-sessions.md) Section 2 explicitly lists as non-goals the exact things requests 8 and 9 ask for. Before any code, record a mini-RFC in [`ASSUMPTIONS_AND_DECISIONS.md`](docs/development/ASSUMPTIONS_AND_DECISIONS.md) and amend `overview-sessions.md` for:
+[`docs/development/README.md`](../README.md) forbids silently editing frozen contracts, and [`overview-sessions.md`](../overview-sessions.md) Section 2 explicitly lists as non-goals the exact things requests 8 and 9 ask for. Before any code, record a mini-RFC in [`ASSUMPTIONS_AND_DECISIONS.md`](../ASSUMPTIONS_AND_DECISIONS.md) and amend `overview-sessions.md` for:
 
 1. **Parallel fan-out turns** — currently "explicit cut" (Section 2 non-goals). Request 8 reverses it.
 2. **Countdown protocol removal** — currently "the headline acceptance demo" (Sections 1, 2, 6.1). Request 3 deletes it.
@@ -152,7 +152,7 @@ Three separate causes; fix all three.
 **(c) Whole-run reservation** — see D5. This becomes the dominant cause once sessions are long-lived, so R1 must be fixed *before* R6 ships.
 
 ### R2 — Remove verified handoff from the frontend
-Frontend-only removal. Delete the workflow toggle, role selects, required-sections editor, `maxRevisions`, `ArtifactCard`, and the verified branches of `validateForm` in [`RelayWorkspace.tsx`](apps/web/src/RelayWorkspace.tsx) (~8 references), trim [`coordination-types.ts`](apps/web/src/coordination-types.ts), and rewrite the verified fixtures in [`coordination-fixtures.ts`](apps/web/src/testing/coordination-fixtures.ts) and the 7 verified cases in [`RelayWorkspace.test.tsx`](apps/web/src/RelayWorkspace.test.tsx). The server keeps `verified_handoff_v1` intact, so all 474 server tests stay green and old runs still render. Historical verified runs in the run list should be shown read-only rather than hidden, or filtered out — pick one (§7).
+Frontend-only removal. Delete the workflow toggle, role selects, required-sections editor, `maxRevisions`, `ArtifactCard`, and the verified branches of `validateForm` in [`RelayWorkspace.tsx`](../../../apps/web/src/RelayWorkspace.tsx) (~8 references), trim [`coordination-types.ts`](../../../apps/web/src/coordination-types.ts), and rewrite the verified fixtures in [`coordination-fixtures.ts`](../../../apps/web/src/testing/coordination-fixtures.ts) and the 7 verified cases in [`RelayWorkspace.test.tsx`](../../../apps/web/src/RelayWorkspace.test.tsx). The server keeps `verified_handoff_v1` intact, so all 474 server tests stay green and old runs still render. Historical verified runs in the run list should be shown read-only rather than hidden, or filtered out — pick one (§7).
 
 ### R3 — Remove countdown, keep free chat
 ~140 references across 20 files, ~85% of them tests and fixtures. Touches `types.ts` (`SessionProtocol`, `sharedState`, `sessionStartValue`, `SESSION_LIMITS`), `routes.ts`, `service.createSessionRun`, `session-workflow.ts`, `artifact-protocol.ts`, `repository.nextCountdownValue`, `context-builder.taskInstruction`, plus web form/state display.
@@ -176,7 +176,7 @@ Composed of D1 + D2 plus:
 User-visible strings, nav item, hero, empty states, CSS class prefixes (68 `relay-*` rules), and the component/file rename `RelayWorkspace.tsx` → `SessionWorkspace.tsx` + its test. **Recommendation: leave `/api/coordination-runs` and the server-side `coordination*` names alone** — renaming them churns ~1,100 lines of API tests for no user-visible gain. Note the product-name decision in `ASSUMPTIONS_AND_DECISIONS.md`, and sweep `README.md`, `STATUS.md`, and `docs/development/*` in the release phase.
 
 ### R8 — Parallel agents
-See D4. This is the largest single refactor: 34 `activeTurnId` references, the repository's race tests ([`repository.test.ts`](apps/server/src/coordination/repository.test.ts), 1,466 lines), and the workflow's `validateSessionView`, which currently asserts strict round-robin routing against sequence order and will reject any parallel history until rewritten.
+See D4. This is the largest single refactor: 34 `activeTurnId` references, the repository's race tests ([`repository.test.ts`](../../../apps/server/src/coordination/repository.test.ts), 1,466 lines), and the workflow's `validateSessionView`, which currently asserts strict round-robin routing against sequence order and will reject any parallel history until rewritten.
 
 New tests required: two turns committing concurrently, one committing while a sibling times out, stop during a wave (all siblings cancelled), restart mid-wave, and a wave whose agent is busy from the Playground.
 
@@ -187,7 +187,7 @@ See D3. Depends on R8 for the `parallel` branch and on R6 for having a user prom
 
 ## 6. Phased plan
 
-Continues the repository's numbering. Each phase = one task branch, tasks tracked in `STATUS.md`, and the standard Docker Compose `npm run check` gate from [`docs/development/README.md`](docs/development/README.md) before any task is marked complete.
+Continues the repository's numbering. Each phase = one task branch, tasks tracked in `STATUS.md`, and the standard Docker Compose `npm run check` gate from [`docs/development/README.md`](../README.md) before any task is marked complete.
 
 Each phase has a full instruction sheet in the phases folder, written to the same standard as Phases 0–9. The tables below are the summary; the sheet is the authority for its phase.
 

@@ -9,6 +9,7 @@ workspaces/
 codex-home/
 coverage/
 p15-01-store-scale.json
+p15-02-read-path.json
 *.log
 *.tsbuildinfo
 .DS_Store
