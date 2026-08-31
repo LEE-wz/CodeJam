@@ -625,6 +625,9 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
   const legacy = Boolean(selectedRun) && !session;
   const ungroupedEvents = useMemo(() => details?.events.filter(({ turnId }) => !turnId) ?? [], [details]);
   const readyCount = agents.filter(({ status }) => status === "ready").length;
+  const activeWaveMessage = selectedRun?.activeTurnIds.length
+    ? `${selectedRun.activeTurnIds.length} ${selectedRun.activeTurnIds.length === 1 ? "Agent is" : "Agents are"} working in this wave.`
+    : "Agents are working on this wave.";
 
   if (showCreate) return <CreationForm agents={agents} onCreated={(run) => void created(run)} onCancel={() => setShowCreate(false)} />;
 
@@ -712,7 +715,7 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                       placeholder={activeStatuses.has(selectedRun.status) ? "Agents are working…" : "Ask the Agents what to do next"}
                     />
                     <div className="session-composer-actions">
-                      <p>{activeStatuses.has(selectedRun.status) ? "Agents are working. Stop ends only this wave; End session permanently closes the conversation." : selectedRun.status === "completed" ? "This session has ended." : "Send starts the next wave. Stop cancels a wave; End session permanently closes the conversation."}</p>
+                      <p>{activeStatuses.has(selectedRun.status) ? `${activeWaveMessage} Stop ends only this wave; End session permanently closes the conversation.` : selectedRun.status === "completed" ? "This session has ended." : "Send starts the next wave. Stop cancels a wave; End session permanently closes the conversation."}</p>
                       <button className="button button-primary" disabled={!message.trim() || action !== null || (selectedRun.status !== "created" && selectedRun.status !== "awaiting_input")}>{action === "send" ? "Sending…" : "Send message"}</button>
                     </div>
                   </form>
