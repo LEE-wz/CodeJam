@@ -1,11 +1,11 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (`PA14-01`–`PA14-06` complete; `PA14-07` next)
+**Last audit:** 2026-08-31 (`PA14-01`–`PA14-08` complete; `PA14-09` next)
 **Audited checkpoint:** Auction Phase 13 complete at `085e765`
-**Implementation branch:** `bidding-agent-phase-14` (base `085e765`; auction-track root `aa17407`)
+**Implementation branch:** `bidding-agent-implementation` (base `085e765`; auction-track root `aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Parallel Phase 14 - Adaptive Auction Coordination
-**Current gate:** Auction Checkpoint 14 in progress (`PA14-07` Auto primary candidate next)
+**Current gate:** Auction Checkpoint 14 in progress (`PA14-09` durable award next)
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
 Phases 11-12 and auction Phase 13 `complete`; auction Phase 14 `in_progress`; Phase 15 `not_started`
 
@@ -46,10 +46,10 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Implement `PA14-07`: schedule the one-call Auto primary bid,
-publish a qualifying direct candidate, and otherwise reuse that artifact as the
-primary bid before scheduling the exclusion-aware remaining-participant wave.
-Keep Auto fail-closed until that complete decision path is in place.
+**Resume here.** Implement `PA14-09`: add the strict backend-authored
+`session_award` artifact and version-checked one-award-per-user-message
+repository command, then connect the completed `confidence_cost_v1` ranker to
+that durable award boundary.
 
 ## Auction Phase 14 task ledger
 
@@ -61,8 +61,27 @@ Keep Auto fail-closed until that complete decision path is in place.
 | PA14-04 | `complete` | Explicit direct mode selects one deterministic primary and schedules exactly one ordinary `session_turn`/`session_message` execution on the normal Agent thread. Workflow and walking-skeleton tests prove it creates no bid wave and never silently escalates. |
 | PA14-05 | `complete` | Added strict `session_bid` turn, artifact, payload, exhaustive maps, bounded Zod schema, JSON-only parser, backend provenance, assignment/budget cross-field checks, field-specific retry feedback, own-specialisation prompt block, two minified examples, and losing-bid context exclusion. Exact field/array boundaries are covered. |
 | PA14-06 | `complete` | Explicit Auction atomically schedules one fresh-thread bid turn for every participant. The shared wave builder excludes Agents with a prior bid for the PA14-07 Auto escalation path; retries stay on the same turn under `maxBidAttempts`. Walking-skeleton evidence proves one turn per Agent, private non-transcript bid commits, and bounded same-opportunity retries. |
+| PA14-07 | `complete` | Auto schedules one fresh-thread primary bid. A direct recommendation is published only after recommendation, candidate, confidence, output-budget, single-plan, and durable-policy gates pass; the version-checked projection records `sourceBidArtifactId`, Agent provenance, and one transcript sequence. Recommendation/confidence misses reuse the primary bid and atomically schedule only remaining participants; exhausted primary attempts retire without failing the round. |
+| PA14-08 | `complete` | Added pure `confidence_cost_v1` eligibility and ranking: UTF-8 byte input estimation, sequential predecessor reserve, 4/1/16 weighted units with projected cached input fixed at zero, exact integer normalization, cold-start/latest-20 calibration, bounded reliability penalties, score clamping, minimum-valid-bid result, and roster-stable ties. Explanations expose only integer components and never prompt or raw output. |
 
-### Phase 14 verification evidence (`PA14-01`-`PA14-06`)
+### Phase 14 verification evidence (`PA14-01`-`PA14-08`)
+
+- The repository-wide `npm run check` passed both workspace typechecks, **33
+  server files / 628 tests**, **4 web files / 57 tests**, and both production
+  builds (**685 tests total**).
+- Focused Auto workflow/walking-skeleton coverage passed **51 tests**. It proves
+  the one-call accepted path, fresh primary thread, source-bid transcript
+  projection, recommendation and exact confidence-threshold escalation, reuse
+  of the primary bid, and exclusion from the remaining-participant wave.
+- The scorer suite adds **9 deterministic tests** covering UTF-8 rounding,
+  sequential reserve, cold start, latest-20 calibration, the exact 125%
+  underestimation boundary, eligibility failures, an exact component snapshot,
+  roster-stable ties, and the minimum-valid-bid boundary.
+- The first repository check found the current local install lacked the web
+  workspace's lockfile-declared Testing Library packages. A clean `npm ci`
+  restored the locked dependency tree; no manifest or lockfile changed. The
+  clean check above then passed. `npm ci` reported the unchanged **1 moderate
+  and 5 high vulnerabilities**.
 
 - `docker compose build launchpad` passed with both production builds.
 - The mandatory disposable Compose `npm run check` passed both workspace

@@ -251,6 +251,102 @@ describe("session create validation and context probe", () => {
 });
 
 describe("session walking skeleton", () => {
+  const autoBid = (overrides: Record<string, unknown> = {}) => JSON.stringify({
+    schemaVersion: 1,
+    type: "session_bid",
+    recommendation: "direct",
+    candidateAnswer: "Published from the primary bid.",
+    plan: {
+      summary: "Answer directly.",
+      mode: "single",
+      assignments: [{
+        agentId: PARTICIPANT_ONE.id,
+        position: 1,
+        instruction: "Answer the request.",
+      }],
+      risks: [],
+      assumptions: [],
+    },
+    confidenceBps: 8_000,
+    estimatedOutputTokens: 1_000,
+    ...overrides,
+  });
+
+  it("publishes a qualifying Auto primary candidate with no second model call", async () => {
+    const auto = await startSession([succeeds(autoBid())], {
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 10,
+        auctionPolicy: DEFAULT_SESSION_AUCTION_POLICY,
+      },
+    });
+    const details = await settle(auto.service, auto.runId);
+    const bid = details.artifacts.find(({ type }) => type === "session_bid");
+    const message = details.artifacts.find(({ type }) => type === "session_message");
+
+    expect(details.run.status).toBe("awaiting_input");
+    expect(details.turns).toHaveLength(1);
+    expect(details.turns[0]).toMatchObject({ kind: "session_bid", status: "committed" });
+    expect(auto.runtime.starts).toHaveLength(1);
+    expect(auto.runtime.starts[0]?.threadPolicy).toBe("fresh");
+    expect(message).toMatchObject({
+      type: "session_message",
+      sourceBidArtifactId: bid?.id,
+      createdByAgentId: PARTICIPANT_ONE.id,
+      payload: { content: "Published from the primary bid." },
+      transcriptSequence: 2,
+    });
+  });
+
+  it.each([
+    ["auction recommendation", { recommendation: "auction", candidateAnswer: undefined }],
+    ["confidence below threshold", { confidenceBps: 7_999 }],
+  ])("escalates Auto for %s and reuses the primary bid", async (_label, overrides) => {
+    const remainingBid = autoBid({
+      recommendation: "auction",
+      candidateAnswer: undefined,
+      plan: {
+        summary: "Use the first participant.",
+        mode: "sequential",
+        assignments: [{
+          agentId: PARTICIPANT_ONE.id,
+          position: 1,
+          instruction: "Answer the request.",
+        }],
+        risks: [],
+        assumptions: [],
+      },
+    });
+    const auto = await startSession([
+      succeeds(autoBid(overrides)),
+      succeeds(remainingBid),
+      succeeds(remainingBid),
+    ], {
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 10,
+        auctionPolicy: DEFAULT_SESSION_AUCTION_POLICY,
+      },
+    });
+    const details = await settle(auto.service, auto.runId);
+
+    expect(details.run).toMatchObject({
+      status: "failed",
+      errorMessage: "Settled Auto bids require the PA14 scoring decision",
+    });
+    expect(details.turns).toHaveLength(3);
+    expect(details.turns.map(({ agentId }) => agentId)).toEqual([
+      PARTICIPANT_ONE.id,
+      PARTICIPANT_TWO.id,
+      PARTICIPANT_THREE.id,
+    ]);
+    expect(auto.runtime.starts).toHaveLength(3);
+    expect(details.artifacts.filter(({ type }) => type === "session_bid")).toHaveLength(3);
+    expect(details.artifacts.some(({ type }) => type === "session_message")).toBe(false);
+  });
+
   it("executes explicit direct routing once without scheduling a bid wave", async () => {
     const direct = await startSession([
       succeeds(JSON.stringify(freeChatPayload("Direct answer", true))),

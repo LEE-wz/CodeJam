@@ -18,6 +18,8 @@ import type {
   FinishAttemptInput,
   NonTerminalRunSummary,
   PromptEnvelope,
+  PublishBidCandidateInput,
+  PublishBidCandidateResult,
   ReconcileRunResult,
   RuntimeExecutionInput,
   RuntimeOutcome,
@@ -145,6 +147,12 @@ export class FakeCoordinationRepository implements CoordinationRepository {
     _input: CommitAcceptedArtifactInput,
   ): Promise<CommitAcceptedArtifactResult> {
     return notImplemented("FakeCoordinationRepository.commitAcceptedArtifact");
+  }
+
+  async publishBidCandidate(
+    _input: PublishBidCandidateInput,
+  ): Promise<PublishBidCandidateResult> {
+    return notImplemented("FakeCoordinationRepository.publishBidCandidate");
   }
 
   async finishAttempt(_input: FinishAttemptInput): Promise<"finished" | "stale"> {

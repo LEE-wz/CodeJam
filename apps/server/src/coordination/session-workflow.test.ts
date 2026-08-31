@@ -334,16 +334,18 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
     });
   });
 
-  it("keeps auto routing fail-closed until the primary-candidate phase", () => {
+  it("schedules exactly one fresh-purpose primary bid for Auto routing", () => {
     const view = committedView("free_chat", []);
     view.run.policy = {
       ...view.run.policy,
       auctionPolicy: DEFAULT_SESSION_AUCTION_POLICY,
     };
     expect(workflow.decideNext(view)).toMatchObject({
-      kind: "fail",
-      code: "INVALID_STATE",
-      message: "Auto routing requires the PA14 primary-candidate implementation",
+      kind: "schedule",
+      agentId: PARTICIPANT_ONE.id,
+      turnKind: "session_bid",
+      wavePurpose: "session_bidding",
+      expectedArtifactType: "session_bid",
     });
   });
 

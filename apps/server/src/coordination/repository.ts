@@ -18,6 +18,8 @@ import type {
   FinishAttemptInput,
   IdGenerator,
   NonTerminalRunSummary,
+  PublishBidCandidateInput,
+  PublishBidCandidateResult,
   ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
@@ -52,6 +54,8 @@ export type {
   FailTurnResult,
   FinishAttemptInput,
   NonTerminalRunSummary,
+  PublishBidCandidateInput,
+  PublishBidCandidateResult,
   ReconcileRunResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
@@ -693,6 +697,94 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         kind: "committed",
         run: structuredClone(run),
         turn: structuredClone(turn),
+        artifact: structuredClone(artifact),
+      } as const;
+    });
+  }
+
+  async publishBidCandidate(
+    input: PublishBidCandidateInput,
+  ): Promise<PublishBidCandidateResult> {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
+      if (!run) return { kind: "not_found" } as const;
+      if (run.status !== "running" || run.version !== input.expectedRunVersion) {
+        return { kind: "stale", currentRun: structuredClone(run) } as const;
+      }
+
+      const bid = database.coordinationArtifacts.find(
+        (artifact) => artifact.id === input.bidArtifactId && artifact.runId === run.id,
+      );
+      const user = database.coordinationArtifacts.find(
+        (artifact) => artifact.id === input.userArtifactId && artifact.runId === run.id,
+      );
+      const turn = bid?.turnId
+        ? database.coordinationTurns.find((candidate) => candidate.id === bid.turnId)
+        : undefined;
+      const policy = run.policy.auctionPolicy;
+      if (
+        run.lastUserArtifactId !== input.userArtifactId ||
+        run.activeTurnIds.length > 0 ||
+        !policy ||
+        policy.routingMode !== "auto" ||
+        !user ||
+        user.type !== "user_message" ||
+        !bid ||
+        bid.type !== "session_bid" ||
+        !turn ||
+        turn.status !== "committed" ||
+        turn.outputArtifactId !== bid.id ||
+        !turn.inputArtifactIds.includes(user.id) ||
+        bid.payload.recommendation !== "direct" ||
+        bid.payload.candidateAnswer === undefined ||
+        bid.payload.confidenceBps < policy.directConfidenceThresholdBps ||
+        bid.payload.estimatedOutputTokens > policy.directOutputTokenBudget
+      ) {
+        return { kind: "invalid", currentRun: structuredClone(run) } as const;
+      }
+
+      const existing = database.coordinationArtifacts.find(
+        (artifact) =>
+          artifact.runId === run.id &&
+          artifact.type === "session_message" &&
+          artifact.sourceBidArtifactId === bid.id,
+      );
+      if (existing) {
+        return {
+          kind: "published",
+          run: structuredClone(run),
+          artifact: structuredClone(existing),
+        } as const;
+      }
+
+      const now = this.clock.nowIso();
+      const content = bid.payload.candidateAnswer.trim();
+      const artifact: CoordinationArtifact = {
+        id: this.ids.artifactId(),
+        runId: run.id,
+        turnId: turn.id,
+        createdByRole: "participant",
+        createdByAgentId: bid.createdByAgentId,
+        type: "session_message",
+        payload: { schemaVersion: 1, type: "session_message", content },
+        sourceBidArtifactId: bid.id,
+        transcriptSequence: nextTranscriptSequence(database, run.id),
+        sizeChars: content.length,
+        createdAt: now,
+      };
+      database.coordinationArtifacts.push(artifact);
+      run.version += 1;
+      run.updatedAt = now;
+      this.append(database, this.events.bidCandidatePublished({
+        runId: run.id,
+        turnId: turn.id,
+        artifactId: artifact.id,
+        agentId: bid.createdByAgentId,
+        transcriptSequence: artifact.transcriptSequence!,
+      }));
+      return {
+        kind: "published",
+        run: structuredClone(run),
         artifact: structuredClone(artifact),
       } as const;
     });

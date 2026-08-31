@@ -330,6 +330,53 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     };
   }
 
+  async publishBidCandidate(input: import("../contracts.js").PublishBidCandidateInput) {
+    const run = this.runs.get(input.runId);
+    if (!run) return { kind: "not_found" } as const;
+    if (run.status !== "running" || run.version !== input.expectedRunVersion) {
+      return { kind: "stale", currentRun: structuredClone(run) } as const;
+    }
+    const bid = this.artifacts.find((artifact) => artifact.id === input.bidArtifactId);
+    const user = this.artifacts.find((artifact) => artifact.id === input.userArtifactId);
+    const turn = bid?.turnId ? this.findTurn(bid.turnId) : undefined;
+    const policy = run.policy.auctionPolicy;
+    if (
+      run.lastUserArtifactId !== input.userArtifactId ||
+      run.activeTurnIds.length > 0 ||
+      !policy || policy.routingMode !== "auto" ||
+      !user || user.type !== "user_message" ||
+      !bid || bid.type !== "session_bid" ||
+      !turn || turn.status !== "committed" || turn.outputArtifactId !== bid.id ||
+      !turn.inputArtifactIds.includes(user.id) ||
+      bid.payload.recommendation !== "direct" ||
+      bid.payload.candidateAnswer === undefined ||
+      bid.payload.confidenceBps < policy.directConfidenceThresholdBps ||
+      bid.payload.estimatedOutputTokens > policy.directOutputTokenBudget
+    ) return { kind: "invalid", currentRun: structuredClone(run) } as const;
+    const existing = this.artifacts.find(
+      (artifact) => artifact.type === "session_message" && artifact.sourceBidArtifactId === bid.id,
+    );
+    if (existing) return { kind: "published", run: structuredClone(run), artifact: structuredClone(existing) } as const;
+    const content = bid.payload.candidateAnswer.trim();
+    const artifact: import("../types.js").CoordinationArtifact = {
+      id: `published-${bid.id}`,
+      runId: run.id,
+      turnId: turn.id,
+      createdByRole: "participant",
+      createdByAgentId: bid.createdByAgentId,
+      type: "session_message",
+      payload: { schemaVersion: 1, type: "session_message", content },
+      sourceBidArtifactId: bid.id,
+      transcriptSequence: this.nextTranscriptSequence(run.id),
+      sizeChars: content.length,
+      createdAt: this.clock.nowIso(),
+    };
+    this.artifacts.push(artifact);
+    run.version += 1;
+    run.updatedAt = this.clock.nowIso();
+    return { kind: "published", run: structuredClone(run), artifact: structuredClone(artifact) } as const;
+  }
+
   async finishAttempt(input: FinishAttemptInput): Promise<"finished" | "stale"> {
     const run = this.runs.get(input.runId);
     const turn = this.findTurn(input.turnId);

@@ -464,6 +464,8 @@ export type CoordinationArtifact =
   | (CoordinationArtifactBase & {
       type: "session_message";
       payload: SessionMessagePayload;
+      /** Backend publication of an accepted Auto bid candidate (PA14-07). */
+      sourceBidArtifactId?: CoordinationArtifactId;
     })
   | UserMessageArtifact;
 
@@ -498,6 +500,7 @@ export type CoordinationEventType =
    * terminal run event.
    */
   | "turn.failed"
+  | "bid.candidate_published"
   | "user.message_appended"
   | "run.awaiting_input";
 

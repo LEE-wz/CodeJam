@@ -253,6 +253,14 @@ export interface CoordinationEventFactory {
     transcriptSequence: number;
   }): CoordinationEventDraft;
 
+  bidCandidatePublished(input: {
+    runId: CoordinationRunId;
+    turnId: CoordinationTurnId;
+    artifactId: CoordinationArtifactId;
+    agentId: AgentId;
+    transcriptSequence: number;
+  }): CoordinationEventDraft;
+
   runAwaitingInput(input: { runId: CoordinationRunId }): CoordinationEventDraft;
 }
 
@@ -555,6 +563,17 @@ export const createCoordinationEventFactory = (
         actor: USER,
         message: "User message appended.",
         details: { transcriptSequence },
+      }),
+
+    bidCandidatePublished: ({ runId, turnId, artifactId, agentId, transcriptSequence }) =>
+      draft({
+        runId,
+        turnId,
+        artifactId,
+        type: "bid.candidate_published",
+        actor: agentActor(agentId, "participant"),
+        message: "Accepted Auto candidate published.",
+        details: { agentId, transcriptSequence },
       }),
 
     runAwaitingInput: ({ runId }) =>

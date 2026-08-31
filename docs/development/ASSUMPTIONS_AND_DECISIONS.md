@@ -849,6 +849,12 @@ assignment's declared output allowance in every later prompt. This is a
 documented conservative estimator, not provider billing. Projected cached input
 is zero.
 
+The v1 bid schema declares one execution output estimate rather than a separate
+allowance per assignment. Therefore each earlier sequential assignment reserves
+that full bid estimate in every later prompt. This intentionally overestimates
+multi-step plans and is deterministic until a later schema version introduces
+per-assignment allowances.
+
 Weighted token units are `4 * input + 1 * cachedInput + 16 * output` (equivalent
 to weights 1, 0.25, and 4 without floating point). The normalization ceiling is
 the same formula using the run context ceiling estimate and

@@ -876,6 +876,26 @@ export class CoordinationService implements CoordinationServiceContract {
         });
         return;
       }
+      if (decision.kind === "publish_bid_candidate") {
+        const published = await this.dependencies.repository.publishBidCandidate({
+          runId,
+          expectedRunVersion: details.run.version,
+          userArtifactId: decision.userArtifactId,
+          bidArtifactId: decision.bidArtifactId,
+        });
+        if (published.kind === "not_found") return;
+        if (published.kind === "stale") continue;
+        if (published.kind === "invalid") {
+          await this.dependencies.repository.failRun({
+            runId,
+            code: "INVALID_STATE",
+            message: "Auto candidate no longer satisfies its publication gates",
+          });
+          return;
+        }
+        reconciliations = 0;
+        continue;
+      }
 
       if (decision.kind === "schedule_wave") {
         const waveOutcome = await this.runWave(runId, epoch, details.run, decision);
@@ -895,7 +915,12 @@ export class CoordinationService implements CoordinationServiceContract {
       const scheduled = await this.dependencies.repository.scheduleTurn({
         runId,
         expectedRunVersion: details.run.version,
-        turn: this.makeTurn(details.run, decision),
+        turn: this.makeTurn(
+          details.run,
+          decision,
+          details.run.nextTurnSequence,
+          decision.wavePurpose ?? "session_execution",
+        ),
         nextPhase: decision.phase,
         nextRevision: decision.revision,
       });
@@ -931,6 +956,19 @@ export class CoordinationService implements CoordinationServiceContract {
       }
       if (outcome === "settled") {
         return;
+      }
+      if (outcome === "exhausted") {
+        const retired = await this.dependencies.repository.failTurn({
+          runId,
+          turnId: scheduled.turn.id,
+          code: "MAX_ATTEMPTS_EXCEEDED",
+          message: "Primary participant did not return a usable bid for this round",
+        });
+        if (retired.kind === "failed") {
+          reconciliations = 0;
+          continue;
+        }
+        if (retired.kind === "not_found") return;
       }
 
       reconciliations += 1;
@@ -1183,7 +1221,9 @@ export class CoordinationService implements CoordinationServiceContract {
     // participant with a long Playground history and one with none receive
     // exactly the same explicit coordination context.
     const threadPolicy: ExecutionThreadPolicy =
-      wavePurpose === "session_bidding" ? "fresh" : "agent_default";
+      scheduledTurn.kind === "session_bid" || wavePurpose === "session_bidding"
+        ? "fresh"
+        : "agent_default";
     let validationErrors: string[] = [];
     let lastErrorCode: CoordinationErrorCode = "AGENT_EXECUTION_FAILED";
     let lastErrorMessage = "Agent execution failed";
@@ -1385,7 +1425,7 @@ export class CoordinationService implements CoordinationServiceContract {
       }
     }
 
-    if (wavePurpose !== undefined) {
+    if (wavePurpose !== undefined || scheduledTurn.kind === "session_bid") {
       // The supervisor owns the consequence. Failing the run here would settle
       // it while siblings are still executing, which is exactly what PA13-11
       // forbids.

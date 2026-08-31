@@ -321,11 +321,11 @@ as primarily self-reported.
   explicit auction mode and for remaining participants after Auto escalation.
   Exactly one bid opportunity exists per Agent per user-message round; retries
   do not create another opportunity.
-- [ ] **PA14-07** Implement the one-call Auto primary candidate. Accept and
+- [x] **PA14-07** Implement the one-call Auto primary candidate. Accept and
   publish it only when recommendation, confidence, budget, and policy gates all
   pass; otherwise reuse the valid artifact as the primary bid and expand the
   wave.
-- [ ] **PA14-08** Implement deterministic eligibility, token-cost normalization,
+- [x] **PA14-08** Implement deterministic eligibility, token-cost normalization,
   cold-start handling, calibration/reliability penalties, score arithmetic, and
   stable ties. Snapshot every boundary and publish a human-readable scoring
   explanation that contains no prompt or raw output.

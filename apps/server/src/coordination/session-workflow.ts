@@ -168,6 +168,23 @@ const validateSessionView = (
     }
     return invalidState("Committed session turn has the wrong artifact type");
   }
+  const publishedCandidates = artifacts.filter(
+    (artifact): artifact is SessionArtifact & { sourceBidArtifactId: CoordinationArtifactId } =>
+      artifact.type === "session_message" && artifact.sourceBidArtifactId !== undefined,
+  );
+  for (const projection of publishedCandidates) {
+    const source = artifactsById.get(projection.sourceBidArtifactId);
+    if (
+      !source ||
+      source.type !== "session_bid" ||
+      source.turnId !== projection.turnId ||
+      source.createdByAgentId !== projection.createdByAgentId ||
+      source.payload.candidateAnswer?.trim() !== projection.payload.content
+    ) {
+      return invalidState("Published Auto candidate has invalid provenance");
+    }
+    committedArtifacts.push(projection);
+  }
   const userArtifacts = artifacts.filter(
     (artifact): artifact is UserArtifact => artifact.type === "user_message",
   );
@@ -244,13 +261,30 @@ export const buildSessionBidWaveDecision = (input: {
     })),
 });
 
+export const qualifiesForAutoDirectPublication = (
+  bid: BidArtifact,
+  run: WorkflowView["run"],
+): boolean => {
+  const policy = run.policy.auctionPolicy;
+  return Boolean(
+    policy?.routingMode === "auto" &&
+    bid.payload.recommendation === "direct" &&
+    bid.payload.candidateAnswer?.trim() &&
+    bid.payload.confidenceBps >= policy.directConfidenceThresholdBps &&
+    bid.payload.estimatedOutputTokens <= policy.directOutputTokenBudget &&
+    bid.payload.plan.mode === "single" &&
+    bid.payload.plan.assignments.length === 1 &&
+    bid.payload.plan.assignments[0]?.agentId === bid.createdByAgentId,
+  );
+};
+
 export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
   decideNext(view: WorkflowView): WorkflowDecision {
     const validated = validateSessionView(view);
     if ("kind" in validated) return validated;
 
     const { run } = view;
-    const { participants, committedArtifacts, transcriptArtifacts, turns } = validated;
+    const { participants, committedArtifacts, bidArtifacts, transcriptArtifacts, turns } = validated;
     const lastArtifactId = finalArtifactId(committedArtifacts);
 
     if (run.policy.sessionProtocol === "countdown") {
@@ -343,7 +377,70 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           }
           return buildSessionBidWaveDecision({ participants, inputArtifactIds });
         }
-        return invalidState("Auto routing requires the PA14 primary-candidate implementation");
+        const currentBidTurns = turns.filter(
+          (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
+        );
+        const currentBids = bidArtifacts.filter((bid) =>
+          currentBidTurns.some((turn) => turn.outputArtifactId === bid.id),
+        );
+        if (currentBidTurns.length === 0) {
+          if (turns.length + 1 > run.policy.maxTurns) {
+            return {
+              kind: "fail",
+              code: "MAX_TURNS_EXCEEDED",
+              message: "Auto primary bid would exceed the session turn limit",
+            };
+          }
+          const selection = selectPrimaryAgent({
+            participants,
+            userMessage: activeUser.payload.content,
+            defaultAgentId: run.policy.auctionPolicy.defaultAgentId,
+          });
+          if (!selection.selectedAgentId) {
+            return invalidState("Auto routing found no available primary participant");
+          }
+          return {
+            kind: "schedule",
+            role: "participant",
+            agentId: selection.selectedAgentId,
+            turnKind: "session_bid",
+            wavePurpose: "session_bidding",
+            phase: "sessioning",
+            revision: 0,
+            inputArtifactIds,
+            expectedArtifactType: "session_bid",
+          };
+        }
+
+        const primaryTurn = currentBidTurns.reduce((earliest, turn) =>
+          turn.sequence < earliest.sequence ? turn : earliest,
+        );
+        const primaryBid = currentBids.find((bid) => bid.id === primaryTurn.outputArtifactId);
+        if (primaryBid && qualifiesForAutoDirectPublication(primaryBid, run)) {
+          return {
+            kind: "publish_bid_candidate",
+            userArtifactId: activeUser.id,
+            bidArtifactId: primaryBid.id,
+          };
+        }
+
+        const attemptedAgentIds = new Set(currentBidTurns.map(({ agentId }) => agentId));
+        const remaining = participants.filter(({ agentId }) => !attemptedAgentIds.has(agentId));
+        if (remaining.length > 0) {
+          if (turns.length + remaining.length > run.policy.maxTurns) {
+            return {
+              kind: "fail",
+              code: "MAX_TURNS_EXCEEDED",
+              message: "Auto escalation bid wave would exceed the session turn limit",
+            };
+          }
+          return buildSessionBidWaveDecision({
+            participants,
+            inputArtifactIds,
+            priorBidAgentIds: attemptedAgentIds,
+          });
+        }
+        return invalidState("Settled Auto bids require the PA14 scoring decision");
       }
 
       const latestByParticipant = new Map<string, SessionArtifact>();

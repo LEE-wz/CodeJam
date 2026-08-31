@@ -148,6 +148,13 @@ const allDrafts = (): CoordinationEventDraft[] => [
     artifactId: ARTIFACT_ID,
     transcriptSequence: 1,
   }),
+  events.bidCandidatePublished({
+    runId: RUN_ID,
+    turnId: TURN_ID,
+    artifactId: ARTIFACT_ID,
+    agentId: AGENT_ID,
+    transcriptSequence: 2,
+  }),
   events.runAwaitingInput({ runId: RUN_ID }),
 ];
 
@@ -171,6 +178,7 @@ const FROZEN_EVENT_TYPES: CoordinationEventType[] = [
   "run.interrupted",
   "run.reconciled",
   "user.message_appended",
+  "bid.candidate_published",
   "run.awaiting_input",
 ];
 
@@ -201,6 +209,7 @@ describe("coordination event factories", () => {
       "run.interrupted: Run interrupted by a server restart.",
       "run.reconciled: Run reconciled after an orchestration exit.",
       "user.message_appended: User message appended.",
+      "bid.candidate_published: Accepted Auto candidate published.",
       "run.awaiting_input: Session is awaiting user input.",
     ]);
   });

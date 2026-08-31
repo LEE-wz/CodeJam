@@ -73,6 +73,8 @@ export type WorkflowDecision =
       revision: number;
       inputArtifactIds: CoordinationArtifactId[];
       expectedArtifactType: ArtifactType;
+      /** A standalone Auto primary bid is still bidding work, not execution. */
+      wavePurpose?: CoordinationWavePurpose;
     }
   /**
    * Schedule several turns as one atomic wave (PA13-10).
@@ -95,6 +97,11 @@ export type WorkflowDecision =
       }>;
     }
   | { kind: "complete"; finalArtifactId: CoordinationArtifactId }
+  | {
+      kind: "publish_bid_candidate";
+      userArtifactId: CoordinationArtifactId;
+      bidArtifactId: CoordinationArtifactId;
+    }
   | { kind: "await_input" }
   | { kind: "fail"; code: CoordinationErrorCode; message: string };
 
@@ -254,6 +261,19 @@ export type CommitAcceptedArtifactResult =
   | { kind: "stale" }
   | { kind: "not_found" };
 
+export interface PublishBidCandidateInput {
+  runId: CoordinationRunId;
+  expectedRunVersion: number;
+  userArtifactId: CoordinationArtifactId;
+  bidArtifactId: CoordinationArtifactId;
+}
+
+export type PublishBidCandidateResult =
+  | { kind: "published"; run: CoordinationRun; artifact: CoordinationArtifact }
+  | { kind: "stale"; currentRun: CoordinationRun }
+  | { kind: "invalid"; currentRun: CoordinationRun }
+  | { kind: "not_found" };
+
 export interface FinishAttemptInput {
   runId: CoordinationRunId;
   turnId: CoordinationTurnId;
@@ -333,6 +353,7 @@ export interface CoordinationRepository {
   commitAcceptedArtifact(
     input: CommitAcceptedArtifactInput,
   ): Promise<CommitAcceptedArtifactResult>;
+  publishBidCandidate(input: PublishBidCandidateInput): Promise<PublishBidCandidateResult>;
   finishAttempt(input: FinishAttemptInput): Promise<"finished" | "stale">;
   requestStop(id: CoordinationRunId): Promise<CoordinationRun | undefined>;
   finishStopped(id: CoordinationRunId): Promise<CoordinationRun | undefined>;

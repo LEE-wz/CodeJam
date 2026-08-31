@@ -316,6 +316,25 @@ Do not modify `workflow.ts`. Verified handoff must keep scheduling exactly one t
 
 Countdown deletion applies to the engine only. Stored history keeps its fields, and a fixture test proves a pre-existing countdown run still loads and renders.
 
+## Parallel Phase 14 — Adaptive auction coordination
+
+**Primary paths**
+
+- `apps/server/src/coordination/auction-routing.ts`, `auction-scoring.ts`, `session-workflow.ts`, `service.ts`
+- `apps/server/src/coordination/types.ts`, `contracts.ts`, `schemas.ts`, `artifact-protocol.ts`, `context-builder.ts`
+- `apps/server/src/coordination/repository.ts`, `events.ts`, and `redaction.ts` for atomic award/publication evidence
+- matching `*.test.ts` files and `coordination/testing/**`
+- `apps/web/src/` only for the routing, bid/award evidence, usage, and feedback tasks
+
+**Conditional paths**
+
+- `apps/server/src/coordination/runtime-gateway.ts` for fresh bid threads and bounded execution accounting
+- `docs/development/ASSUMPTIONS_AND_DECISIONS.md` for mechanical scoring or migration clarifications
+
+Do not edit the main Phase 14 sheet for auction-track work. Losing bids remain
+evidence only, and no prompt, raw rejected output, lease, or provider thread ID
+may enter scoring explanations or the public read model.
+
 ## Phase 15 — Scale, storage, and release
 
 **Primary paths**
