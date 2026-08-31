@@ -1,14 +1,14 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (Phase 13 automated gates passed; live-provider gate pending)
-**Audited checkpoint:** Phase 13 implementation on `phase-13-parallel-waves`, based on `aa17407`
-**Implementation branch:** `phase-13-parallel-waves` (base `aa17407`)
-**Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`; final test and status updates are in the working tree.
+**Last audit:** 2026-08-31 (Checkpoint 13 complete: live six- and ten-participant waves passed)
+**Audited checkpoint:** Checkpoint 13 on `main` at `7985ca3`
+**Implementation branch:** `phase-13-parallel-waves` (merged to `main` at `7985ca3`)
+**Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 13 - Parallel Waves
-**Current gate:** Automated checkpoint evidence passed; live six- and ten-participant Compose exercises remain.
-**Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 11-12 `complete`; Phase 13 `implemented_unverified`; Phases 14-15 `not_started`
+**Current phase:** Phase 14 - Coordinator Planning
+**Current gate:** Checkpoint 13 complete; `P14-01` is the next action.
+**Overall state:** Phases 0-8 and 10-13 `complete`; Phase 9 `superseded` by Phase 15;
+Phases 14-15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -32,7 +32,7 @@ they name a past checkpoint.
 | 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
-| 13 | Parallel waves | `implemented_unverified` (automated evidence complete; live gate pending; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
+| 13 | Parallel waves | `complete` (Checkpoint 13 verified; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
@@ -47,10 +47,13 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** With approval to use the configured real Agent provider, deploy
-the Compose service and run one six-participant and one ten-participant parallel
-wave. Record wall-clock latency against the Phase 10 sequential baseline, peak
-memory, and provider rate-limit responses before marking Checkpoint 13 complete.
+**Resume here.** Phase 13 is complete (Checkpoint 13 verified below). `P14-01` is
+the next action: add the `session_plan` turn kind, artifact type, strict bounded
+schema, and the exhaustive-map entries, per
+[`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md). Create a
+`phase-14` task branch from `main` first, and record the coordinator-identity
+decision (open question 3 in `session-v2-plan.md`) in
+`ASSUMPTIONS_AND_DECISIONS.md` before `P14-03` can start.
 
 ### Checkpoint 11 final verification
 
@@ -148,13 +151,25 @@ load repository-local secrets or runtime state.
 - `npm ci` reports the existing dependency audit finding: **1 moderate and 5
   high vulnerabilities**. Phase 13 did not change dependencies.
 
-### Phase 13 completion-gate gap
+### Checkpoint 13 live verification evidence
 
-No real-provider six- or ten-participant parallel wave was launched in this
-session. That action can incur provider use and changes the local deployment's
-runtime data, so it requires explicit authorization. Consequently no speed-up,
-peak-memory, or provider-rate-limit claim is made and Checkpoint 13 remains
-`implemented_unverified` despite the passing automated gates.
+Two real parallel waves on `main` (`7985ca3`), Compose deployment, configured
+provider endpoint, local-process runtime, `sessionParallel` enabled with the
+default cap `min(participants, 4)`:
+
+- Six participants (`5e04164e`): 6 turns / 6 attempts, all succeeded on attempt
+  1, 4.15s prompt-to-idle, 22 gapless events, transcript 1..7, cap 4 enforced
+  (4 attempts started, then 2 as slots freed), every Agent returned ready.
+- Ten participants (`492a52c3`): 10 turns / 10 attempts, all succeeded on
+  attempt 1, 5.14s prompt-to-idle, 34 gapless events, transcript 1..11, cap 4
+  enforced (never more than 4 attempts in flight), every Agent returned ready.
+- Peak container memory 151.7 MiB (3.7% of the 4 GiB cap); zero provider
+  rate-limit (429) responses in either run.
+- Speed-up vs the Phase 10 sequential baseline (~44s for a ten-participant
+  round, median 4.43s per turn): 5.14s parallel is roughly 8.5x, recorded with
+  the baseline alongside as the sheet requires.
+
+This closes Checkpoint 13; the phase is `complete`.
 
 ## Phase 11 stale-path classification (P11-01 deliverable)
 
@@ -677,13 +692,16 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 13
 
-- Not started. `P13-01` is next: freeze the bounded-parallel-wave mini-RFC
-  without changing the Phase 12 lifecycle or transcript contracts.
+- Complete on `main` at `7985ca3`. Checkpoint 13 closed by the full Compose gate
+  (28 server / 536 tests, 3 web / 44 tests, both typechecks and builds) plus the
+  live six- and ten-participant waves recorded above. See
+  [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md).
 
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 | `7985ca3` | **Checkpoint 13 live gate** — six- and ten-participant parallel waves | **Passed:** six participants `5e04164e` (6/6 attempts first-try, 4.15s, cap 4: 4 then 2, 22 events); ten participants `492a52c3` (10/10 first-try, 5.14s, cap 4: never more than 4 in flight, 34 events). Peak container memory 151.7 MiB (3.7% of 4 GiB); zero 429 responses. ~8.5x over the Phase 10 ~44s sequential baseline. All Agents returned ready. |
 | 2026-08-31 01:11-01:13 UTC | `phase-12` working tree | Checkpoint 12 live Compose rehearsal | **Passed:** one three-Agent run accepted three real prompts, survived an idle server restart, continued the same transcript, produced 12 ordered artifacts and 35 pre-End gapless events, then ended explicitly and rejected a later send. Prompt sizes 144/166/156 characters; wave latencies 7.183/6.231/5.589s. Visual automation was unavailable and is not claimed. |
 | 2026-08-31 01:08 UTC | `phase-12` working tree | **Checkpoint 12 gate** — final scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 517 tests, 3 web files / 43 tests, both typechecks, and both production builds (560 tests total). The focused 124-test durability set then passed three consecutive runs. |
 | 2026-08-31 | `3b11bef` | Checkpoint 11 final gate and manual restart check | **Passed:** 28 server files / 503 tests, 3 web files / 37 tests, both typechecks/builds (540 total), followed by the user's successful mid-attempt restart and Agent recovery check. |
