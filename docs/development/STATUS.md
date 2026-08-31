@@ -9,10 +9,10 @@ Phase 15 recorded deviation)
 **Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Phase 15 - Scale, Storage, and Release
-**Current gate:** `P15-01`-`P15-04` complete and `P15-05` closed (engine swap
-`deferred`, data-model fix implemented and re-measured). `P15-06` is the next
-action, but see the deviation note: documentation freezes whichever coordination
-model `main` carries.
+**Current gate:** the documentation half of Phase 15 is complete. `P15-01`-`P15-11`
+are closed (`P15-05` `deferred` with its closure condition now met). The
+remaining work is the demo recordings and release verification, which need live
+provider capacity.
 **Overall state:** Phases 0-8 and 10-14 `complete`; Phase 9 `superseded` by Phase 15;
 Phase 15 `in_progress`
 
@@ -40,7 +40,7 @@ they name a past checkpoint.
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `complete` (Checkpoint 13 verified; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `complete` (Checkpoint 14 verified; sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
-| 15 | Scale, storage, and release | `in_progress` (`P15-01`-`P15-05` closed; sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
+| 15 | Scale, storage, and release | `in_progress` (`P15-01`-`P15-11` closed; `P15-12`-`P15-20` need live capacity or the freeze; sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
 [`plans/session-v2-plan.md`](plans/session-v2-plan.md), approved through the
@@ -53,16 +53,26 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** `P15-01`-`P15-05` are closed. The measurements found an O(n^2)
+**Resume here.** `P15-01`-`P15-11` are closed. The measurements found an O(n^2)
 transcript encoding, and removing it made storage linear, shrank a 2,000-turn
 database by 92%, and moved the hard serialisation ceiling from ~4,400 to
 ~120,000 committed turns. `JsonStore` is kept by recorded decision.
 
-`P15-06` (README rewrite) is next, but documentation freezes whichever
-coordination model `main` carries, so the auction-track comparison should be
-settled first. One measured item is deliberately left open: an idle delta poll
-still costs 355ms of server time at 2,000 turns pre-fix, because the route
-clones the whole database before filtering. See `P15-02` finding 2.
+The documentation set (`P15-06`-`P15-11`) was written against the coordination
+model `main` carries, at the user's explicit direction: build main's phase now,
+and rewrite the affected sections if the auction track is ever adopted. That is
+a deliberate reversal of the earlier "settle the comparison first" note, taken
+because most of the doc set is model-independent — `COORDINATION_OPERATIONS.md`
+and `DECISIONS.md` entirely, six of seven API routes, and the `session_message`
+and `user_message` schemas, which are identical on both tracks.
+
+**Next: `P15-12`, `P15-13`, `P15-16`.** All three need live provider capacity
+and are blocked on Ark returning sustained `429`. `P15-14`, `P15-17`, `P15-19`,
+and `P15-20` are the freeze itself and are best done last.
+
+One measured item is deliberately left open: an idle delta poll still costs
+355ms of server time at 2,000 turns, because the route clones the whole database
+before filtering. See `P15-02` finding 2.
 
 ### Checkpoint 11 final verification
 
@@ -83,10 +93,24 @@ load repository-local secrets or runtime state.
 |---|---|---|
 | P15-01 | `complete` (10,000 row measured-impossible) | Reproducible harness at `apps/server/src/scale/p15-01-store-scale.ts`, run with `npm run scale:p15-01`. It drives one growing session through the **real** service, repository, workflow, artifact protocol, and `JsonStore` in a fresh `mkdtemp` directory, and refuses to run outside the system temp directory so it can never touch runtime data. Only the Agent runtime is a double, and it always commits one valid `session_message` with `done: true`, so a round-robin wave is exactly one message per participant. Measured 100, 500, 1,000 and 2,000 committed turns; 10,000 is unreachable and the reason is measured, not extrapolated. See the table and findings below. |
 | P15-02 | `complete` | Harness at `apps/server/src/scale/p15-02-read-path.ts` (`npm run scale:p15-02`), sharing `scale/session-harness.ts` with `P15-01` so both measure the same session the same way. Requests go through the real Fastify route via `app.inject`, so recorded bytes are wire bytes. The client was already delta-only after first load (`SessionWorkspace.tsx` passes `accumulated?.cursor`), so the sheet's "tighten the client to delta-only" condition was already satisfied and no client change was needed. Table and findings below. |
-| P15-03 | `complete` | `SESSION_LIMITS.recommendedMaxSessionTurns: 500` and `sessionTurnWarningThreshold: 400` added to the server `types.ts` and mirrored in the web `coordination-types.ts`, each carrying the measured reasoning. `maxSessionTurns` stays 100,000 for callers that ask explicitly, per the sheet; `defaultSessionTurns` stays 200, already below the measured recommendation. The session panel warns at 400 turns and warns harder past 500, and the create form flags a requested ceiling above the recommendation. Three new web tests (47 -> 50). |
+| P15-03 | `complete` | `SESSION_LIMITS.recommendedMaxSessionTurns: 2,000` and `sessionTurnWarningThreshold: 1,600` (re-measured after the `P15-05` fix; the original 500/400 came from the pre-fix numbers) added to the server `types.ts` and mirrored in the web `coordination-types.ts`, each carrying the measured reasoning. `maxSessionTurns` stays 100,000 for callers that ask explicitly, per the sheet; `defaultSessionTurns` stays 200, already below the measured recommendation. The session panel warns at 400 turns and warns harder past 500, and the create form flags a requested ceiling above the recommendation. Three new web tests (47 -> 50). |
 | P15-04 | `complete` | Decision recorded as a mini-RFC in [`ASSUMPTIONS_AND_DECISIONS.md`](ASSUMPTIONS_AND_DECISIONS.md) with the `P15-01`/`P15-02` measurements as evidence: **fix the data model, defer the engine swap**. The quadratic was `inputArtifactIds`, not `JsonStore`; a repository swap would have moved those bytes without removing them. |
-| P15-05 | `deferred` (data-model half implemented) | The engine swap is closed as `deferred` per the sheet's own provision, with the measured ceiling recorded. The data-model half is implemented: a session turn now pins its transcript as `inputThroughSequence` instead of listing every id, the create route refuses a session larger than the store can persist, and the trust boundary is unchanged and separately tested. Re-measured results below. |
-| P15-06 - P15-20 | `not_started` | Documentation (`P15-06`-`P15-08`) should not start before the auction-track comparison is settled. |
+| P15-05 | `deferred` (data-model half implemented) | The engine swap is closed as `deferred` per the sheet's own provision, with the measured ceiling recorded. The data-model half is implemented: a session turn now pins its transcript as `inputThroughSequence` instead of listing every id, the create route refuses a session larger than the store can persist, and the trust boundary is unchanged and separately tested. Re-measured results below. **Closure condition now met:** the sheet requires the measured ceiling be recorded in `STATUS.md` *and in the operations document*; [`../COORDINATION_OPERATIONS.md`](../COORDINATION_OPERATIONS.md) now carries it. |
+| P15-06 | `complete` | Root `README.md` gained a **Sessions** section: what a Session is, the middleware-not-models claim, coordinator planning, parallel waves, evidence, a five-step usage walkthrough, and seven honest limitations carrying the measured 2,000/1,600/50,000 numbers. The README previously did not document Session v2 at all, so this was additive; there were no countdown or verified-handoff-UI claims to remove. Documentation links are split into Session and Platform groups. |
+| P15-07 | `complete` | The five-document set is written against the coordination model `main` carries: [`COORDINATION_ARCHITECTURE.md`](../COORDINATION_ARCHITECTURE.md), [`COORDINATION_PROTOCOL.md`](../COORDINATION_PROTOCOL.md), [`COORDINATION_API.md`](../COORDINATION_API.md), [`COORDINATION_OPERATIONS.md`](../COORDINATION_OPERATIONS.md), [`DECISIONS.md`](../DECISIONS.md). Every limit, route, status code, and measurement is read from source rather than restated from memory. |
+| P15-08 | `complete` | Phase 13's sheet checkboxes and `P15-01`-`P15-04` were ticked to match this ledger; the stale `P15-03` row claiming 500/400 was corrected to the shipped 2,000/1,600; `09-release.md` is marked superseded in the sheet itself; `FILESYSTEM_MAP.md` lists the new documents. |
+| P15-09 | `complete` | Fixed 23 broken links in `plans/session-v2-plan.md` (root-relative paths in a file three levels down): 3 markdown and 20 code links. All `.md` links in the repository now resolve. No local absolute paths and no undefined npm scripts. Two links to `RelayWorkspace.tsx` are deliberately left: the file is a dated historical plan and the rename is its own request 7. `.gitignore` gained `p15-02-read-path.json`, which `npm run scale:p15-02` was leaving untracked. |
+| P15-10 | `complete` | [`AGENT_TEMPLATES.md`](../AGENT_TEMPLATES.md): ten collaborative participants, one coordinator-capable Agent with the structural rules that get a plan accepted, and one deliberately unreliable Agent whose first turn emits prose so the failure demo catches genuine misbehaviour. |
+| P15-11 | `complete` (unrehearsed) | [`DEMO.md`](../DEMO.md): setup, a six-beat three-minute script with expected states, three failure demos, the latency and `round_robin` fallbacks, reset steps, and stated limitations. The timing range is estimated from component measurements and flagged as such, because `P15-13` has not run. |
+| P15-12 | `blocked` | Needs live provider capacity to record four real runs. Ark returned sustained `429` throughout the attempt. |
+| P15-13 | `blocked` | Needs `P15-12`, live capacity, and a second person to follow `README.md` and `DEMO.md` from scratch. |
+| P15-14 | `not_started` | Best done immediately before the freeze. |
+| P15-15 | `complete` (re-run at freeze) | The disposable Docker Compose gate passed on `main`: clean `npm ci`, 30 server files / 577 tests, 3 web files / 50 tests, both typechecks, both production builds, **exit 0** (627 tests). The Phase 2 smoke also passed through Compose: durability, restart over the same database, and redaction. |
+| P15-16 | `blocked` | Browser flows need live model capacity. |
+| P15-17 | `not_started` | Partly evidenced: the Phase 2 smoke asserts events carry no lease token, public attempts carry no lease token, and events carry no prompt text. A full sweep of logs, database, and payloads remains. |
+| P15-18 | `not_started` | Several criteria need the live flows from `P15-16`. |
+| P15-19 | `not_started` | Runtime-state hygiene, best done before judging evidence is captured. |
+| P15-20 | `not_started` | The freeze itself. |
 
 ### P15-01 measured store cost
 

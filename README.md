@@ -31,6 +31,66 @@ Volcengine ECS.
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS
 
+## Sessions
+
+A Session is one durable conversation shared by up to ten Agents. You send a
+prompt; the middleware decides who answers, in what order, and whether their
+output is acceptable; the transcript persists across prompts and across
+restarts.
+
+The point is that **the middleware provides the reliability, not the models**.
+Agents return malformed JSON, time out, and contradict each other. Every
+guarantee below is enforced by backend code that treats model output as
+untrusted input.
+
+### What it does
+
+- **Multi-prompt sessions.** A session stays alive between prompts in an
+  `awaiting_input` state, and survives a server restart.
+- **Coordinator planning.** A coordinator Agent proposes who answers this round
+  and in what order. The backend validates the plan's *shape* — participants,
+  distinct ids, contiguous positions, bounded instructions — and does the
+  scheduling itself. An Agent can never schedule, and never ends a session.
+- **Parallel waves.** Independent work fans out concurrently, capped by
+  `maxParallelTurns`. One sibling failing never aborts the others.
+- **Evidence.** Every turn, attempt, artifact, and decision is recorded with a
+  reason — and with no prompts, no raw output, and no lease tokens.
+
+### Using a session
+
+1. Create Agents and wait for each to reach `ready`. Instructions to paste are
+   in [docs/AGENT_TEMPLATES.md](docs/AGENT_TEMPLATES.md).
+2. Create a session: give it a name and an objective, pick 2–10 participants,
+   and leave planning on `coordinator`.
+3. Start it, then send a prompt. Watch the plan commit, then the wave.
+4. Send more prompts to the same session. The transcript carries forward.
+5. **Stop** cancels the current wave and leaves the session recoverable. **End**
+   finishes the session deliberately. They are different actions.
+
+The API is documented in [docs/COORDINATION_API.md](docs/COORDINATION_API.md).
+
+### Limitations
+
+Stated plainly, because they are real:
+
+- **Single process, single user.** No identity, tenancy, audit, or horizontal
+  scaling. Two servers against one data directory will corrupt it.
+- **Interrupted runs do not resume.** A run in flight when the process dies
+  fails with `SERVER_RESTARTED`. An external model call cannot be safely
+  reconstructed, so the system records an honest interruption. Sessions that
+  were idle survive intact.
+- **Transcript length is measured, not assumed.** Comfortable to **2,000
+  committed turns** (one prompt takes ~2s there); the UI warns from 1,600; a
+  request for more than 50,000 is refused because it was measured to be
+  unsaveable.
+- **No streaming.** Progress is observed by polling every 1.5s.
+- **Long sessions prompt against a recent window.** When the transcript exceeds
+  the context budget, older entries are dropped first.
+- **The middleware never judges quality.** A structurally valid plan that is
+  strategically poor is accepted. It guarantees determinism, not good ideas.
+- **A wave is N concurrent model calls.** Ten participants can saturate a
+  per-account provider rate limit far faster than single-Agent use.
+
 ## Requirements
 
 - Node.js 22+
@@ -238,6 +298,18 @@ docker compose config
 ```
 
 ## Documentation
+
+**Session**
+
+- [Session architecture](docs/COORDINATION_ARCHITECTURE.md)
+- [Session protocol](docs/COORDINATION_PROTOCOL.md)
+- [Session API](docs/COORDINATION_API.md)
+- [Session operations](docs/COORDINATION_OPERATIONS.md)
+- [Decisions](docs/DECISIONS.md)
+- [Demo script](docs/DEMO.md)
+- [Agent templates](docs/AGENT_TEMPLATES.md)
+
+**Platform**
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Local POC](docs/LOCAL_POC.md)

@@ -318,6 +318,18 @@ Countdown deletion applies to the engine only. Stored history keeps its fields, 
 **Primary paths**
 
 - `README.md`, `docs/development/**`, and the Session v2 documentation set named by the Phase 15 guide
+
+### Session v2 documentation set (delivered by `P15-06`-`P15-11`)
+
+| Path | Purpose |
+|---|---|
+| `docs/COORDINATION_ARCHITECTURE.md` | Components, trust boundary, session lifecycle, wave scheduling, leases, reservations |
+| `docs/COORDINATION_PROTOCOL.md` | `user_message` / `session_message` / `session_plan` schemas, parsing order, retry semantics, scoped context |
+| `docs/COORDINATION_API.md` | Every route, request shapes, status and error codes, delta cursor, polling |
+| `docs/COORDINATION_OPERATIONS.md` | Limits as enforced, measured ceiling, restart and reconciliation, storage, redaction, failure modes |
+| `docs/DECISIONS.md` | ADR-01-14 plus every mini-RFC, including decisions left open |
+| `docs/DEMO.md` | Three-minute script, failure demos, fallbacks, reset steps |
+| `docs/AGENT_TEMPLATES.md` | Participant, coordinator, and deliberately unreliable Agent instructions |
 - a temporary scale-measurement harness and its output
 - `apps/server/src/store.ts` and `apps/server/src/coordination/repository.ts` only if the storage swap is approved
 - package/Compose/Docker files needed to verify documented commands

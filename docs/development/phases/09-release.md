@@ -1,5 +1,12 @@
 # Phase 9 — Documentation, Demo, and Release Candidate
 
+> [!IMPORTANT]
+> **Superseded by [`15-scale-and-release.md`](15-scale-and-release.md).**
+> Phase 15 absorbs this sheet for Session v2 and its task list is the basis for
+> the release half there. The unticked boxes below are historical: they were
+> never executed under this sheet, and the equivalent work is tracked as
+> `P15-06`-`P15-20`. Do not work from this file.
+
 **Goal:** produce a clean, reproducible, honestly scoped submission whose normal and failure claims for both workflows (verified handoff and shared session) are supported by tests and rehearsed evidence.  
 **Ends at:** Checkpoint 9 — submission candidate frozen except for release-blocking fixes.
 
