@@ -825,6 +825,143 @@ describe("evidence timeline through the real stack", () => {
 // -------------------------------- P7 durable session API and evidence gate
 
 describe("durable shared-session API", () => {
+  it("normalizes an opted-in auction policy while legacy sessions remain unmarked", async () => {
+    const { app } = await createStack();
+    const legacy = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      headers,
+      payload: CREATE_FREE_CHAT_REQUEST,
+    });
+    const auction = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      headers,
+      payload: {
+        ...CREATE_FREE_CHAT_REQUEST,
+        policy: { sessionProtocol: "free_chat", auctionPolicy: {} },
+      },
+    });
+
+    expect(legacy.statusCode).toBe(201);
+    expect(auction.statusCode).toBe(201);
+    expect(legacy.json()).not.toHaveProperty("run.policy.auctionPolicy");
+    expect(auction.json()).toMatchObject({
+      run: {
+        policy: {
+          auctionPolicy: {
+            routingMode: "auto",
+            directConfidenceThresholdBps: 8_000,
+            directOutputTokenBudget: 4_000,
+            minimumValidBids: 2,
+            maxBidOutputTokens: 2_048,
+            maxBidAttempts: 2,
+            auctionExecutionTokenBudget: 4_000,
+            auctionOnDirectFailure: false,
+            fallback: "round_robin",
+            scoringVersion: "confidence_cost_v1",
+          },
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["auction routing on countdown", { sessionProtocol: "countdown", auctionPolicy: {} }],
+    [
+      "the Phase 13 wave seam with auction routing",
+      { sessionProtocol: "free_chat", sessionWaveMode: "parallel", auctionPolicy: {} },
+    ],
+    [
+      "a default fallback without a default Agent",
+      { sessionProtocol: "free_chat", auctionPolicy: { fallback: "default_agent" } },
+    ],
+    [
+      "a foreign default Agent",
+      {
+        sessionProtocol: "free_chat",
+        auctionPolicy: { defaultAgentId: "not-a-participant" },
+      },
+    ],
+    [
+      "too many minimum valid bids",
+      { sessionProtocol: "free_chat", auctionPolicy: { minimumValidBids: 4 } },
+    ],
+    [
+      "a bid output budget below its bound",
+      { sessionProtocol: "free_chat", auctionPolicy: { maxBidOutputTokens: 127 } },
+    ],
+    [
+      "an execution output budget above its bound",
+      { sessionProtocol: "free_chat", auctionPolicy: { auctionExecutionTokenBudget: 16_001 } },
+    ],
+    [
+      "an unknown scoring version",
+      { sessionProtocol: "free_chat", auctionPolicy: { scoringVersion: "future" } },
+    ],
+    [
+      "an unknown auction field",
+      { sessionProtocol: "free_chat", auctionPolicy: { hiddenBudget: 99 } },
+    ],
+  ])("rejects %s", async (_label, policy) => {
+    const { app } = await createStack();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      headers,
+      payload: { ...CREATE_FREE_CHAT_REQUEST, policy },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+  });
+
+  it("accepts auction policy bounds and a participant-backed default fallback", async () => {
+    const { app } = await createStack();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      headers,
+      payload: {
+        ...CREATE_FREE_CHAT_REQUEST,
+        policy: {
+          sessionProtocol: "free_chat",
+          auctionPolicy: {
+            routingMode: "direct",
+            defaultAgentId: PARTICIPANT_TWO.id,
+            directConfidenceThresholdBps: 0,
+            directOutputTokenBudget: 1,
+            minimumValidBids: SESSION_PARTICIPANTS.length,
+            maxBidOutputTokens: 4_096,
+            maxBidAttempts: 3,
+            auctionExecutionTokenBudget: 16_000,
+            auctionOnDirectFailure: true,
+            fallback: "default_agent",
+            scoringVersion: "confidence_cost_v1",
+          },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      run: {
+        policy: {
+          auctionPolicy: {
+            routingMode: "direct",
+            defaultAgentId: PARTICIPANT_TWO.id,
+            directConfidenceThresholdBps: 0,
+            directOutputTokenBudget: 1,
+            minimumValidBids: SESSION_PARTICIPANTS.length,
+            maxBidOutputTokens: 4_096,
+            maxBidAttempts: 3,
+            auctionExecutionTokenBudget: 16_000,
+            auctionOnDirectFailure: true,
+            fallback: "default_agent",
+          },
+        },
+      },
+    });
+  });
+
   it("creates, starts, and exposes a countdown with durable shared state", async () => {
     const { app } = await createStack([
       succeeds(JSON.stringify(countdownPayload(2))),

@@ -10,6 +10,7 @@ import {
   finalPayloadSchema,
   proposalPayloadSchema,
   reviewPayloadSchema,
+  sessionBidPayloadSchema,
   sessionMessagePayloadSchema,
   COORDINATION_ARTIFACT_SCHEMA_VERSION,
 } from "./schemas.js";
@@ -24,10 +25,11 @@ import type {
   ProposalPayload,
   ReviewPayload,
 } from "./types.js";
+import { resolveMaxParallelTurns } from "./types.js";
 
 type VerifiedArtifactPayload = Exclude<
   ArtifactPayload,
-  { type: "session_message" | "user_message" }
+  { type: "session_bid" | "session_message" | "user_message" }
 >;
 
 export type {
@@ -48,6 +50,7 @@ export const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND: Readonly<
   proposal_review: "review",
   finalization: "final",
   session_turn: "session_message",
+  session_bid: "session_bid",
 };
 
 /**
@@ -92,7 +95,7 @@ const stripOuterFence = (trimmed: string): string => {
 };
 
 const parsePayload = (
-  type: Exclude<ArtifactType, "session_message" | "user_message">,
+  type: Exclude<ArtifactType, "session_bid" | "session_message" | "user_message">,
   value: unknown,
 ): { ok: true; payload: VerifiedArtifactPayload } | { ok: false; error: z.ZodError } => {
   const result =
@@ -259,7 +262,7 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
 
     // 5. Expected artifact type and schema version, then the bounded schema.
     const expectedType = EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
-    if (expectedType === "session_message") {
+    if (expectedType === "session_message" || expectedType === "session_bid") {
       return invalidAt(
         "type",
         "unexpected_artifact_type",
@@ -352,7 +355,9 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
       };
     }
 
-    const body = stripOuterFence(rawOutput.trim());
+    // Existing session messages retain their one-fence compatibility. Bids use
+    // the stricter PA14 contract: JSON only, with no Markdown wrapper.
+    const body = turn.kind === "session_bid" ? rawOutput.trim() : stripOuterFence(rawOutput.trim());
     let parsed: unknown;
     try {
       parsed = JSON.parse(body);
@@ -364,14 +369,15 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
     }
 
     const candidate = parsed as Record<string, unknown>;
-    if (
-      turn.kind !== "session_turn" ||
-      candidate["type"] !== EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn
-    ) {
+    if (turn.kind !== "session_turn" && turn.kind !== "session_bid") {
+      return invalidAt("type", "unexpected_artifact_type", "Turn is not a session output turn");
+    }
+    const expectedType = EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
+    if (candidate["type"] !== expectedType) {
       return invalidAt(
         "type",
         "unexpected_artifact_type",
-        'This turn must produce an artifact of type "session_message"',
+        `This turn must produce an artifact of type "${expectedType}"`,
       );
     }
     if (candidate["schemaVersion"] !== COORDINATION_ARTIFACT_SCHEMA_VERSION) {
@@ -382,7 +388,10 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
       );
     }
 
-    const schemaResult = sessionMessagePayloadSchema.safeParse(candidate);
+    const schemaResult =
+      expectedType === "session_bid"
+        ? sessionBidPayloadSchema.safeParse(candidate)
+        : sessionMessagePayloadSchema.safeParse(candidate);
     if (!schemaResult.success) {
       return invalid(schemaResult.error.issues.map((issue) => ({
         path: formatPath(issue.path),
@@ -390,10 +399,106 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
         message: issue.message,
       })));
     }
-    const payload = schemaResult.data;
     if (run.policy.workflow !== "shared_session_v1") {
       return invalidAt("output", "invalid_workflow", "Session output requires a shared-session run");
     }
+    if (schemaResult.data.type === "session_bid") {
+      const payload = schemaResult.data;
+      const auctionPolicy = run.policy.auctionPolicy;
+      if (!auctionPolicy || run.policy.sessionProtocol !== "free_chat") {
+        return invalidAt("output", "invalid_auction_policy", "Bid output requires auction routing");
+      }
+      const assignments = payload.plan.assignments;
+      const participantIds = new Set(run.participants.map(({ agentId }) => agentId));
+      const assignedIds = new Set(assignments.map(({ agentId }) => agentId));
+      if (assignments.some(({ agentId }) => !participantIds.has(agentId))) {
+        return invalidAt(
+          "plan.assignments",
+          "foreign_assignment_agent",
+          "Every assignment Agent must be a session participant",
+        );
+      }
+      if (assignedIds.size !== assignments.length) {
+        return invalidAt(
+          "plan.assignments",
+          "duplicate_assignment_agent",
+          "Each assignment Agent must be distinct",
+        );
+      }
+      const positionIndex = assignments.findIndex(
+        ({ position }, index) => position !== index + 1,
+      );
+      if (positionIndex >= 0) {
+        return invalidAt(
+          `plan.assignments[${positionIndex}].position`,
+          "invalid_assignment_position",
+          "Assignment positions must be contiguous from one and in array order",
+        );
+      }
+      if (
+        payload.plan.mode === "single" &&
+        (assignments.length !== 1 || assignments[0]?.agentId !== turn.agentId)
+      ) {
+        return invalidAt(
+          "plan.assignments",
+          "invalid_single_assignment",
+          "A single plan must assign exactly the bidding Agent",
+        );
+      }
+      if (
+        payload.plan.mode === "parallel" &&
+        assignments.length > resolveMaxParallelTurns(run)
+      ) {
+        return invalidAt(
+          "plan.assignments",
+          "parallel_limit_exceeded",
+          "Parallel assignments exceed the session concurrency limit",
+        );
+      }
+      if (
+        payload.recommendation === "direct" &&
+        (payload.candidateAnswer === undefined || payload.plan.mode !== "single")
+      ) {
+        return invalidAt(
+          "candidateAnswer",
+          "invalid_direct_candidate",
+          "A direct recommendation requires a candidate answer and single-Agent plan",
+        );
+      }
+      if (payload.estimatedOutputTokens > auctionPolicy.auctionExecutionTokenBudget) {
+        return invalidAt(
+          "estimatedOutputTokens",
+          "execution_budget_exceeded",
+          "Estimated output exceeds the auction execution token budget",
+        );
+      }
+      if (
+        payload.recommendation === "direct" &&
+        payload.estimatedOutputTokens > auctionPolicy.directOutputTokenBudget
+      ) {
+        return invalidAt(
+          "estimatedOutputTokens",
+          "direct_budget_exceeded",
+          "Estimated output exceeds the direct token budget",
+        );
+      }
+      return {
+        ok: true,
+        artifact: {
+          id: this.dependencies.ids.artifactId(),
+          runId: run.id,
+          turnId: turn.id,
+          createdByRole: turn.role,
+          createdByAgentId: turn.agentId,
+          sizeChars: rawOutput.length,
+          createdAt: this.dependencies.clock.nowIso(),
+          type: "session_bid",
+          payload,
+        },
+      };
+    }
+
+    const payload = schemaResult.data;
     if (run.policy.sessionProtocol === "countdown") {
       if (payload.done !== undefined) {
         return invalidAt(

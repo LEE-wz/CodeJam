@@ -4,6 +4,7 @@ import type {
   ProposalPayload,
   ReviewIssue,
   ReviewPayload,
+  SessionBidPayload,
   SessionMessagePayload,
   UserMessagePayload,
 } from "./types.js";
@@ -21,6 +22,16 @@ export const ARTIFACT_SCHEMA_LIMITS = {
   reviewIssueMessageChars: 1_000,
   reviewFeedbackChars: 2_000,
   finalContentChars: 16_000,
+} as const;
+
+export const BID_SCHEMA_LIMITS = {
+  candidateAnswerChars: 8_000,
+  planSummaryChars: 1_000,
+  assignmentAgentIdChars: 128,
+  assignmentInstructionChars: 2_000,
+  riskAssumptionChars: 500,
+  risks: 10,
+  assumptions: 10,
 } as const;
 
 /** Frozen section-key slug format (overview Section 7.1). */
@@ -96,6 +107,44 @@ export const sessionMessagePayloadSchema: z.ZodType<SessionMessagePayload> = z
   .strict()
   .transform(({ done, ...message }): SessionMessagePayload =>
     done === undefined ? message : { ...message, done },
+  );
+
+const sessionBidAssignmentSchema = z
+  .object({
+    agentId: boundedText(BID_SCHEMA_LIMITS.assignmentAgentIdChars),
+    position: z.number().int().min(1).max(SESSION_LIMITS.maxParticipants),
+    instruction: boundedText(BID_SCHEMA_LIMITS.assignmentInstructionChars),
+  })
+  .strict();
+
+export const sessionBidPayloadSchema: z.ZodType<SessionBidPayload> = z
+  .object({
+    schemaVersion: z.literal(COORDINATION_ARTIFACT_SCHEMA_VERSION),
+    type: z.literal("session_bid"),
+    recommendation: z.enum(["direct", "auction"]),
+    candidateAnswer: boundedText(BID_SCHEMA_LIMITS.candidateAnswerChars).optional(),
+    plan: z
+      .object({
+        summary: boundedText(BID_SCHEMA_LIMITS.planSummaryChars),
+        mode: z.enum(["single", "sequential", "parallel"]),
+        assignments: z
+          .array(sessionBidAssignmentSchema)
+          .min(1)
+          .max(SESSION_LIMITS.maxParticipants),
+        risks: z
+          .array(boundedText(BID_SCHEMA_LIMITS.riskAssumptionChars))
+          .max(BID_SCHEMA_LIMITS.risks),
+        assumptions: z
+          .array(boundedText(BID_SCHEMA_LIMITS.riskAssumptionChars))
+          .max(BID_SCHEMA_LIMITS.assumptions),
+      })
+      .strict(),
+    confidenceBps: z.number().int().min(0).max(10_000),
+    estimatedOutputTokens: z.number().int().positive(),
+  })
+  .strict()
+  .transform(({ candidateAnswer, ...bid }): SessionBidPayload =>
+    candidateAnswer === undefined ? bid : { ...bid, candidateAnswer },
   );
 
 export const userMessagePayloadSchema: z.ZodType<UserMessagePayload> = z

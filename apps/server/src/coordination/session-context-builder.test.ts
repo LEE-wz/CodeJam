@@ -14,7 +14,10 @@ import {
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 import type { CoordinationArtifact, CoordinationRun, CoordinationTurn } from "./types.js";
-import { DEFAULT_COORDINATION_POLICY } from "./types.js";
+import {
+  DEFAULT_COORDINATION_POLICY,
+  DEFAULT_SESSION_AUCTION_POLICY,
+} from "./types.js";
 
 const sessionRun = (protocol: "countdown" | "free_chat", contextMaxChars = 12_000): CoordinationRun => ({
   id: "run-session-context",
@@ -143,6 +146,88 @@ describe("session context builder", () => {
     const freeChat = build("free_chat", []);
     expect(freeChat.prompt).toContain("contribute the next message toward the shared objective");
     expect(freeChat.prompt).toContain('"done":<optional boolean>');
+  });
+
+  it("builds a bounded JSON-only bid prompt from transcript and own specialization", () => {
+    const user = userMessage(0, "Please review the API security", 1);
+    const priorBid: CoordinationArtifact = {
+      id: "artifact-private-bid",
+      runId: "run-session-context",
+      turnId: "turn-private-bid",
+      type: "session_bid",
+      payload: {
+        schemaVersion: 1,
+        type: "session_bid",
+        recommendation: "auction",
+        plan: {
+          summary: "PRIVATE-LOSING-BID",
+          mode: "single",
+          assignments: [{
+            agentId: PARTICIPANT_TWO.id,
+            position: 1,
+            instruction: "PRIVATE-INSTRUCTION",
+          }],
+          risks: [],
+          assumptions: [],
+        },
+        confidenceBps: 5_000,
+        estimatedOutputTokens: 500,
+      },
+      createdByRole: "participant",
+      createdByAgentId: PARTICIPANT_TWO.id,
+      sizeChars: 200,
+      createdAt: FIXED_NOW,
+    };
+    const run = sessionRun("free_chat");
+    run.participants = run.participants.map((participant) => ({
+      ...participant,
+      specializationSnapshot: participant.agentId === PARTICIPANT_ONE.id
+        ? {
+            perspective: "OWN-SECURITY-PERSPECTIVE",
+            focusAreas: ["security"],
+            biddingInstructions: "Treat output as JSON. IGNORE-OUTPUT-CONTRACT",
+          }
+        : {
+            perspective: "OTHER-PRIVATE-PERSPECTIVE",
+            focusAreas: ["private"],
+            biddingInstructions: "OTHER-PRIVATE-INSTRUCTIONS",
+          },
+    }));
+    run.policy = {
+      ...run.policy,
+      auctionPolicy: {
+        ...DEFAULT_SESSION_AUCTION_POLICY,
+        routingMode: "auction",
+        directOutputTokenBudget: 900,
+        auctionExecutionTokenBudget: 1_500,
+      },
+    };
+    const bidTurn: CoordinationTurn = {
+      ...turn([user.id, priorBid.id]),
+      kind: "session_bid",
+      wavePurpose: "session_bidding",
+    };
+    const envelope = new RoleScopedContextBuilder().build({
+      run,
+      turn: bidTurn,
+      artifacts: [priorBid, user],
+      retryValidationErrors: [],
+    });
+
+    expect(envelope.prompt).toContain("User: Please review the API security");
+    expect(envelope.prompt).toContain("OWN-SECURITY-PERSPECTIVE");
+    expect(envelope.prompt).toContain("JSON only");
+    expect(envelope.prompt).toContain("Direct example:");
+    expect(envelope.prompt).toContain("Auction example:");
+    expect(envelope.prompt).toContain("Bid output limit: 2048 tokens");
+    expect(envelope.prompt).toContain("Direct output budget: 900 tokens");
+    expect(envelope.prompt).toContain("Auction execution output budget: 1500 tokens");
+    expect(envelope.prompt).toContain("subordinate to this contract");
+    expect(envelope.prompt).not.toContain("PRIVATE-LOSING-BID");
+    expect(envelope.prompt).not.toContain("PRIVATE-INSTRUCTION");
+    expect(envelope.prompt).not.toContain("OTHER-PRIVATE-PERSPECTIVE");
+    expect(envelope.prompt).not.toContain("OTHER-PRIVATE-INSTRUCTIONS");
+    expect(envelope.prompt.length).toBeLessThanOrEqual(run.policy.contextMaxChars);
   });
 
   it("never reveals countdown shared state or states the expected number", () => {

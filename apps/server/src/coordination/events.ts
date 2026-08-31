@@ -75,6 +75,7 @@ const TURN_KIND_LABELS: Record<CoordinationTurnKind, string> = {
   proposal_review: "proposal review",
   finalization: "finalization",
   session_turn: "session turn",
+  session_bid: "session bid",
 };
 
 export interface CoordinationEventFactory {

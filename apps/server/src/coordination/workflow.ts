@@ -132,6 +132,7 @@ const validateView = (view: WorkflowView): WorkflowDecision | undefined => {
     // A verified-handoff run may never contain a session turn. Keeping this
     // entry makes additions to CoordinationTurnKind compile-fail here too.
     session_turn: undefined,
+    session_bid: undefined,
   } as const satisfies Readonly<
     Record<CoordinationTurnKind, { role: "planner" | "critic" | "finalizer"; type: ArtifactType } | undefined>
   >;

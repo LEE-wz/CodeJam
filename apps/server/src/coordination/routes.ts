@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { CoordinationServiceContract } from "./contracts.js";
 import { CoordinationError } from "./errors.js";
 import type { CreateRunRequest, GetCoordinationRunResponse } from "./types.js";
-import { SESSION_LIMITS } from "./types.js";
+import { SESSION_AUCTION_LIMITS, SESSION_LIMITS } from "./types.js";
 
 const runIdParams = z.object({ id: z.string().uuid() });
 const detailQuery = z
@@ -52,6 +52,56 @@ const verifiedCreateRunBody = z
   })
   .strict();
 
+const sessionAuctionPolicySchema = z
+  .object({
+    routingMode: z.enum(["direct", "auction", "auto"]).optional(),
+    defaultAgentId: z.string().trim().min(1).optional(),
+    directConfidenceThresholdBps: z
+      .number()
+      .int()
+      .min(SESSION_AUCTION_LIMITS.minConfidenceBps)
+      .max(SESSION_AUCTION_LIMITS.maxConfidenceBps)
+      .optional(),
+    directOutputTokenBudget: z
+      .number()
+      .int()
+      .min(SESSION_AUCTION_LIMITS.minDirectOutputTokens)
+      .max(SESSION_AUCTION_LIMITS.maxDirectOutputTokens)
+      .optional(),
+    minimumValidBids: z.number().int().min(1).max(SESSION_LIMITS.maxParticipants).optional(),
+    maxBidOutputTokens: z
+      .number()
+      .int()
+      .min(SESSION_AUCTION_LIMITS.minBidOutputTokens)
+      .max(SESSION_AUCTION_LIMITS.maxBidOutputTokens)
+      .optional(),
+    maxBidAttempts: z
+      .number()
+      .int()
+      .min(SESSION_AUCTION_LIMITS.minBidAttempts)
+      .max(SESSION_AUCTION_LIMITS.maxBidAttempts)
+      .optional(),
+    auctionExecutionTokenBudget: z
+      .number()
+      .int()
+      .min(SESSION_AUCTION_LIMITS.minExecutionOutputTokens)
+      .max(SESSION_AUCTION_LIMITS.maxExecutionOutputTokens)
+      .optional(),
+    auctionOnDirectFailure: z.boolean().optional(),
+    fallback: z.enum(["default_agent", "round_robin", "fail"]).optional(),
+    scoringVersion: z.literal("confidence_cost_v1").optional(),
+  })
+  .strict()
+  .superRefine((policy, context) => {
+    if (policy.fallback === "default_agent" && policy.defaultAgentId === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["defaultAgentId"],
+        message: "default_agent fallback requires defaultAgentId",
+      });
+    }
+  });
+
 const sessionPolicySchema = z
   .object({
     sessionProtocol: z.enum(["countdown", "free_chat"]).optional(),
@@ -72,11 +122,28 @@ const sessionPolicySchema = z
       .min(SESSION_LIMITS.minParallelTurns)
       .max(SESSION_LIMITS.maxParallelTurns)
       .optional(),
+    auctionPolicy: sessionAuctionPolicySchema.optional(),
   })
   .strict()
   .superRefine((policy, context) => {
     const protocol = policy.sessionProtocol ?? "countdown";
     const waveMode = policy.sessionWaveMode ?? "sequential";
+    if (policy.auctionPolicy !== undefined) {
+      if (protocol !== "free_chat") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["auctionPolicy"],
+          message: "Auction routing requires a free-chat session",
+        });
+      }
+      if (policy.sessionWaveMode !== undefined || policy.sessionWavePurpose !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["auctionPolicy"],
+          message: "Auction routing cannot be combined with Phase 13 wave routing fields",
+        });
+      }
+    }
     // A bidding wave only exists inside a parallel wave: there is nothing to
     // bid against when one participant answers at a time.
     if (waveMode === "sequential" && policy.sessionWavePurpose === "session_bidding") {
@@ -144,7 +211,31 @@ const sessionCreateRunBody = z
       }),
     policy: sessionPolicySchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, context) => {
+    const auction = body.policy?.auctionPolicy;
+    if (!auction) return;
+    if (
+      auction.defaultAgentId !== undefined &&
+      !body.agents.includes(auction.defaultAgentId)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["policy", "auctionPolicy", "defaultAgentId"],
+        message: "Default Agent must be a session participant",
+      });
+    }
+    if (
+      auction.minimumValidBids !== undefined &&
+      auction.minimumValidBids > body.agents.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["policy", "auctionPolicy", "minimumValidBids"],
+        message: "Minimum valid bids cannot exceed the participant count",
+      });
+    }
+  });
 
 const createRunBody: z.ZodType<CreateRunRequest> = z.union([
   verifiedCreateRunBody,

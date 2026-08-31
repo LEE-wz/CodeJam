@@ -7,15 +7,33 @@ import {
 } from "./testing/fixtures.js";
 import {
   ARTIFACT_SCHEMA_LIMITS,
+  BID_SCHEMA_LIMITS,
   finalPayloadSchema,
   proposalPayloadSchema,
   reviewPayloadSchema,
+  sessionBidPayloadSchema,
   sessionMessagePayloadSchema,
   userMessagePayloadSchema,
 } from "./schemas.js";
 import { SESSION_LIMITS } from "./types.js";
 
 const repeated = (length: number): string => "x".repeat(length);
+
+const bidPayload = () => ({
+  schemaVersion: 1 as const,
+  type: "session_bid" as const,
+  recommendation: "direct" as const,
+  candidateAnswer: "Candidate",
+  plan: {
+    summary: "Plan",
+    mode: "single" as const,
+    assignments: [{ agentId: "agent-one", position: 1, instruction: "Execute" }],
+    risks: ["Risk"],
+    assumptions: ["Assumption"],
+  },
+  confidenceBps: 8_000,
+  estimatedOutputTokens: 1_000,
+});
 
 describe("artifact payload schemas", () => {
   it("parses the valid proposal, rejecting review, approving review, and final fixtures", () => {
@@ -274,6 +292,84 @@ describe("artifact payload schemas", () => {
     expect(sessionMessagePayloadSchema.safeParse({ ...base, done: "yes" }).success).toBe(false);
     expect(sessionMessagePayloadSchema.safeParse({ ...base, agentId: "forged" }).success).toBe(false);
     expect(sessionMessagePayloadSchema.safeParse({ ...base, schemaVersion: 2 }).success).toBe(false);
+  });
+
+  it.each([
+    ["candidate answer", BID_SCHEMA_LIMITS.candidateAnswerChars, (value: string) => ({ candidateAnswer: value })],
+    ["plan summary", BID_SCHEMA_LIMITS.planSummaryChars, (value: string) => ({ plan: { ...bidPayload().plan, summary: value } })],
+    ["assignment instruction", BID_SCHEMA_LIMITS.assignmentInstructionChars, (value: string) => ({ plan: { ...bidPayload().plan, assignments: [{ ...bidPayload().plan.assignments[0]!, instruction: value }] } })],
+    ["risk", BID_SCHEMA_LIMITS.riskAssumptionChars, (value: string) => ({ plan: { ...bidPayload().plan, risks: [value] } })],
+    ["assumption", BID_SCHEMA_LIMITS.riskAssumptionChars, (value: string) => ({ plan: { ...bidPayload().plan, assumptions: [value] } })],
+  ] as const)("accepts bid %s at its cap and rejects empty or one over", (_name, limit, change) => {
+    const parse = (value: string) => sessionBidPayloadSchema.safeParse({
+      ...bidPayload(),
+      ...change(value),
+    });
+    expect(parse(repeated(limit)).success).toBe(true);
+    expect(parse(repeated(limit + 1)).success).toBe(false);
+    expect(parse("   ").success).toBe(false);
+  });
+
+  it("strictly bounds bid arrays and numeric fields", () => {
+    const assignment = bidPayload().plan.assignments[0]!;
+    expect(sessionBidPayloadSchema.safeParse({
+      ...bidPayload(),
+      plan: {
+        ...bidPayload().plan,
+        assignments: Array.from({ length: SESSION_LIMITS.maxParticipants }, (_, index) => ({
+          ...assignment,
+          agentId: `agent-${index}`,
+          position: index + 1,
+        })),
+        risks: Array.from({ length: BID_SCHEMA_LIMITS.risks }, () => "risk"),
+        assumptions: Array.from({ length: BID_SCHEMA_LIMITS.assumptions }, () => "assumption"),
+      },
+      confidenceBps: 10_000,
+      estimatedOutputTokens: 1,
+    }).success).toBe(true);
+    for (const invalid of [
+      { ...bidPayload(), confidenceBps: -1 },
+      { ...bidPayload(), confidenceBps: 10_001 },
+      { ...bidPayload(), estimatedOutputTokens: 0 },
+      { ...bidPayload(), confidenceBps: 1.5 },
+      { ...bidPayload(), plan: { ...bidPayload().plan, assignments: [] } },
+      { ...bidPayload(), plan: { ...bidPayload().plan, risks: Array(11).fill("risk") } },
+      { ...bidPayload(), plan: { ...bidPayload().plan, assumptions: Array(11).fill("assumption") } },
+    ]) expect(sessionBidPayloadSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("trims bid text and rejects unknown fields at every object level", () => {
+    expect(sessionBidPayloadSchema.parse({
+      ...bidPayload(),
+      candidateAnswer: " candidate ",
+      plan: {
+        ...bidPayload().plan,
+        summary: " plan ",
+        assignments: [{ ...bidPayload().plan.assignments[0]!, instruction: " execute " }],
+        risks: [" risk "],
+        assumptions: [" assumption "],
+      },
+    })).toMatchObject({
+      candidateAnswer: "candidate",
+      plan: {
+        summary: "plan",
+        assignments: [{ instruction: "execute" }],
+        risks: ["risk"],
+        assumptions: ["assumption"],
+      },
+    });
+    expect(sessionBidPayloadSchema.safeParse({ ...bidPayload(), policy: {} }).success).toBe(false);
+    expect(sessionBidPayloadSchema.safeParse({
+      ...bidPayload(),
+      plan: { ...bidPayload().plan, route: "self" },
+    }).success).toBe(false);
+    expect(sessionBidPayloadSchema.safeParse({
+      ...bidPayload(),
+      plan: {
+        ...bidPayload().plan,
+        assignments: [{ ...bidPayload().plan.assignments[0]!, leaseToken: "forged" }],
+      },
+    }).success).toBe(false);
   });
 
   it("strictly validates, trims, and bounds durable user messages", () => {

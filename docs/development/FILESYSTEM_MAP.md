@@ -310,6 +310,9 @@ Do not modify `workflow.ts`. Verified handoff must keep scheduling exactly one t
 **Conditional paths**
 
 - `docs/development/overview-sessions.md` and `ASSUMPTIONS_AND_DECISIONS.md` for the amendment record
+- `apps/server/src/coordination/workflow.ts` only for the mechanical
+  `session_bid: undefined` exhaustiveness entry; verified-handoff decisions
+  remain unchanged
 
 Countdown deletion applies to the engine only. Stored history keeps its fields, and a fixture test proves a pre-existing countdown run still loads and renders.
 
@@ -339,4 +342,3 @@ Run the scale harness against temporary directories only. Never measure against 
 - unrelated XML/assets, archived workspaces, or another developer's temporary files
 
 If a test or runtime command generates these paths, do not read their contents unless the current test explicitly requires a safe temporary fixture.
-

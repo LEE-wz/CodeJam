@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowView } from "./contracts.js";
 import { CoordinationWorkflowDispatchV1 } from "./service.js";
-import { SharedSessionWorkflowV1 } from "./session-workflow.js";
+import {
+  buildSessionBidWaveDecision,
+  SharedSessionWorkflowV1,
+} from "./session-workflow.js";
 import { FakeWorkflow } from "./testing/fakes.js";
 import {
   PARTICIPANT_FOUR,
@@ -18,7 +21,10 @@ import type {
   CoordinationTurn,
   SessionMessagePayload,
 } from "./types.js";
-import { DEFAULT_COORDINATION_POLICY } from "./types.js";
+import {
+  DEFAULT_COORDINATION_POLICY,
+  DEFAULT_SESSION_AUCTION_POLICY,
+} from "./types.js";
 
 const now = "2026-08-30T00:00:00.000Z";
 const agents = [PARTICIPANT_ONE, PARTICIPANT_TWO, PARTICIPANT_THREE, PARTICIPANT_FOUR];
@@ -210,6 +216,134 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
     expect(workflow.decideNext(view)).toMatchObject({
       kind: "fail",
       code: "MAX_TURNS_EXCEEDED",
+    });
+  });
+
+  it("routes explicit direct mode to exactly one ordinary execution turn", () => {
+    const view = committedView("free_chat", [], { participantCount: 3 });
+    view.run.participants = view.run.participants.map((participant, index) => ({
+      ...participant,
+      ...(index === 1
+        ? {
+            specializationSnapshot: {
+              perspective: "Security reviewer",
+              focusAreas: ["security"],
+              biddingInstructions: "Prefer concrete mitigations.",
+            },
+          }
+        : {}),
+    }));
+    view.run.policy = {
+      ...view.run.policy,
+      auctionPolicy: {
+        ...DEFAULT_SESSION_AUCTION_POLICY,
+        routingMode: "direct",
+      },
+    };
+    const user = view.artifacts.find(({ type }) => type === "user_message");
+    if (!user || user.type !== "user_message") throw new Error("Missing user fixture");
+    user.payload = { ...user.payload, content: "Please perform a security review" };
+
+    expect(workflow.decideNext(view)).toEqual({
+      kind: "schedule",
+      role: "participant",
+      agentId: PARTICIPANT_TWO.id,
+      turnKind: "session_turn",
+      phase: "sessioning",
+      revision: 0,
+      inputArtifactIds: [user.id],
+      expectedArtifactType: "session_message",
+    });
+  });
+
+  it("schedules one atomic bid opportunity for every explicit-auction participant", () => {
+    const view = committedView("free_chat", [], { participantCount: 3 });
+    view.run.policy = {
+      ...view.run.policy,
+      maxTurns: 10,
+      auctionPolicy: {
+        ...DEFAULT_SESSION_AUCTION_POLICY,
+        routingMode: "auction",
+      },
+    };
+    const userId = view.run.lastUserArtifactId!;
+
+    expect(workflow.decideNext(view)).toEqual({
+      kind: "schedule_wave",
+      wavePurpose: "session_bidding",
+      phase: "sessioning",
+      revision: 0,
+      members: participants(3).map(({ agentId }) => ({
+        role: "participant",
+        agentId,
+        turnKind: "session_bid",
+        inputArtifactIds: [userId],
+        expectedArtifactType: "session_bid",
+      })),
+    });
+  });
+
+  it("builds an Auto escalation wave from only participants without a prior bid", () => {
+    const decision = buildSessionBidWaveDecision({
+      participants: participants(3),
+      inputArtifactIds: ["user-artifact-1"],
+      priorBidAgentIds: new Set([PARTICIPANT_ONE.id]),
+    });
+    expect(decision.members.map(({ agentId }) => agentId)).toEqual([
+      PARTICIPANT_TWO.id,
+      PARTICIPANT_THREE.id,
+    ]);
+    expect(decision.members.every(
+      ({ turnKind, expectedArtifactType }) =>
+        turnKind === "session_bid" && expectedArtifactType === "session_bid",
+    )).toBe(true);
+  });
+
+  it("never creates a second bid opportunity for the same user-message round", () => {
+    const view = committedView("free_chat", [], { participantCount: 3 });
+    const userId = view.run.lastUserArtifactId!;
+    view.run.policy = {
+      ...view.run.policy,
+      maxTurns: 10,
+      auctionPolicy: {
+        ...DEFAULT_SESSION_AUCTION_POLICY,
+        routingMode: "auction",
+      },
+    };
+    view.turns = participants(3).map(({ agentId }, index) => ({
+      id: `bid-turn-${index + 1}`,
+      runId: view.run.id,
+      sequence: index + 1,
+      role: "participant",
+      agentId,
+      kind: "session_bid",
+      wavePurpose: "session_bidding",
+      status: "failed",
+      attemptCount: DEFAULT_SESSION_AUCTION_POLICY.maxBidAttempts,
+      inputArtifactIds: [userId],
+      lastValidationErrors: [],
+      createdAt: now,
+      completedAt: now,
+    }));
+    view.run.nextTurnSequence = 4;
+
+    expect(workflow.decideNext(view)).toMatchObject({
+      kind: "fail",
+      code: "INVALID_STATE",
+      message: "Settled bids require the PA14 award decision",
+    });
+  });
+
+  it("keeps auto routing fail-closed until the primary-candidate phase", () => {
+    const view = committedView("free_chat", []);
+    view.run.policy = {
+      ...view.run.policy,
+      auctionPolicy: DEFAULT_SESSION_AUCTION_POLICY,
+    };
+    expect(workflow.decideNext(view)).toMatchObject({
+      kind: "fail",
+      code: "INVALID_STATE",
+      message: "Auto routing requires the PA14 primary-candidate implementation",
     });
   });
 

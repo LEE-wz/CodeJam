@@ -297,27 +297,27 @@ as primarily self-reported.
 
 ### Contracts and routing
 
-- [ ] **PA14-01** Amend the auction-branch mini-RFC with the routing modes,
+- [x] **PA14-01** Amend the auction-branch mini-RFC with the routing modes,
   primary selection, bid schema, scoring version, publication projection,
   fallback, feedback, and countdown replacement. Do not edit the main Phase 14
   sheet.
-- [ ] **PA14-02** Add the auction policy and route validation, including hard
+- [x] **PA14-02** Add the auction policy and route validation, including hard
   budgets, bid limits, valid-bid threshold, direct threshold, fallback, and
   scoring version. Old sessions normalize to a documented non-auction mode and
   remain readable.
-- [ ] **PA14-03** Implement deterministic primary selection with explicit
+- [x] **PA14-03** Implement deterministic primary selection with explicit
   selection, sticky follow-up ownership, specialization-tag match, default
   Agent, stable participant-order fallback, and busy-Agent handling.
-- [ ] **PA14-04** Implement direct routing as one ordinary execution turn with no
+- [x] **PA14-04** Implement direct routing as one ordinary execution turn with no
   bid wave. Prove that explicit direct mode cannot silently expand into an
   auction unless its policy says so.
 
 ### Bid and award protocol
 
-- [ ] **PA14-05** Add `session_bid` turn/artifact types, strict schema,
+- [x] **PA14-05** Add `session_bid` turn/artifact types, strict schema,
   exhaustive maps, payload caps, prompt template, context visibility, parsing,
   and mechanical cross-field validation.
-- [ ] **PA14-06** Schedule an atomic bid wave for every eligible participant in
+- [x] **PA14-06** Schedule an atomic bid wave for every eligible participant in
   explicit auction mode and for remaining participants after Auto escalation.
   Exactly one bid opportunity exists per Agent per user-message round; retries
   do not create another opportunity.
@@ -474,4 +474,3 @@ Do not encode an automatic winner or mandatory score threshold in the
 documentation. Implementation completeness, behavioural accuracy, operational
 risk, and product fit should be judged together once both branches have real
 evidence.
-

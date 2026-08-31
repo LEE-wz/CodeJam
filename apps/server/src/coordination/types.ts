@@ -29,7 +29,8 @@ export type CoordinationTurnKind =
   | "proposal_revision"
   | "proposal_review"
   | "finalization"
-  | "session_turn";
+  | "session_turn"
+  | "session_bid";
 
 /** Backend-owned reason a session wave was scheduled. */
 export type CoordinationWavePurpose = "session_execution" | "session_bidding";
@@ -43,6 +44,40 @@ export type CoordinationWavePurpose = "session_execution" | "session_bidding";
  * read only by backend code, so no Agent output can widen its own fan-out.
  */
 export type SessionWaveMode = "sequential" | "parallel";
+
+export type SessionRoutingMode = "direct" | "auction" | "auto";
+export type SessionAuctionFallback = "default_agent" | "round_robin" | "fail";
+export type SessionAuctionScoringVersion = "confidence_cost_v1";
+
+/** Durable, backend-normalized policy for an auction-capable session. */
+export interface SessionAuctionPolicy {
+  routingMode: SessionRoutingMode;
+  defaultAgentId?: AgentId;
+  directConfidenceThresholdBps: number;
+  directOutputTokenBudget: number;
+  minimumValidBids: number;
+  maxBidOutputTokens: number;
+  maxBidAttempts: number;
+  auctionExecutionTokenBudget: number;
+  auctionOnDirectFailure: boolean;
+  fallback: SessionAuctionFallback;
+  scoringVersion: SessionAuctionScoringVersion;
+}
+
+/** Create-time auction policy. Omitted fields receive backend-owned defaults. */
+export interface SessionAuctionPolicyInput {
+  routingMode?: SessionRoutingMode | undefined;
+  defaultAgentId?: AgentId | undefined;
+  directConfidenceThresholdBps?: number | undefined;
+  directOutputTokenBudget?: number | undefined;
+  minimumValidBids?: number | undefined;
+  maxBidOutputTokens?: number | undefined;
+  maxBidAttempts?: number | undefined;
+  auctionExecutionTokenBudget?: number | undefined;
+  auctionOnDirectFailure?: boolean | undefined;
+  fallback?: SessionAuctionFallback | undefined;
+  scoringVersion?: SessionAuctionScoringVersion | undefined;
+}
 
 /**
  * Which model thread an attempt runs on (PA13-09).
@@ -107,6 +142,7 @@ export type ArtifactType =
   | "proposal"
   | "review"
   | "final"
+  | "session_bid"
   | "session_message"
   | "user_message";
 export type ReviewDecision = "approve" | "reject";
@@ -192,6 +228,11 @@ export interface CoordinationPolicy {
    * the derived default in `resolveMaxParallelTurns`.
    */
   maxParallelTurns?: number;
+  /**
+   * Present only on auction-capable free-chat sessions. Absence is the durable
+   * legacy-session marker: old sessions retain their pre-auction routing.
+   */
+  auctionPolicy?: SessionAuctionPolicy;
 }
 
 export const DEFAULT_COORDINATION_POLICY: CoordinationPolicy = {
@@ -348,6 +389,33 @@ export interface SessionMessagePayload {
   done?: boolean;
 }
 
+export type SessionBidRecommendation = "direct" | "auction";
+export type SessionBidPlanMode = "single" | "sequential" | "parallel";
+
+export interface SessionBidAssignment {
+  agentId: AgentId;
+  position: number;
+  instruction: string;
+}
+
+export interface SessionBidPlan {
+  summary: string;
+  mode: SessionBidPlanMode;
+  assignments: SessionBidAssignment[];
+  risks: string[];
+  assumptions: string[];
+}
+
+export interface SessionBidPayload {
+  schemaVersion: 1;
+  type: "session_bid";
+  recommendation: SessionBidRecommendation;
+  candidateAnswer?: string;
+  plan: SessionBidPlan;
+  confidenceBps: number;
+  estimatedOutputTokens: number;
+}
+
 export interface UserMessagePayload {
   schemaVersion: 1;
   type: "user_message";
@@ -358,6 +426,7 @@ export type ArtifactPayload =
   | ProposalPayload
   | ReviewPayload
   | FinalPayload
+  | SessionBidPayload
   | SessionMessagePayload
   | UserMessagePayload;
 
@@ -391,6 +460,7 @@ export type CoordinationArtifact =
   | (CoordinationArtifactBase & { type: "proposal"; payload: ProposalPayload })
   | (CoordinationArtifactBase & { type: "review"; payload: ReviewPayload })
   | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload })
+  | (CoordinationArtifactBase & { type: "session_bid"; payload: SessionBidPayload })
   | (CoordinationArtifactBase & {
       type: "session_message";
       payload: SessionMessagePayload;
@@ -509,6 +579,7 @@ export interface CreateSessionRunRequest {
         sessionWaveMode?: SessionWaveMode | undefined;
         sessionWavePurpose?: CoordinationWavePurpose | undefined;
         maxParallelTurns?: number | undefined;
+        auctionPolicy?: SessionAuctionPolicyInput | undefined;
       }
     | undefined;
 }
@@ -549,6 +620,32 @@ export const SESSION_LIMITS = {
   maxParallelTurns: 10,
   defaultParallelTurns: 4,
 } as const;
+
+export const SESSION_AUCTION_LIMITS = {
+  minConfidenceBps: 0,
+  maxConfidenceBps: 10_000,
+  minDirectOutputTokens: 1,
+  maxDirectOutputTokens: 4_000,
+  minBidOutputTokens: 128,
+  maxBidOutputTokens: 4_096,
+  minBidAttempts: 1,
+  maxBidAttempts: 3,
+  minExecutionOutputTokens: 128,
+  maxExecutionOutputTokens: 16_000,
+} as const;
+
+export const DEFAULT_SESSION_AUCTION_POLICY: SessionAuctionPolicy = {
+  routingMode: "auto",
+  directConfidenceThresholdBps: 8_000,
+  directOutputTokenBudget: 4_000,
+  minimumValidBids: 2,
+  maxBidOutputTokens: 2_048,
+  maxBidAttempts: 2,
+  auctionExecutionTokenBudget: 4_000,
+  auctionOnDirectFailure: false,
+  fallback: "round_robin",
+  scoringVersion: "confidence_cost_v1",
+};
 
 /**
  * The concurrency cap actually applied to a wave (PA13-10).

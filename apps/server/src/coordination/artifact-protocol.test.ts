@@ -127,20 +127,22 @@ const fenced = (body: string, info = "json"): string => `\`\`\`${info}\n${body}\
 describe("artifact protocol: expected type by turn kind", () => {
   it("maps every turn kind to the artifact type the backend requires", () => {
     // Every verified-handoff mapping is asserted individually rather than through
-    // `toEqual`, which would enumerate the Phase 5 `session_turn` placeholder and
-    // trigger its throw. The key set is asserted separately, so a turn kind still
+    // `toEqual`, which would enumerate shared-session kinds and trigger their
+    // verified-protocol rejection. The key set is asserted separately, so a turn kind still
     // cannot be added or dropped without failing here.
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.initial_proposal).toBe("proposal");
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.proposal_revision).toBe("proposal");
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.proposal_review).toBe("review");
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.finalization).toBe("final");
     expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn).toBe("session_message");
+    expect(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_bid).toBe("session_bid");
     expect(Object.keys(EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND)).toEqual([
       "initial_proposal",
       "proposal_revision",
       "proposal_review",
       "finalization",
       "session_turn",
+      "session_bid",
     ]);
   });
 

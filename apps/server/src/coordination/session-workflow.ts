@@ -1,5 +1,7 @@
 import type { SharedSessionWorkflow, WorkflowDecision, WorkflowView } from "./contracts.js";
+import { selectPrimaryAgent } from "./auction-routing.js";
 import type {
+  AgentId,
   CoordinationArtifact,
   CoordinationArtifactId,
   CoordinationParticipant,
@@ -10,6 +12,7 @@ import { SESSION_LIMITS } from "./types.js";
 export type { SharedSessionWorkflow } from "./contracts.js";
 
 type SessionArtifact = Extract<CoordinationArtifact, { type: "session_message" }>;
+type BidArtifact = Extract<CoordinationArtifact, { type: "session_bid" }>;
 type UserArtifact = Extract<CoordinationArtifact, { type: "user_message" }>;
 
 const invalidState = (message: string): WorkflowDecision => ({
@@ -24,7 +27,9 @@ const isPositiveInteger = (value: number): boolean =>
 interface ValidSessionView {
   participants: CoordinationParticipant[];
   committedArtifacts: SessionArtifact[];
+  bidArtifacts: BidArtifact[];
   transcriptArtifacts: Array<SessionArtifact | UserArtifact>;
+  turns: WorkflowView["turns"];
 }
 
 /**
@@ -74,15 +79,19 @@ const validateSessionView = (
 
   const turns = view.turns.filter(({ runId }) => runId === run.id);
   const artifacts = view.artifacts.filter(({ runId }) => runId === run.id);
-  if (artifacts.some(({ type }) => type !== "session_message" && type !== "user_message")) {
+  if (
+    artifacts.some(
+      ({ type }) =>
+        type !== "session_bid" && type !== "session_message" && type !== "user_message",
+    )
+  ) {
     return invalidState("Session run contains a non-session artifact");
   }
 
   // PA13-14: history may now be concurrent, so identity, sequence, attribution,
   // and wave purpose are each checked explicitly rather than being implied by a
   // strictly ordered one-turn-at-a-time transcript.
-  const runPurpose: CoordinationWavePurpose =
-    run.policy.sessionWavePurpose ?? "session_execution";
+  const runPurpose: CoordinationWavePurpose = run.policy.sessionWavePurpose ?? "session_execution";
   const turnIds = new Set<string>();
   const sequences = new Set<number>();
   for (const turn of turns) {
@@ -91,10 +100,16 @@ const validateSessionView = (
       sequences.has(turn.sequence) ||
       !isPositiveInteger(turn.sequence) ||
       turn.sequence >= run.nextTurnSequence ||
-      turn.kind !== "session_turn" ||
+      (turn.kind !== "session_turn" &&
+        (run.policy.auctionPolicy === undefined || turn.kind !== "session_bid")) ||
       turn.role !== "participant" ||
       !participantIds.has(turn.agentId) ||
-      turnPurpose(turn) !== runPurpose ||
+      turnPurpose(turn) !==
+        (run.policy.auctionPolicy === undefined
+          ? runPurpose
+          : turn.kind === "session_bid"
+            ? "session_bidding"
+            : "session_execution") ||
       !["committed", "cancelled", "failed"].includes(turn.status)
     ) {
       return invalidState("Session run contains an invalid turn");
@@ -104,13 +119,13 @@ const validateSessionView = (
   }
 
   const artifactIds = new Set<string>();
-  const artifactsById = new Map<string, SessionArtifact>();
+  const artifactsById = new Map<string, CoordinationArtifact>();
   for (const artifact of artifacts) {
     if (artifactIds.has(artifact.id)) {
       return invalidState("Session run has duplicate artifact identity");
     }
     artifactIds.add(artifact.id);
-    if (artifact.type === "session_message") artifactsById.set(artifact.id, artifact);
+    artifactsById.set(artifact.id, artifact);
   }
 
   // A wave's members commit in whatever order their Agents finish, so
@@ -118,8 +133,10 @@ const validateSessionView = (
   // asserted for both: an artifact must belong to its own turn and to the Agent
   // that turn was routed to.
   const isWaveRun = run.policy.sessionWaveMode === "parallel";
+  const isLegacyRun = run.policy.auctionPolicy === undefined;
   const committedTurns = [...turns].sort((left, right) => left.sequence - right.sequence);
   const committedArtifacts: SessionArtifact[] = [];
+  const bidArtifacts: BidArtifact[] = [];
   for (const turn of committedTurns) {
     if (turn.status !== "committed") continue;
     const expectedParticipant = participants[committedArtifacts.length % participants.length];
@@ -127,7 +144,6 @@ const validateSessionView = (
       ? artifactsById.get(turn.outputArtifactId)
       : undefined;
     if (
-      (!isWaveRun && (!expectedParticipant || turn.agentId !== expectedParticipant.agentId)) ||
       !artifact ||
       artifact.turnId !== turn.id ||
       artifact.createdByRole !== "participant" ||
@@ -135,12 +151,27 @@ const validateSessionView = (
     ) {
       return invalidState("Committed session turn has invalid routing or output");
     }
-    committedArtifacts.push(artifact);
+    if (turn.kind === "session_turn" && artifact.type === "session_message") {
+      if (
+        isLegacyRun &&
+        !isWaveRun &&
+        (!expectedParticipant || turn.agentId !== expectedParticipant.agentId)
+      ) {
+        return invalidState("Committed session turn has invalid routing or output");
+      }
+      committedArtifacts.push(artifact);
+      continue;
+    }
+    if (turn.kind === "session_bid" && artifact.type === "session_bid") {
+      bidArtifacts.push(artifact);
+      continue;
+    }
+    return invalidState("Committed session turn has the wrong artifact type");
   }
   const userArtifacts = artifacts.filter(
     (artifact): artifact is UserArtifact => artifact.type === "user_message",
   );
-  if (committedArtifacts.length + userArtifacts.length !== artifacts.length) {
+  if (committedArtifacts.length + bidArtifacts.length + userArtifacts.length !== artifacts.length) {
     return invalidState("Session run contains an uncommitted artifact");
   }
 
@@ -150,7 +181,7 @@ const validateSessionView = (
     return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);
   });
 
-  return { participants, committedArtifacts, transcriptArtifacts };
+  return { participants, committedArtifacts, bidArtifacts, transcriptArtifacts, turns };
 };
 
 const validateCountdownState = (
@@ -188,13 +219,38 @@ const finalArtifactId = (
   artifacts: SessionArtifact[],
 ): CoordinationArtifactId | undefined => artifacts.at(-1)?.id;
 
+/**
+ * Backend-owned bid-wave shape shared by explicit Auction and the PA14-07 Auto
+ * escalation path. A primary Agent that already used its one bid opportunity
+ * is excluded by identity; participant order remains the durable tie-break.
+ */
+export const buildSessionBidWaveDecision = (input: {
+  participants: readonly CoordinationParticipant[];
+  inputArtifactIds: readonly CoordinationArtifactId[];
+  priorBidAgentIds?: ReadonlySet<AgentId>;
+}): Extract<WorkflowDecision, { kind: "schedule_wave" }> => ({
+  kind: "schedule_wave",
+  wavePurpose: "session_bidding",
+  phase: "sessioning",
+  revision: 0,
+  members: input.participants
+    .filter(({ agentId }) => !input.priorBidAgentIds?.has(agentId))
+    .map(({ agentId }) => ({
+      role: "participant" as const,
+      agentId,
+      turnKind: "session_bid" as const,
+      inputArtifactIds: [...input.inputArtifactIds],
+      expectedArtifactType: "session_bid" as const,
+    })),
+});
+
 export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
   decideNext(view: WorkflowView): WorkflowDecision {
     const validated = validateSessionView(view);
     if ("kind" in validated) return validated;
 
     const { run } = view;
-    const { participants, committedArtifacts, transcriptArtifacts } = validated;
+    const { participants, committedArtifacts, transcriptArtifacts, turns } = validated;
     const lastArtifactId = finalArtifactId(committedArtifacts);
 
     if (run.policy.sessionProtocol === "countdown") {
@@ -235,6 +291,61 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
       const currentWave = committedArtifacts.filter(
         (artifact) => (artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER) > activeSequence,
       );
+
+      if (run.policy.auctionPolicy !== undefined) {
+        if (!activeUser) {
+          return invalidState("Auction routing requires a current user message");
+        }
+        if (currentWave.length > 0) {
+          return { kind: "await_input" };
+        }
+        const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
+        if (run.policy.auctionPolicy.routingMode === "direct") {
+          if (turns.length + 1 > run.policy.maxTurns) {
+            return {
+              kind: "fail",
+              code: "MAX_TURNS_EXCEEDED",
+              message: "Direct response would exceed the session turn limit",
+            };
+          }
+          const selection = selectPrimaryAgent({
+            participants,
+            userMessage: activeUser.payload.content,
+            defaultAgentId: run.policy.auctionPolicy.defaultAgentId,
+          });
+          if (!selection.selectedAgentId) {
+            return invalidState("Direct routing found no available participant");
+          }
+          return {
+            kind: "schedule",
+            role: "participant",
+            agentId: selection.selectedAgentId,
+            turnKind: "session_turn",
+            phase: "sessioning",
+            revision: 0,
+            inputArtifactIds,
+            expectedArtifactType: "session_message",
+          };
+        }
+        if (run.policy.auctionPolicy.routingMode === "auction") {
+          const currentBidTurns = turns.filter(
+            (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
+          );
+          if (currentBidTurns.length > 0) {
+            return invalidState("Settled bids require the PA14 award decision");
+          }
+          if (turns.length + participants.length > run.policy.maxTurns) {
+            return {
+              kind: "fail",
+              code: "MAX_TURNS_EXCEEDED",
+              message: "Bid wave would exceed the session turn limit",
+            };
+          }
+          return buildSessionBidWaveDecision({ participants, inputArtifactIds });
+        }
+        return invalidState("Auto routing requires the PA14 primary-candidate implementation");
+      }
+
       const latestByParticipant = new Map<string, SessionArtifact>();
       for (const artifact of currentWave) {
         latestByParticipant.set(artifact.createdByAgentId, artifact);

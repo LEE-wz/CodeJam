@@ -1,13 +1,13 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (`PA13-01`–`PA13-20` `complete`; Auction Checkpoint 13 met, pending sign-off)
-**Audited checkpoint:** Phase 12 implementation merged at `aa17407`
-**Implementation branch:** `bidding-agent-implementation` (base `aa17407`)
+**Last audit:** 2026-08-31 (`PA14-01`–`PA14-06` complete; `PA14-07` next)
+**Audited checkpoint:** Auction Phase 13 complete at `085e765`
+**Implementation branch:** `bidding-agent-phase-14` (base `085e765`; auction-track root `aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Parallel Phase 13 - Auction Foundation and Purpose-Aware Waves
-**Current gate:** Auction Checkpoint 13 in progress
+**Current phase:** Parallel Phase 14 - Adaptive Auction Coordination
+**Current gate:** Auction Checkpoint 14 in progress (`PA14-07` Auto primary candidate next)
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 11-12 `complete`; auction Phase 13 `in_progress`; later phases `not_started`
+Phases 11-12 and auction Phase 13 `complete`; auction Phase 14 `in_progress`; Phase 15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -32,7 +32,7 @@ they name a past checkpoint.
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Auction foundation and purpose-aware parallel waves | `complete` on `bidding-agent-implementation` — all of `PA13-01`-`PA13-20`; Auction Checkpoint 13 met (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
-| 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
+| 14 | Adaptive auction coordination | `in_progress` on `bidding-agent-phase-14` — `PA14-01`-`PA14-06` complete (auction sheet: [`phases/parallel/14-adaptive-auction-coordination.md`](phases/parallel/14-adaptive-auction-coordination.md)); main-track sheet unchanged |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
@@ -46,12 +46,37 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Auction Checkpoint 13 is met. Review the completion-gate
-audit in the `PA13-20` Results section, then decide whether to open parallel
-Phase 14 (`phases/parallel/14-adaptive-auction-coordination.md`). Two findings
-from the live rehearsal should be settled first: the ~20% first-attempt
-invalid-output rate on bids, and whether auction sessions are expected to be
-long-lived given that an idle session holds its whole roster until Ended.
+**Resume here.** Implement `PA14-07`: schedule the one-call Auto primary bid,
+publish a qualifying direct candidate, and otherwise reuse that artifact as the
+primary bid before scheduling the exclusion-aware remaining-participant wave.
+Keep Auto fail-closed until that complete decision path is in place.
+
+## Auction Phase 14 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| PA14-01 | `complete` | User-approved adaptive-auction addendum in `ASSUMPTIONS_AND_DECISIONS.md`, including routing/migration, prompt hardening, exact scoring arithmetic, fallback evidence, feedback, usage categories, and the long-lived roster decision. |
+| PA14-02 | `complete` | Added durable `SessionAuctionPolicy`, backend defaults and hard bounds, strict nested route validation, direct-service validation, free-chat-only admission, participant-backed defaults, and mutual exclusion with the Phase 13 wave seam. Absence remains the legacy-session marker. |
+| PA14-03 | `complete` | Pure deterministic selector implements explicit selection, sticky prior ownership, normalized whole-token specialization matching, default Agent, participant-order fallback, stable ties, foreign-hint refusal, and busy-Agent skipping with an auditable candidate order. |
+| PA14-04 | `complete` | Explicit direct mode selects one deterministic primary and schedules exactly one ordinary `session_turn`/`session_message` execution on the normal Agent thread. Workflow and walking-skeleton tests prove it creates no bid wave and never silently escalates. |
+| PA14-05 | `complete` | Added strict `session_bid` turn, artifact, payload, exhaustive maps, bounded Zod schema, JSON-only parser, backend provenance, assignment/budget cross-field checks, field-specific retry feedback, own-specialisation prompt block, two minified examples, and losing-bid context exclusion. Exact field/array boundaries are covered. |
+| PA14-06 | `complete` | Explicit Auction atomically schedules one fresh-thread bid turn for every participant. The shared wave builder excludes Agents with a prior bid for the PA14-07 Auto escalation path; retries stay on the same turn under `maxBidAttempts`. Walking-skeleton evidence proves one turn per Agent, private non-transcript bid commits, and bounded same-opportunity retries. |
+
+### Phase 14 verification evidence (`PA14-01`-`PA14-06`)
+
+- `docker compose build launchpad` passed with both production builds.
+- The mandatory disposable Compose `npm run check` passed both workspace
+  typechecks, **32 server files / 616 tests**, **4 web files / 57 tests**, and
+  both production builds (**673 tests total**).
+- The first full check exposed one stale exhaustiveness assertion in
+  `artifact-protocol.test.ts`; it was widened for `session_bid`, and the full
+  check was rerun from the start to the clean result above.
+- Focused Compose evidence passed **79 tests** across the session workflow,
+  artifact protocol, context builder, and walking skeleton, plus **58 tests**
+  across schema boundaries and the walking skeleton. The deterministic selector
+  suite adds **6 tests**.
+- `npm ci` continues to report the unchanged dependency audit finding: **1
+  moderate and 5 high vulnerabilities**. No dependency version changed here.
 
 **Verification status.** `PA13-09`-`PA13-19` were promoted to `complete` on the
 user-run Docker Compose gate (see the verification log). The assistant could not
@@ -922,6 +947,9 @@ the driver occupies a late participant mid-wave rather than beforehand.
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 | `bidding-agent-phase-14` working tree | Standard disposable Docker Compose `npm run check` after `PA14-04`-`PA14-06` | **Passed:** 32 server files / 616 tests, 4 web files / 57 tests, both workspace typechecks, and both production builds (673 tests total). The first run found one stale exhaustive key-list assertion; after adding `session_bid`, the entire check passed from a fresh disposable workspace. `docker compose build launchpad` also passed. |
+| 2026-08-31 | `bidding-agent-phase-14` working tree | Standard disposable Docker Compose `npm run check` after `PA14-01`-`PA14-03` | **Passed:** 32 server files / 591 tests, 4 web files / 57 tests, both workspace typechecks, and both production builds (648 tests total). Focused policy/selector/API gate also passed 84 tests. `npm ci` reports the unchanged 1 moderate and 5 high dependency audit findings. |
+| 2026-08-31 | `bidding-agent-phase-14` working tree | Standard disposable Docker Compose `npm run check` after the `PA14-01` proposal | **Passed:** 31 server files / 573 tests, 4 web files / 57 tests, both workspace typechecks, and both production builds (630 tests total). This verifies the inherited implementation baseline; it does not approve the proposed contract. `npm ci` reports the unchanged 1 moderate and 5 high dependency audit findings. |
 | 2026-08-31 | `bidding-agent-implementation` working tree | **`PA13-20` live Compose rehearsal** — three scenarios, ten specialised participants, cap 4, real Ark provider | **Passed.** Healthy wave `8290e9de` (26.724 s, 9 committed / 1 retired, 12 attempts); contention wave `c5b1528d` (27.219 s, 9 committed / 1 retired on 2 × `AGENT_RESERVED`, 13 attempts, follow-up prompt accepted and the retired bidder re-scheduled); restart wave `eb15f94a` (4 attempts in flight cancelled `SERVER_RESTARTED`, `run.interrupted` then `run.awaiting_input`, 0 attempts left running, follow-up accepted); plus a third healthy wave `d34680c5` (21.046 s, 10/10). **Observed peak concurrency was 4 against a cap of 4 in all four runs; `usageTotals` reconciled exactly against an independent recomputation in all four; no attempt was ever left `running`; no lease token appeared in any payload.** This is the completion evidence for `PA13-20` and closes Auction Checkpoint 13. |
 | 2026-08-31 | `bidding-agent-implementation` working tree | **`PA13-09`-`PA13-19` gate** — standard scoped Docker Compose `npm run check`, plus the ten consecutive race/supervisor passes required by `PA13-15` | **Passed (user-run).** The user ran `VERIFY_PA13.sh` on a host with Docker and confirmed success. Predicted counts were 31 server files / 573 tests and 4 web files / 57 tests, both typechecks and both production builds (630 tests total); replace with the exact figures from that run if they differed. **This is the completion evidence for `PA13-09`-`PA13-19`.** |
 | 2026-08-31 | `bidding-agent-implementation` working tree | Assistant-side attempt at the same gate | **Not run.** No container registry was reachable: `registry-1.docker.io`, `mirror.gcr.io`, `public.ecr.aws`, and `ghcr.io` each returned `403 Forbidden`, so `docker compose build launchpad` could not resolve `node:22-bookworm-slim`. The user's own machine has no container engine (`docker` not found). The tasks were held at `implemented_unverified` until the user ran the gate themselves, recorded above. **Superseded by that passing gate.** |

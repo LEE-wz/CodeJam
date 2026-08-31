@@ -1303,6 +1303,7 @@ const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND = {
   proposal_review: "review",
   finalization: "final",
   session_turn: "session_message",
+  session_bid: "session_bid",
 } as const satisfies Readonly<Record<CoordinationTurn["kind"], ArtifactType>>;
 
 const expectedArtifactTypeForTurn = (turn: CoordinationTurn): ArtifactType =>

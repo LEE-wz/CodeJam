@@ -12,6 +12,7 @@ import { VerifiedHandoffWorkflowV1 } from "./workflow.js";
 import type { CoordinationRun, CoordinationRunDetails, CreateSessionRunRequest } from "./types.js";
 import {
   DEFAULT_COORDINATION_POLICY,
+  DEFAULT_SESSION_AUCTION_POLICY,
   SESSION_CONTEXT_MAX_CHARS,
   SESSION_LIMITS,
 } from "./types.js";
@@ -250,6 +251,139 @@ describe("session create validation and context probe", () => {
 });
 
 describe("session walking skeleton", () => {
+  it("executes explicit direct routing once without scheduling a bid wave", async () => {
+    const direct = await startSession([
+      succeeds(JSON.stringify(freeChatPayload("Direct answer", true))),
+    ], {
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 10,
+        auctionPolicy: {
+          ...DEFAULT_SESSION_AUCTION_POLICY,
+          routingMode: "direct",
+        },
+      },
+    });
+    const details = await settle(direct.service, direct.runId);
+
+    expect(details.run.status).toBe("awaiting_input");
+    expect(details.turns).toHaveLength(1);
+    expect(details.turns[0]).toMatchObject({
+      kind: "session_turn",
+      wavePurpose: "session_execution",
+      status: "committed",
+    });
+    expect(details.artifacts.map(({ type }) => type)).toEqual([
+      "user_message",
+      "session_message",
+    ]);
+    expect(direct.runtime.starts).toHaveLength(1);
+    expect(direct.runtime.starts[0]?.threadPolicy).toBe("agent_default");
+  });
+
+  it("executes one fresh-thread bid opportunity per explicit-auction participant", async () => {
+    const output = JSON.stringify({
+      schemaVersion: 1,
+      type: "session_bid",
+      recommendation: "auction",
+      plan: {
+        summary: "Use the first participant.",
+        mode: "sequential",
+        assignments: [{
+          agentId: PARTICIPANT_ONE.id,
+          position: 1,
+          instruction: "Answer the request.",
+        }],
+        risks: [],
+        assumptions: [],
+      },
+      confidenceBps: 7_000,
+      estimatedOutputTokens: 1_000,
+    });
+    const auction = await startSession(
+      SESSION_PARTICIPANTS.map(() => succeeds(output)),
+      {
+        ...CREATE_FREE_CHAT_REQUEST,
+        policy: {
+          sessionProtocol: "free_chat",
+          maxTurns: 10,
+          auctionPolicy: {
+            ...DEFAULT_SESSION_AUCTION_POLICY,
+            routingMode: "auction",
+          },
+        },
+      },
+    );
+    const details = await settle(auction.service, auction.runId);
+
+    expect(details.run).toMatchObject({
+      status: "failed",
+      errorCode: "INVALID_STATE",
+      errorMessage: "Settled bids require the PA14 award decision",
+    });
+    expect(details.turns).toHaveLength(SESSION_PARTICIPANTS.length);
+    expect(details.turns.every(
+      ({ kind, wavePurpose, status }) =>
+        kind === "session_bid" && wavePurpose === "session_bidding" && status === "committed",
+    )).toBe(true);
+    const bids = details.artifacts.filter(({ type }) => type === "session_bid");
+    expect(bids).toHaveLength(SESSION_PARTICIPANTS.length);
+    expect(bids.every(({ transcriptSequence }) => transcriptSequence === undefined)).toBe(true);
+    expect(auction.runtime.starts).toHaveLength(SESSION_PARTICIPANTS.length);
+    expect(auction.runtime.starts.every(({ threadPolicy }) => threadPolicy === "fresh")).toBe(true);
+  });
+
+  it("retries invalid bids within the original opportunity and bid-attempt ceiling", async () => {
+    const invalid = JSON.stringify({
+      schemaVersion: 1,
+      type: "session_bid",
+      recommendation: "auction",
+      plan: {
+        summary: "Invalid confidence first.",
+        mode: "sequential",
+        assignments: [{
+          agentId: PARTICIPANT_ONE.id,
+          position: 1,
+          instruction: "Answer.",
+        }],
+        risks: [],
+        assumptions: [],
+      },
+      confidenceBps: 10_001,
+      estimatedOutputTokens: 1_000,
+    });
+    const valid = invalid.replace('"confidenceBps":10001', '"confidenceBps":7000');
+    const auction = await startSession(
+      [
+        ...SESSION_PARTICIPANTS.map(() => succeeds(invalid)),
+        ...SESSION_PARTICIPANTS.map(() => succeeds(valid)),
+      ],
+      {
+        ...CREATE_FREE_CHAT_REQUEST,
+        policy: {
+          sessionProtocol: "free_chat",
+          maxTurns: 10,
+          maxAttemptsPerTurn: 3,
+          auctionPolicy: {
+            ...DEFAULT_SESSION_AUCTION_POLICY,
+            routingMode: "auction",
+            maxBidAttempts: 2,
+          },
+        },
+      },
+    );
+    const details = await settle(auction.service, auction.runId);
+
+    expect(details.turns).toHaveLength(SESSION_PARTICIPANTS.length);
+    expect(details.turns.map(({ attemptCount }) => attemptCount)).toEqual([2, 2, 2]);
+    expect(details.attempts).toHaveLength(SESSION_PARTICIPANTS.length * 2);
+    expect(details.attempts.filter(({ status }) => status === "invalid_output")).toHaveLength(3);
+    expect(auction.runtime.starts.slice(3).every(
+      ({ prompt }) => prompt.includes("confidenceBps:"),
+    )).toBe(true);
+  });
+
   it("completes a real in-memory 10-to-1 countdown in round-robin order", async () => {
     const { service, runtime, runId } = await startSession(countdownSteps());
     const details = await settle(service, runId);

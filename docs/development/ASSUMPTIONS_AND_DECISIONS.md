@@ -757,3 +757,163 @@ previous one settled. No test asserts the cap by measuring elapsed time, and no
 production path sleeps or polls waiting for a busy Agent: contention consumes one
 unit of the turn's existing retry budget and is then handled by the wave's
 failure policy.
+
+## Proposed addendum: adaptive auction routing and scoring
+
+**Status:** Approved by the user on 2026-08-31 for `PA14-01` on branch
+`bidding-agent-phase-14`.
+**Authority:** This addendum applies only to the auction track governed by
+[`phases/parallel/14-adaptive-auction-coordination.md`](./phases/parallel/14-adaptive-auction-coordination.md).
+It does not amend the main coordinator-planning Phase 14 sheet.
+
+**Current contract and blocker.** The approved Phase 13 mini-RFC permits bid and
+award evidence, but deliberately leaves routing defaults, bid bounds, scoring
+rounding, cost weights, history windows, fallback evidence, and feedback writes
+undefined. The Phase 14 entry criteria prohibit code until those choices are
+mechanical. The live Phase 13 rehearsal also found a roughly 20% first-attempt
+invalid-output rate and confirmed that an idle session reserves its roster until
+Ended. This proposal settles both observations without weakening validation or
+changing the established session lifecycle.
+
+### Routing and migration
+
+- New auction-capable free-chat sessions default to `routingMode: "auto"`.
+  A missing auction policy means **legacy session routing**, not Direct: stored
+  pre-auction sessions continue their existing sequential/parallel behaviour
+  byte-for-byte. Legacy countdown history remains readable. New auction policy
+  and the Phase 13 rehearsal-only `sessionWaveMode` / `sessionWavePurpose`
+  fields are mutually exclusive.
+- Auction sessions are long-lived. `awaiting_input` continues to reserve the
+  snapshotted roster, and End remains the explicit release action. Phase 14 adds
+  no implicit expiry or participant stealing; Phase 15 must document this
+  operational cost prominently.
+- Per-round input may choose `auto`, `direct`, or `auction`, select one existing
+  participant, and declare `riskLevel: "normal" | "high"` plus
+  `coordinationPreference: "single" | "team" | "either"`. It cannot supply or
+  raise a budget. High risk or a `team` preference forces Auction; a conflicting
+  explicit Direct request is rejected rather than silently widened.
+- Primary selection follows the phase sheet order. Tag matching normalizes the
+  current user message and each snapshotted focus-area tag with Unicode NFKC,
+  lower-casing, and Unicode letter/number tokenization. A tag matches only when
+  all its tokens occur as whole message tokens. Rank by matched-tag count, then
+  matched character count, stored participant order, and Agent ID. This is an
+  advisory local routing heuristic, never a complexity or quality judgment.
+- An unavailable primary is replaced by the next candidate from that same
+  deterministic ordering. If none is available, apply the configured fallback;
+  never wait for an Agent without consuming a bounded attempt.
+
+### Policy defaults and hard bounds
+
+| Field | Default | Accepted bound / rule |
+|---|---:|---|
+| `routingMode` | `auto` | `direct | auction | auto` |
+| `defaultAgentId` | absent | must be a snapshotted participant |
+| `directConfidenceThresholdBps` | 8,000 | integer 0..10,000 |
+| `directOutputTokenBudget` | 4,000 | integer 1..4,000 |
+| `minimumValidBids` | 2 | integer 1..participant count |
+| `maxBidOutputTokens` | 2,048 | integer 128..4,096 |
+| `maxBidAttempts` | 2 | integer 1..3 |
+| `auctionExecutionTokenBudget` | 4,000 | integer 128..16,000 |
+| `auctionOnDirectFailure` | `false` | boolean; explicit opt-in only |
+| `fallback` | `round_robin` | `default_agent | round_robin | fail`; `default_agent` requires `defaultAgentId` |
+| `scoringVersion` | `confidence_cost_v1` | that literal only |
+
+Team size cannot exceed the participant count, remaining turn ceiling, or the
+existing `maxParallelTurns` cap. A direct recommendation must estimate no more
+than `directOutputTokenBudget`; every executable plan must estimate no more than
+`auctionExecutionTokenBudget`.
+
+### Bid validation and the invalid-output finding
+
+`session_bid` uses the strict discriminated shape in the Phase 14 sheet. Text
+limits are: candidate answer 1..8,000 characters, plan summary 1..1,000,
+assignment instruction 1..2,000, and each risk/assumption 1..500. Assignments
+contain 1..10 members; risks and assumptions contain 0..10 items each; the raw
+artifact remains subject to the run's `outputMaxChars` ceiling. Direct requires
+a candidate answer and a single plan assigned to the bidder. Auction may omit
+the candidate answer. All objects reject unknown fields.
+
+The bid prompt will include one minified valid example for each recommendation,
+state `JSON only` immediately before the output contract, repeat the applicable
+numeric limits beside their fields, and return field-specific retry feedback.
+No markdown fence or prose wrapper is accepted. This directly addresses the
+rehearsal finding; validation is not relaxed, and bid count is not treated as a
+quality signal.
+
+### Projected cost and `confidence_cost_v1`
+
+All arithmetic uses non-negative safe integers and floors integer division.
+For planning, estimated input tokens are `ceil(UTF-8 bytes of the fully rendered
+execution prompt / 3)`. Sequential plans additionally reserve each earlier
+assignment's declared output allowance in every later prompt. This is a
+documented conservative estimator, not provider billing. Projected cached input
+is zero.
+
+Weighted token units are `4 * input + 1 * cachedInput + 16 * output` (equivalent
+to weights 1, 0.25, and 4 without floating point). The normalization ceiling is
+the same formula using the run context ceiling estimate and
+`auctionExecutionTokenBudget`. Therefore:
+
+```text
+normalizedProjectedCostBps = min(10000, floor(10000 * projectedUnits / ceilingUnits))
+```
+
+Confidence calibration uses only earlier feedback for awards won by that Agent:
+
+- fewer than five rated awards: cold-start penalty = 500 bps;
+- otherwise use the latest 20 rated awards, compute observed acceptance in
+  basis points, and subtract `min(2500, max(0, declaredConfidence - observedAcceptance))`.
+
+Reliability uses the latest 20 earlier awarded executions for the Agent. It is
+`min(3000, floor(2000 * failed / observed) + floor(1000 * severeUnderestimate /
+observed))`, where a severe underestimate means actual output tokens exceeded
+125% of the bid estimate. No execution history yields zero reliability penalty;
+the separate cold-start confidence rule still applies.
+
+```text
+rawScore = floor(
+  (70 * calibratedConfidenceBps
+   - 25 * normalizedProjectedCostBps
+   - 5 * reliabilityPenaltyBps) / 100
+)
+scoreBps = clamp(rawScore, 0, 10000)
+```
+
+Ties resolve by higher calibrated confidence, lower projected weighted units,
+stored participant order, then Agent ID. Ranking occurs only after every bid in
+the bounded opportunity set settles, so completion order cannot affect it.
+Scoring explanations expose inputs, integer components, version, and tie-break
+reason only; they contain no prompt or raw output and call the result the
+highest-ranked valid bid, never the objectively best Agent.
+
+### Award, fallback, publication, and feedback
+
+- `session_award` is a strict backend-authored discriminator with
+  `selectionKind: "bid" | "fallback"`. Bid awards require
+  `winningBidArtifactId`; fallback awards prohibit it and record the configured
+  fallback plus selected Agent. `outcome` is `publish_candidate | execute_plan |
+  fallback_execution`. Safe-failure fallback records one durable fallback
+  decision event and fails the run; it does not fabricate an award or answer.
+- The award key is `(runId, userArtifactId)`. Award creation, and Auto candidate
+  award plus transcript publication, use version-checked atomic repository
+  mutations. A collision reloads the committed decision; it never re-scores.
+- Round-robin fallback selects by the count of earlier fallback awards modulo
+  stored participant order, skipping unavailable Agents deterministically.
+  Fallback is attempted once per user-message round. Winning execution failure
+  never promotes a runner-up.
+- Feedback is one mutable `accepted | rejected` projection per award, written
+  with an expected version. Repeating the current value is idempotent; changing
+  it appends another ID-and-enum-only audit event while leaving the award
+  immutable. Feedback never blocks or resumes a session.
+- Actual bid usage is the sum of every bid attempt; projected execution usage is
+  the awarded estimator; actual execution usage is the sum of awarded/fallback
+  execution attempts. The three categories remain separately named in API and
+  UI. Tokens are never converted into a provider cost claim.
+
+### Required evidence
+
+This approved addendum completes `PA14-01` and authorizes implementation of
+`PA14-02` onward. Every bound and formula above requires boundary or snapshot
+coverage; compatibility fixtures must prove absent auction policy retains the
+legacy path. The full Phase 14 race, failure, redaction, UI, Compose, and live
+rehearsal gates remain mandatory.

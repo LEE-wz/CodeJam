@@ -71,6 +71,45 @@ describe("Phase 5 session contracts", () => {
 });
 
 describe("Phase 5 session create", () => {
+  it("normalizes and enforces auction policy for direct service callers", async () => {
+    const service = buildService();
+    const run = await service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: { sessionProtocol: "free_chat", auctionPolicy: {} },
+    });
+    expect(run.policy.auctionPolicy).toEqual({
+      routingMode: "auto",
+      directConfidenceThresholdBps: 8_000,
+      directOutputTokenBudget: 4_000,
+      minimumValidBids: 2,
+      maxBidOutputTokens: 2_048,
+      maxBidAttempts: 2,
+      auctionExecutionTokenBudget: 4_000,
+      auctionOnDirectFailure: false,
+      fallback: "round_robin",
+      scoringVersion: "confidence_cost_v1",
+    });
+
+    await expect(
+      service.createRun({
+        ...CREATE_FREE_CHAT_REQUEST,
+        policy: {
+          sessionProtocol: "free_chat",
+          auctionPolicy: { defaultAgentId: "foreign-agent" },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(
+      service.createRun({
+        ...CREATE_COUNTDOWN_REQUEST,
+        policy: {
+          ...CREATE_COUNTDOWN_REQUEST.policy,
+          auctionPolicy: {},
+        },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
   it("initialises a countdown run with shared state from sessionStartValue", async () => {
     const run = await buildService().createRun(CREATE_COUNTDOWN_REQUEST);
 

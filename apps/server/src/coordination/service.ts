@@ -17,6 +17,7 @@ import { CoordinationError } from "./errors.js";
 import { ARTIFACT_SCHEMA_LIMITS, SECTION_KEY_PATTERN } from "./schemas.js";
 import {
   DEFAULT_COORDINATION_POLICY,
+  DEFAULT_SESSION_AUCTION_POLICY,
   type AppendUserMessageRequest,
   type CoordinationAttempt,
   type CoordinationErrorCode,
@@ -25,12 +26,15 @@ import {
   type CoordinationRunId,
   type CoordinationTurn,
   SESSION_CONTEXT_MAX_CHARS,
+  SESSION_AUCTION_LIMITS,
   SESSION_LIMITS,
   resolveMaxParallelTurns,
   type CoordinationParticipant,
   type CoordinationWavePurpose,
   type ExecutionThreadPolicy,
   type SessionWaveMode,
+  type SessionAuctionPolicy,
+  type SessionAuctionPolicyInput,
   type CreateCoordinationRunRequest,
   type CreateRunRequest,
   type CreateSessionRunRequest,
@@ -47,6 +51,75 @@ const terminalStatuses = new Set(["completed", "failed", "stopped"]);
  */
 const RETRY_FEEDBACK_MAX_ITEMS = 10;
 const RETRY_FEEDBACK_MAX_CHARS = 500;
+
+const isBoundedInteger = (value: number, minimum: number, maximum: number): boolean =>
+  Number.isInteger(value) && value >= minimum && value <= maximum;
+
+const normalizeAuctionPolicy = (
+  input: SessionAuctionPolicyInput,
+  agentIds: readonly string[],
+): SessionAuctionPolicy => {
+  const policy: SessionAuctionPolicy = {
+    routingMode: input.routingMode ?? DEFAULT_SESSION_AUCTION_POLICY.routingMode,
+    ...(input.defaultAgentId === undefined ? {} : { defaultAgentId: input.defaultAgentId }),
+    directConfidenceThresholdBps:
+      input.directConfidenceThresholdBps ??
+      DEFAULT_SESSION_AUCTION_POLICY.directConfidenceThresholdBps,
+    directOutputTokenBudget:
+      input.directOutputTokenBudget ?? DEFAULT_SESSION_AUCTION_POLICY.directOutputTokenBudget,
+    minimumValidBids:
+      input.minimumValidBids ?? DEFAULT_SESSION_AUCTION_POLICY.minimumValidBids,
+    maxBidOutputTokens:
+      input.maxBidOutputTokens ?? DEFAULT_SESSION_AUCTION_POLICY.maxBidOutputTokens,
+    maxBidAttempts: input.maxBidAttempts ?? DEFAULT_SESSION_AUCTION_POLICY.maxBidAttempts,
+    auctionExecutionTokenBudget:
+      input.auctionExecutionTokenBudget ??
+      DEFAULT_SESSION_AUCTION_POLICY.auctionExecutionTokenBudget,
+    auctionOnDirectFailure:
+      input.auctionOnDirectFailure ?? DEFAULT_SESSION_AUCTION_POLICY.auctionOnDirectFailure,
+    fallback: input.fallback ?? DEFAULT_SESSION_AUCTION_POLICY.fallback,
+    scoringVersion: input.scoringVersion ?? DEFAULT_SESSION_AUCTION_POLICY.scoringVersion,
+  };
+
+  if (
+    !["direct", "auction", "auto"].includes(policy.routingMode) ||
+    !["default_agent", "round_robin", "fail"].includes(policy.fallback) ||
+    policy.scoringVersion !== "confidence_cost_v1" ||
+    typeof policy.auctionOnDirectFailure !== "boolean" ||
+    !isBoundedInteger(
+      policy.directConfidenceThresholdBps,
+      SESSION_AUCTION_LIMITS.minConfidenceBps,
+      SESSION_AUCTION_LIMITS.maxConfidenceBps,
+    ) ||
+    !isBoundedInteger(
+      policy.directOutputTokenBudget,
+      SESSION_AUCTION_LIMITS.minDirectOutputTokens,
+      SESSION_AUCTION_LIMITS.maxDirectOutputTokens,
+    ) ||
+    !isBoundedInteger(policy.minimumValidBids, 1, agentIds.length) ||
+    !isBoundedInteger(
+      policy.maxBidOutputTokens,
+      SESSION_AUCTION_LIMITS.minBidOutputTokens,
+      SESSION_AUCTION_LIMITS.maxBidOutputTokens,
+    ) ||
+    !isBoundedInteger(
+      policy.maxBidAttempts,
+      SESSION_AUCTION_LIMITS.minBidAttempts,
+      SESSION_AUCTION_LIMITS.maxBidAttempts,
+    ) ||
+    !isBoundedInteger(
+      policy.auctionExecutionTokenBudget,
+      SESSION_AUCTION_LIMITS.minExecutionOutputTokens,
+      SESSION_AUCTION_LIMITS.maxExecutionOutputTokens,
+    ) ||
+    (policy.defaultAgentId !== undefined && !agentIds.includes(policy.defaultAgentId)) ||
+    (policy.fallback === "default_agent" && policy.defaultAgentId === undefined)
+  ) {
+    throw new CoordinationError(400, "VALIDATION_FAILED", "Session auction policy is invalid");
+  }
+
+  return policy;
+};
 
 /**
  * Keeps retry feedback concise and reflective of the most recent failure only.
@@ -402,11 +475,19 @@ export class CoordinationService implements CoordinationServiceContract {
     const waveMode: SessionWaveMode = input.policy?.sessionWaveMode ?? "sequential";
     const wavePurpose: CoordinationWavePurpose =
       input.policy?.sessionWavePurpose ?? "session_execution";
+    const auctionPolicy =
+      input.policy?.auctionPolicy === undefined
+        ? undefined
+        : normalizeAuctionPolicy(input.policy.auctionPolicy, agentIds);
     if (
       (waveMode !== "sequential" && waveMode !== "parallel") ||
       (wavePurpose !== "session_execution" && wavePurpose !== "session_bidding") ||
       (waveMode === "sequential" && wavePurpose === "session_bidding") ||
       (protocol === "countdown" && waveMode === "parallel") ||
+      (auctionPolicy !== undefined &&
+        (protocol !== "free_chat" ||
+          input.policy?.sessionWaveMode !== undefined ||
+          input.policy?.sessionWavePurpose !== undefined)) ||
       (input.policy?.maxParallelTurns !== undefined &&
         (!Number.isInteger(input.policy.maxParallelTurns) ||
           input.policy.maxParallelTurns < SESSION_LIMITS.minParallelTurns ||
@@ -431,6 +512,7 @@ export class CoordinationService implements CoordinationServiceContract {
       ...(input.policy?.maxParallelTurns !== undefined
         ? { maxParallelTurns: input.policy.maxParallelTurns }
         : {}),
+      ...(auctionPolicy === undefined ? {} : { auctionPolicy }),
       ...(input.policy?.perAttemptTimeoutMs !== undefined
         ? { perAttemptTimeoutMs: input.policy.perAttemptTimeoutMs }
         : {}),
@@ -1105,8 +1187,13 @@ export class CoordinationService implements CoordinationServiceContract {
     let validationErrors: string[] = [];
     let lastErrorCode: CoordinationErrorCode = "AGENT_EXECUTION_FAILED";
     let lastErrorMessage = "Agent execution failed";
+    const maxAttempts =
+      scheduledTurn.kind === "session_bid"
+        ? (scheduledRun.policy.auctionPolicy?.maxBidAttempts ??
+          scheduledRun.policy.maxAttemptsPerTurn)
+        : scheduledRun.policy.maxAttemptsPerTurn;
 
-    for (let number = 1; number <= scheduledRun.policy.maxAttemptsPerTurn; number += 1) {
+    for (let number = 1; number <= maxAttempts; number += 1) {
       const details = await this.dependencies.repository.getRunDetails(scheduledRun.id);
       if (!details || details.run.status !== "running") {
         // The run is gone, terminal, or stopping. Its next transition belongs
@@ -1235,7 +1322,11 @@ export class CoordinationService implements CoordinationServiceContract {
           return committed.kind === "committed" ? "committed" : "abandoned";
         }
         validationErrors = boundedRetryFeedback(
-          validation.errors.map((error) => error.message),
+          validation.errors.map((error) =>
+            currentTurn.kind === "session_bid"
+              ? `${error.path}: ${error.message}`
+              : error.message,
+          ),
         );
         lastErrorCode = validation.code;
         lastErrorMessage = "Agent output did not satisfy the coordination contract";

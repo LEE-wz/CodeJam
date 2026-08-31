@@ -21,7 +21,11 @@ import {
   WRONG_NUMBER_OUTPUT,
 } from "./testing/session-fixtures.js";
 import type { CoordinationAttempt, CoordinationRun, CoordinationTurn } from "./types.js";
-import { DEFAULT_COORDINATION_POLICY, SESSION_LIMITS } from "./types.js";
+import {
+  DEFAULT_COORDINATION_POLICY,
+  DEFAULT_SESSION_AUCTION_POLICY,
+  SESSION_LIMITS,
+} from "./types.js";
 
 const runFor = (protocol: "countdown" | "free_chat"): CoordinationRun => ({
   id: "run-session",
@@ -100,6 +104,57 @@ const rejected = (result: ArtifactValidationResult) => {
 const accepted = (result: ArtifactValidationResult) => {
   if (!result.ok) throw new Error(`Expected output to be accepted: ${result.errors[0]?.message}`);
   return result.artifact;
+};
+
+const bidTurn: CoordinationTurn = {
+  ...turn,
+  id: "turn-session-bid",
+  kind: "session_bid",
+  wavePurpose: "session_bidding",
+};
+
+const validBid = (overrides: Record<string, unknown> = {}): string => JSON.stringify({
+  schemaVersion: 1,
+  type: "session_bid",
+  recommendation: "direct",
+  candidateAnswer: "A bounded answer ready to publish.",
+  plan: {
+    summary: "Answer directly.",
+    mode: "single",
+    assignments: [{
+      agentId: PARTICIPANT_ONE.id,
+      position: 1,
+      instruction: "Answer the request.",
+    }],
+    risks: [],
+    assumptions: [],
+  },
+  confidenceBps: 8_000,
+  estimatedOutputTokens: 1_000,
+  ...overrides,
+});
+
+const validateBid = (
+  rawOutput: string,
+  policyOverrides: Partial<typeof DEFAULT_SESSION_AUCTION_POLICY> = {},
+): ArtifactValidationResult => {
+  const run = runFor("free_chat");
+  return protocol.validate({
+    run: {
+      ...run,
+      policy: {
+        ...run.policy,
+        auctionPolicy: {
+          ...DEFAULT_SESSION_AUCTION_POLICY,
+          routingMode: "auction",
+          ...policyOverrides,
+        },
+      },
+    },
+    turn: bidTurn,
+    attempt: { ...attempt, turnId: bidTurn.id },
+    rawOutput,
+  });
 };
 
 describe("SharedSessionArtifactProtocol", () => {
@@ -192,5 +247,167 @@ describe("SharedSessionArtifactProtocol", () => {
       .toBe(true);
     expect(verified.validate({ run: runFor("countdown"), turn, attempt, rawOutput: VALID_COUNTDOWN_OUTPUT }).ok)
       .toBe(false);
+  });
+
+  it("accepts a strict bid and constructs authoritative bidder provenance", () => {
+    const artifact = accepted(validateBid(validBid()));
+    expect(artifact).toMatchObject({
+      runId: "run-session",
+      turnId: bidTurn.id,
+      createdByRole: "participant",
+      createdByAgentId: PARTICIPANT_ONE.id,
+      type: "session_bid",
+      payload: {
+        recommendation: "direct",
+        confidenceBps: 8_000,
+        estimatedOutputTokens: 1_000,
+      },
+    });
+  });
+
+  it("accepts mechanically valid sequential and parallel auction plans", () => {
+    const assignments = SESSION_PARTICIPANTS.slice(0, 2).map((agent, index) => ({
+      agentId: agent.id,
+      position: index + 1,
+      instruction: `Perform step ${index + 1}.`,
+    }));
+    for (const mode of ["sequential", "parallel"] as const) {
+      expect(validateBid(validBid({
+        recommendation: "auction",
+        candidateAnswer: undefined,
+        plan: {
+          summary: "Use two specialists.",
+          mode,
+          assignments,
+          risks: ["Coordination cost"],
+          assumptions: ["Inputs are current"],
+        },
+      })).ok).toBe(true);
+    }
+  });
+
+  it("requires literal JSON and rejects unknown or forged fields", () => {
+    expect(rejected(validateBid(`\`\`\`json\n${validBid()}\n\`\`\``)).errors[0]?.code)
+      .toBe("invalid_json");
+    expect(validateBid(validBid({ createdByAgentId: "forged" })).ok).toBe(false);
+    expect(validateBid(validBid({ type: "session_message" })).ok).toBe(false);
+  });
+
+  it.each([
+    [
+      "direct candidate",
+      validBid({ candidateAnswer: undefined }),
+      "invalid_direct_candidate",
+    ],
+    [
+      "single bidder assignment",
+      validBid({
+        plan: {
+          summary: "Wrong owner",
+          mode: "single",
+          assignments: [{
+            agentId: SESSION_PARTICIPANTS[1]!.id,
+            position: 1,
+            instruction: "Answer.",
+          }],
+          risks: [],
+          assumptions: [],
+        },
+      }),
+      "invalid_single_assignment",
+    ],
+    [
+      "participant-only assignments",
+      validBid({
+        recommendation: "auction",
+        candidateAnswer: undefined,
+        plan: {
+          summary: "Foreign assignment",
+          mode: "sequential",
+          assignments: [{ agentId: "foreign-agent", position: 1, instruction: "Answer." }],
+          risks: [],
+          assumptions: [],
+        },
+      }),
+      "foreign_assignment_agent",
+    ],
+    [
+      "distinct assignments",
+      validBid({
+        recommendation: "auction",
+        candidateAnswer: undefined,
+        plan: {
+          summary: "Duplicate assignment",
+          mode: "sequential",
+          assignments: [
+            { agentId: PARTICIPANT_ONE.id, position: 1, instruction: "First." },
+            { agentId: PARTICIPANT_ONE.id, position: 2, instruction: "Second." },
+          ],
+          risks: [],
+          assumptions: [],
+        },
+      }),
+      "duplicate_assignment_agent",
+    ],
+    [
+      "contiguous positions",
+      validBid({
+        recommendation: "auction",
+        candidateAnswer: undefined,
+        plan: {
+          summary: "Bad position",
+          mode: "sequential",
+          assignments: [{ agentId: PARTICIPANT_ONE.id, position: 2, instruction: "Answer." }],
+          risks: [],
+          assumptions: [],
+        },
+      }),
+      "invalid_assignment_position",
+    ],
+  ])("enforces %s", (_label, output, code) => {
+    expect(rejected(validateBid(output)).errors[0]?.code).toBe(code);
+  });
+
+  it("enforces direct, auction, and parallel execution budgets", () => {
+    expect(rejected(validateBid(validBid({ estimatedOutputTokens: 1_001 }), {
+      directOutputTokenBudget: 1_000,
+    })).errors[0]?.code).toBe("direct_budget_exceeded");
+    expect(rejected(validateBid(validBid({
+      recommendation: "auction",
+      candidateAnswer: undefined,
+      estimatedOutputTokens: 1_001,
+    }), { auctionExecutionTokenBudget: 1_000 })).errors[0]?.code)
+      .toBe("execution_budget_exceeded");
+
+    const assignments = SESSION_PARTICIPANTS.slice(0, 2).map((agent, index) => ({
+      agentId: agent.id,
+      position: index + 1,
+      instruction: "Answer.",
+    }));
+    const run = runFor("free_chat");
+    const result = protocol.validate({
+      run: {
+        ...run,
+        policy: {
+          ...run.policy,
+          maxParallelTurns: 1,
+          auctionPolicy: { ...DEFAULT_SESSION_AUCTION_POLICY, routingMode: "auction" },
+        },
+      },
+      turn: bidTurn,
+      attempt: { ...attempt, turnId: bidTurn.id },
+      rawOutput: validBid({
+        recommendation: "auction",
+        candidateAnswer: undefined,
+        plan: {
+          summary: "Too wide",
+          mode: "parallel",
+          assignments,
+          risks: [],
+          assumptions: [],
+        },
+      }),
+    });
+    expect(rejected(result).errors[0]?.code).toBe("parallel_limit_exceeded");
   });
 });
