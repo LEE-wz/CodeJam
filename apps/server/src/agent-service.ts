@@ -7,6 +7,7 @@ import type {
   AgentExecutionControl,
   AgentExecutionHandle,
   CoordinationReservationSource,
+  ExecutionThreadPolicy,
   StartAgentExecutionRequest,
 } from "./coordination/contracts.js";
 import {
@@ -295,7 +296,7 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const completion = this.executeRun(agentAtStart, run);
+    const completion = this.executeRun(agentAtStart, run, input.threadPolicy ?? "agent_default");
     this.activeExecutions.set(run.id, { agentId: input.agentId, completion });
     this.activeRunByAgent.set(input.agentId, run.id);
     void completion
@@ -348,6 +349,7 @@ export class AgentService {
   private async executeRun(
     agentAtStart: Agent,
     run: AgentRun,
+    threadPolicy: ExecutionThreadPolicy = "agent_default",
   ): AgentExecutionHandle["completion"] {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
@@ -360,11 +362,14 @@ export class AgentService {
       if (this.cancellationRequests.has(run.id)) {
         throw new RunCancelledError();
       }
+      // PA13-09: a `fresh` execution starts with no prior thread, so two
+      // bidders with different Playground histories receive exactly the
+      // explicit coordination context and nothing else.
       const result = await this.runner.run({
         agentId: agentAtStart.id,
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
-        threadId: agentAtStart.codexThreadId,
+        threadId: threadPolicy === "fresh" ? null : agentAtStart.codexThreadId,
       });
       if (this.cancellationRequests.has(run.id)) {
         throw new RunCancelledError();
@@ -387,7 +392,12 @@ export class AgentService {
           createdAt: completedAt,
         });
         agent.status = "ready";
-        agent.codexThreadId = result.threadId;
+        // A `fresh` run must not write its thread back: doing so would leak this
+        // attempt's context into the Agent's own conversation and into every
+        // later bid, which is the asymmetry PA13-09 exists to prevent.
+        if (threadPolicy !== "fresh") {
+          agent.codexThreadId = result.threadId;
+        }
         agent.lastError = null;
         agent.updatedAt = completedAt;
       });

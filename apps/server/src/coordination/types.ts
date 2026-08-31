@@ -34,6 +34,27 @@ export type CoordinationTurnKind =
 /** Backend-owned reason a session wave was scheduled. */
 export type CoordinationWavePurpose = "session_execution" | "session_bidding";
 
+/**
+ * How a shared session answers one user prompt (PA13-10).
+ *
+ * `sequential` is the Phase 12 behaviour: one turn at a time, round-robin.
+ * `parallel` schedules every participant as one atomic wave executed under a
+ * bounded concurrency cap. The mode is durable policy chosen at create time and
+ * read only by backend code, so no Agent output can widen its own fan-out.
+ */
+export type SessionWaveMode = "sequential" | "parallel";
+
+/**
+ * Which model thread an attempt runs on (PA13-09).
+ *
+ * `agent_default` resumes the Agent's existing Codex thread, which is what the
+ * Playground and every pre-auction coordination turn do. `fresh` starts the
+ * attempt with no prior thread and does not write its thread back to the Agent,
+ * so a bid can never inherit hidden context that a sibling bidder lacks, and a
+ * bid can never contaminate the Agent's own conversation.
+ */
+export type ExecutionThreadPolicy = "agent_default" | "fresh";
+
 export interface AgentSpecialization {
   perspective: string;
   focusAreas: string[];
@@ -155,6 +176,22 @@ export interface CoordinationPolicy {
    * Absent on free-chat and verified-handoff runs.
    */
   sessionStartValue?: number;
+  /**
+   * Shared-session runs only. Absent means `sequential`, so every run stored
+   * before PA13-10 keeps its exact Phase 12 behaviour on reload.
+   */
+  sessionWaveMode?: SessionWaveMode;
+  /**
+   * Backend-owned purpose given to every turn of a parallel wave. Absent means
+   * `session_execution`. A `session_bidding` run produces bid-shaped evidence
+   * only: Phase 13 makes no award, and Phase 14 owns bid artifacts and scoring.
+   */
+  sessionWavePurpose?: CoordinationWavePurpose;
+  /**
+   * Upper bound on turns of one wave executing at the same time. Absent means
+   * the derived default in `resolveMaxParallelTurns`.
+   */
+  maxParallelTurns?: number;
 }
 
 export const DEFAULT_COORDINATION_POLICY: CoordinationPolicy = {
@@ -384,6 +421,13 @@ export type CoordinationEventType =
    * event, and a run may carry several across its life.
    */
   | "run.reconciled"
+  /**
+   * One turn of a wave was retired without committing, while the run continued
+   * (PA13-12). It is the durable record that a bidder was unavailable for a
+   * round. It never appears for a verified-handoff turn and never replaces a
+   * terminal run event.
+   */
+  | "turn.failed"
   | "user.message_appended"
   | "run.awaiting_input";
 
@@ -462,6 +506,9 @@ export interface CreateSessionRunRequest {
         sessionStartValue?: number | undefined;
         maxTurns?: number | undefined;
         perAttemptTimeoutMs?: number | undefined;
+        sessionWaveMode?: SessionWaveMode | undefined;
+        sessionWavePurpose?: CoordinationWavePurpose | undefined;
+        maxParallelTurns?: number | undefined;
       }
     | undefined;
 }
@@ -498,7 +545,31 @@ export const SESSION_LIMITS = {
   defaultSessionTurns: 200,
   messageMinChars: 1,
   messageMaxChars: 500,
+  minParallelTurns: 1,
+  maxParallelTurns: 10,
+  defaultParallelTurns: 4,
 } as const;
+
+/**
+ * The concurrency cap actually applied to a wave (PA13-10).
+ *
+ * The default is `min(participantCount, 4)` with a hard ceiling of
+ * `SESSION_LIMITS.maxParallelTurns`. An explicit policy value is still clamped
+ * to `[1, ceiling]`, so a malformed durable record cannot widen the cap, and a
+ * ten-participant wave can never open more than ten concurrent attempts.
+ */
+export const resolveMaxParallelTurns = (run: {
+  participants: ReadonlyArray<unknown>;
+  policy: CoordinationPolicy;
+}): number => {
+  const ceiling = SESSION_LIMITS.maxParallelTurns;
+  const requested = run.policy.maxParallelTurns;
+  const base =
+    typeof requested === "number" && Number.isInteger(requested) && requested > 0
+      ? requested
+      : Math.min(run.participants.length, SESSION_LIMITS.defaultParallelTurns);
+  return Math.max(SESSION_LIMITS.minParallelTurns, Math.min(base, ceiling));
+};
 
 export interface ListCoordinationRunsResponse {
   runs: CoordinationRun[];

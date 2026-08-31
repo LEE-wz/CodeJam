@@ -24,6 +24,19 @@ export type {
 
 const SAFE_ERROR_CHARS = 200;
 
+/**
+ * Whether a start failure means "this Agent is occupied right now" rather than
+ * "this Agent is broken". Recognised from the AgentService reservation contract:
+ * an `AGENT_RESERVED` code, or the busy refusal it raises without one.
+ */
+const isContention = (error: unknown): boolean => {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "AGENT_RESERVED") return true;
+  const statusCode = (error as { statusCode?: unknown } | null)?.statusCode;
+  const message = error instanceof Error ? error.message : "";
+  return statusCode === 409 && /already running|reserved/i.test(message);
+};
+
 interface ActiveAttempt {
   agentRunId: string;
 }
@@ -43,6 +56,7 @@ export class AgentServiceCoordinationRuntime implements CoordinationRuntime {
         agentId: input.agentId,
         prompt: input.prompt,
         source: "coordination",
+        ...(input.threadPolicy === undefined ? {} : { threadPolicy: input.threadPolicy }),
         coordination: {
           runId: input.runId,
           turnId: input.turnId,
@@ -50,9 +64,14 @@ export class AgentServiceCoordinationRuntime implements CoordinationRuntime {
         },
       });
     } catch (error) {
+      // PA13-13: contention is a bounded, retryable condition, not a fault. The
+      // attempt never reached the provider, so a bidding wave may skip this
+      // participant once its budget is spent while an execution assignee stays
+      // under the stricter execution policy.
       return {
         kind: "failed",
         message: this.safeMessage(error, "Agent execution could not start"),
+        ...(isContention(error) ? { busy: true } : {}),
       };
     }
 

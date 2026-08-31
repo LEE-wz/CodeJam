@@ -293,7 +293,7 @@ Use temporary directories for persistence tests. Do not open or mutate real `dat
 
 **Conditional paths**
 
-- `apps/server/src/coordination/runtime-gateway.ts` and `apps/server/src/agent-service.ts` only for the busy-Agent contention path
+- `apps/server/src/coordination/runtime-gateway.ts` and `apps/server/src/agent-service.ts` only for the busy-Agent contention path and, on the auction track, the `PA13-09` execution thread policy at the same boundary (recorded in `ASSUMPTIONS_AND_DECISIONS.md`)
 - `apps/web/src/` only for wave-aware transcript and status rendering
 
 Do not modify `workflow.ts`. Verified handoff must keep scheduling exactly one turn at a time, proven by its unmodified regression matrix.

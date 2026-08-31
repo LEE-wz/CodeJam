@@ -51,6 +51,8 @@ export const ALLOWED_EVENT_DETAIL_KEYS = [
   "truncated",
   "transcriptSequence",
   "validationErrors",
+  "wavePurpose",
+  "waveSize",
   "workflow",
 ] as const;
 

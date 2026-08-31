@@ -13,6 +13,7 @@ import type {
   CoordinationRunId,
   CoordinationTurnId,
   CoordinationTurnKind,
+  CoordinationWavePurpose,
   ReviewDecision,
   SafeEventValue,
 } from "./types.js";
@@ -102,6 +103,24 @@ export interface CoordinationEventFactory {
     revision: number;
     expectedArtifactType: ArtifactType;
     inputArtifactCount: number;
+    /** Absent on verified-handoff turns, which have no wave semantics. */
+    wavePurpose?: CoordinationWavePurpose;
+    /** How many turns were scheduled in the same atomic wave. */
+    waveSize?: number;
+  }): CoordinationEventDraft;
+
+  /**
+   * One wave member retired without committing while the run continued
+   * (PA13-12). Carries no prompt, raw output, or lease.
+   */
+  turnFailed(input: {
+    runId: CoordinationRunId;
+    turnId: CoordinationTurnId;
+    sequence: number;
+    role: CoordinationRole;
+    agentId: AgentId;
+    code: CoordinationErrorCode;
+    reason: string;
   }): CoordinationEventDraft;
 
   attemptStarted(input: {
@@ -294,6 +313,8 @@ export const createCoordinationEventFactory = (
       revision,
       expectedArtifactType,
       inputArtifactCount,
+      wavePurpose,
+      waveSize,
     }) =>
       draft({
         runId,
@@ -310,7 +331,19 @@ export const createCoordinationEventFactory = (
           revision,
           expectedArtifactType,
           inputArtifactCount,
+          ...(wavePurpose === undefined ? {} : { wavePurpose }),
+          ...(waveSize === undefined ? {} : { waveSize }),
         },
+      }),
+
+    turnFailed: ({ runId, turnId, sequence, role, agentId, code, reason }) =>
+      draft({
+        runId,
+        turnId,
+        type: "turn.failed",
+        actor: { type: "agent", agentId, role },
+        message: `Turn ${sequence}: ${roleLabel(role)} did not produce a usable result and was retired.`,
+        details: { sequence, role, agentId, code, reason },
       }),
 
     attemptStarted: ({

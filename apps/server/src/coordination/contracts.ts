@@ -14,11 +14,15 @@ import type {
   CoordinationRunId,
   CoordinationTurn,
   CoordinationTurnId,
+  CoordinationWavePurpose,
   AppendUserMessageRequest,
   CreateCoordinationRunRequest,
   CreateRunRequest,
+  ExecutionThreadPolicy,
   RunUsage,
 } from "./types.js";
+
+export type { ExecutionThreadPolicy } from "./types.js";
 
 export interface Clock {
   nowIso(): string;
@@ -69,6 +73,26 @@ export type WorkflowDecision =
       revision: number;
       inputArtifactIds: CoordinationArtifactId[];
       expectedArtifactType: ArtifactType;
+    }
+  /**
+   * Schedule several turns as one atomic wave (PA13-10).
+   *
+   * `wavePurpose` is chosen by backend code from durable policy, never from
+   * Agent output. The members execute concurrently under the run's derived
+   * concurrency cap, and the loop resumes only once every member has settled.
+   */
+  | {
+      kind: "schedule_wave";
+      wavePurpose: CoordinationWavePurpose;
+      phase: CoordinationRun["phase"];
+      revision: number;
+      members: Array<{
+        role: CoordinationRole;
+        agentId: AgentId;
+        turnKind: CoordinationTurn["kind"];
+        inputArtifactIds: CoordinationArtifactId[];
+        expectedArtifactType: ArtifactType;
+      }>;
     }
   | { kind: "complete"; finalArtifactId: CoordinationArtifactId }
   | { kind: "await_input" }
@@ -336,7 +360,25 @@ export interface CoordinationRepository {
     runId: CoordinationRunId;
     reason: string;
   }): Promise<ReconcileRunResult>;
+  /**
+   * Retire exactly one turn of a live wave without touching its siblings or the
+   * run's terminal state (PA13-12). Used when a bidding-wave member exhausts its
+   * budget: that bidder is unavailable for the round, and the run continues.
+   */
+  failTurn(input: FailTurnInput): Promise<FailTurnResult>;
 }
+
+export interface FailTurnInput {
+  runId: CoordinationRunId;
+  turnId: CoordinationTurnId;
+  code: CoordinationErrorCode;
+  message: string;
+}
+
+export type FailTurnResult =
+  | { kind: "failed"; run: CoordinationRun; turn: CoordinationTurn }
+  | { kind: "stale" }
+  | { kind: "not_found" };
 
 export interface RuntimeExecutionInput {
   runId: CoordinationRunId;
@@ -346,6 +388,8 @@ export interface RuntimeExecutionInput {
   agentId: AgentId;
   prompt: string;
   timeoutMs: number;
+  /** Absent means `agent_default`, which is the pre-auction behaviour. */
+  threadPolicy?: ExecutionThreadPolicy | undefined;
 }
 
 export type RuntimeOutcome =
@@ -361,7 +405,13 @@ export interface RuntimeExecutionHandle {
 
 export type RuntimeStartResult =
   | { kind: "started"; handle: RuntimeExecutionHandle }
-  | { kind: "failed"; message: string };
+  /**
+   * `busy` marks the bounded, retryable contention case (PA13-13): the Agent is
+   * already running something, so this attempt never reached the provider. It
+   * is a distinct signal from a generic start failure because a bidding wave may
+   * skip a persistently busy bidder, while an execution assignee may not.
+   */
+  | { kind: "failed"; message: string; busy?: boolean };
 
 export interface CoordinationRuntime {
   start(input: RuntimeExecutionInput): Promise<RuntimeStartResult>;
@@ -379,6 +429,11 @@ export interface StartAgentExecutionRequest {
   agentId: AgentId;
   prompt: string;
   source: "playground" | "coordination";
+  /**
+   * Absent means `agent_default`. Coordination sets `fresh` for bid-shaped
+   * turns so every bidder starts from the same explicit context (PA13-09).
+   */
+  threadPolicy?: ExecutionThreadPolicy | undefined;
   coordination?: {
     runId: CoordinationRunId;
     turnId: CoordinationTurnId;

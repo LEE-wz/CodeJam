@@ -26,7 +26,11 @@ import {
   type CoordinationTurn,
   SESSION_CONTEXT_MAX_CHARS,
   SESSION_LIMITS,
+  resolveMaxParallelTurns,
   type CoordinationParticipant,
+  type CoordinationWavePurpose,
+  type ExecutionThreadPolicy,
+  type SessionWaveMode,
   type CreateCoordinationRunRequest,
   type CreateRunRequest,
   type CreateSessionRunRequest,
@@ -83,7 +87,40 @@ export const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
  * turn exited without a terminal call while the run may still be `running`, so
  * the loop must reconcile before it may continue or stop.
  */
-type TurnExecutionOutcome = "committed" | "settled" | "abandoned";
+type TurnExecutionOutcome = "committed" | "settled" | "abandoned" | "exhausted";
+
+/**
+ * Run `tasks` with at most `limit` in flight, and settle every one of them.
+ *
+ * The cap is structural: exactly `min(limit, tasks.length)` workers exist, and
+ * each pulls the next index only after its previous task settled. Nothing here
+ * sleeps or races a timer, so the bound holds under any scheduling order rather
+ * than under an assumption about how fast a task finishes. Every task settles
+ * before this resolves, which is what lets a wave apply its failure policy only
+ * once no sibling is still running.
+ */
+export const runBoundedWave = async <T>(
+  limit: number,
+  tasks: ReadonlyArray<() => Promise<T>>,
+): Promise<Array<PromiseSettledResult<T>>> => {
+  const results = new Array<PromiseSettledResult<T>>(tasks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= tasks.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await tasks[index]!() };
+      } catch (reason: unknown) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  const workers = Math.max(1, Math.min(limit, tasks.length));
+  await Promise.allSettled(Array.from({ length: workers }, () => worker()));
+  return results;
+};
 
 /**
  * Structured coordination log fields. Only identifiers, enum values, counts, and
@@ -359,6 +396,25 @@ export class CoordinationService implements CoordinationServiceContract {
       throw new CoordinationError(400, "VALIDATION_FAILED", "Session policy is invalid");
     }
 
+    // PA13-10/PA13-03: wave shape is durable policy fixed at create time. It is
+    // read only by backend code, so no Agent output can widen its own fan-out or
+    // relabel an execution wave as a bidding wave.
+    const waveMode: SessionWaveMode = input.policy?.sessionWaveMode ?? "sequential";
+    const wavePurpose: CoordinationWavePurpose =
+      input.policy?.sessionWavePurpose ?? "session_execution";
+    if (
+      (waveMode !== "sequential" && waveMode !== "parallel") ||
+      (wavePurpose !== "session_execution" && wavePurpose !== "session_bidding") ||
+      (waveMode === "sequential" && wavePurpose === "session_bidding") ||
+      (protocol === "countdown" && waveMode === "parallel") ||
+      (input.policy?.maxParallelTurns !== undefined &&
+        (!Number.isInteger(input.policy.maxParallelTurns) ||
+          input.policy.maxParallelTurns < SESSION_LIMITS.minParallelTurns ||
+          input.policy.maxParallelTurns > SESSION_LIMITS.maxParallelTurns))
+    ) {
+      throw new CoordinationError(400, "VALIDATION_FAILED", "Session wave policy is invalid");
+    }
+
     const policy = {
       ...DEFAULT_COORDINATION_POLICY,
       workflow: "shared_session_v1" as const,
@@ -370,6 +426,11 @@ export class CoordinationService implements CoordinationServiceContract {
       maxTurns,
       sessionProtocol: protocol,
       ...(startValue !== undefined ? { sessionStartValue: startValue } : {}),
+      ...(waveMode === "sequential" ? {} : { sessionWaveMode: waveMode }),
+      ...(wavePurpose === "session_execution" ? {} : { sessionWavePurpose: wavePurpose }),
+      ...(input.policy?.maxParallelTurns !== undefined
+        ? { maxParallelTurns: input.policy.maxParallelTurns }
+        : {}),
       ...(input.policy?.perAttemptTimeoutMs !== undefined
         ? { perAttemptTimeoutMs: input.policy.perAttemptTimeoutMs }
         : {}),
@@ -734,6 +795,21 @@ export class CoordinationService implements CoordinationServiceContract {
         return;
       }
 
+      if (decision.kind === "schedule_wave") {
+        const waveOutcome = await this.runWave(runId, epoch, details.run, decision);
+        if (!this.ownsLoop(runId, epoch)) return;
+        if (waveOutcome === "committed") {
+          reconciliations = 0;
+          continue;
+        }
+        if (waveOutcome === "settled") return;
+        reconciliations += 1;
+        if (!(await this.reconcileAbandonedLoop(runId, reconciliations))) {
+          return;
+        }
+        continue;
+      }
+
       const scheduled = await this.dependencies.repository.scheduleTurn({
         runId,
         expectedRunVersion: details.run.version,
@@ -780,6 +856,137 @@ export class CoordinationService implements CoordinationServiceContract {
         return;
       }
     }
+  }
+
+  /**
+   * Schedule and supervise one wave (PA13-10, PA13-11, PA13-12).
+   *
+   * The wave is scheduled atomically or not at all. Members then execute under
+   * the run's derived concurrency cap and every one of them settles before any
+   * failure policy is applied — that is the ordering both settlement contracts
+   * depend on, and it is why a slow sibling can never be stranded by a fast
+   * one's failure.
+   */
+  private async runWave(
+    runId: CoordinationRunId,
+    epoch: number,
+    run: CoordinationRun,
+    decision: Extract<WorkflowDecision, { kind: "schedule_wave" }>,
+  ): Promise<TurnExecutionOutcome> {
+    if (decision.members.length === 0) {
+      await this.dependencies.repository.failRun({
+        runId,
+        code: "INTERNAL_ERROR",
+        message: "Coordination wave was scheduled with no members",
+      });
+      return "settled";
+    }
+
+    const turns = decision.members.map((member, index) =>
+      this.makeTurn(
+        run,
+        {
+          role: member.role,
+          agentId: member.agentId,
+          turnKind: member.turnKind,
+          inputArtifactIds: member.inputArtifactIds,
+        },
+        run.nextTurnSequence + index,
+        decision.wavePurpose,
+      ),
+    );
+    const scheduled = await this.dependencies.repository.scheduleTurns({
+      runId,
+      expectedRunVersion: run.version,
+      turns,
+      nextPhase: decision.phase,
+      nextRevision: decision.revision,
+    });
+    if (scheduled.kind === "not_found") return "settled";
+    if (scheduled.kind === "stale") return "committed";
+
+    for (const turn of scheduled.turns) {
+      this.log(
+        {
+          runId,
+          turnId: turn.id,
+          sequence: turn.sequence,
+          role: turn.role,
+          agentId: turn.agentId,
+          status: decision.wavePurpose,
+        },
+        "Coordination wave turn scheduled",
+      );
+    }
+
+    const limit = resolveMaxParallelTurns(scheduled.run);
+    const settled = await runBoundedWave(
+      limit,
+      scheduled.turns.map(
+        (turn) => () =>
+          this.executeTurnWithRetries(
+            scheduled.run,
+            turn,
+            () => this.ownsLoop(runId, epoch),
+            decision.wavePurpose,
+          ),
+      ),
+    );
+
+    // A rejected member is a defect in our own executor, not an Agent fault.
+    // It is treated as abandoned so the reconciler reloads durable state rather
+    // than this code guessing what was written.
+    const outcomes = settled.map((result, index) => ({
+      turn: scheduled.turns[index]!,
+      outcome: result.status === "fulfilled" ? result.value : ("abandoned" as const),
+    }));
+    if (!this.ownsLoop(runId, epoch)) return "settled";
+    if (outcomes.some(({ outcome }) => outcome === "settled")) return "settled";
+
+    const exhausted = outcomes.filter(({ outcome }) => outcome === "exhausted");
+    const committed = outcomes.filter(({ outcome }) => outcome === "committed");
+
+    if (decision.wavePurpose === "session_execution") {
+      // PA13-11: execution keeps the strict contract. Retry exhaustion fails the
+      // run, but only now, once every sibling has settled.
+      if (exhausted.length > 0) {
+        await this.dependencies.repository.failRun({
+          runId,
+          code: "MAX_ATTEMPTS_EXCEEDED",
+          message: "Agent could not complete its turn in the current wave",
+        });
+        return "settled";
+      }
+    } else {
+      // PA13-12: a bidding wave tolerates partial failure. Each exhausted bidder
+      // is retired on its own, leaving healthy siblings and the session intact.
+      for (const { turn } of exhausted) {
+        const result = await this.dependencies.repository.failTurn({
+          runId,
+          turnId: turn.id,
+          code: "MAX_ATTEMPTS_EXCEEDED",
+          message: "Participant did not return a usable bid for this round",
+        });
+        this.log(
+          { runId, turnId: turn.id, role: turn.role, agentId: turn.agentId, status: result.kind },
+          "Bidding wave member retired",
+        );
+      }
+      // Zero valid bids is never silently successful. Phase 14 replaces this
+      // with its bounded fallback; until it exists, the run fails honestly
+      // rather than reporting a round that produced nothing.
+      if (committed.length === 0 && outcomes.every(({ outcome }) => outcome !== "abandoned")) {
+        await this.dependencies.repository.failRun({
+          runId,
+          code: "MAX_ATTEMPTS_EXCEEDED",
+          message: "No participant returned a usable bid for this round",
+        });
+        return "settled";
+      }
+    }
+
+    if (outcomes.some(({ outcome }) => outcome === "abandoned")) return "abandoned";
+    return "committed";
   }
 
   /**
@@ -831,11 +1038,21 @@ export class CoordinationService implements CoordinationServiceContract {
     return false;
   }
 
-  private makeTurn(run: CoordinationRun, decision: Extract<WorkflowDecision, { kind: "schedule" }>): CoordinationTurn {
+  private makeTurn(
+    run: CoordinationRun,
+    spec: {
+      role: CoordinationTurn["role"];
+      agentId?: string | undefined;
+      turnKind: CoordinationTurn["kind"];
+      inputArtifactIds: readonly string[];
+    },
+    sequence: number = run.nextTurnSequence,
+    wavePurpose: CoordinationWavePurpose = "session_execution",
+  ): CoordinationTurn {
     const participant = run.participants.find(
       (candidate) =>
-        candidate.role === decision.role &&
-        (decision.agentId === undefined || candidate.agentId === decision.agentId),
+        candidate.role === spec.role &&
+        (spec.agentId === undefined || candidate.agentId === spec.agentId),
     );
     if (!participant) {
       throw new CoordinationError(
@@ -847,14 +1064,14 @@ export class CoordinationService implements CoordinationServiceContract {
     return {
       id: this.dependencies.ids.turnId(),
       runId: run.id,
-      sequence: run.nextTurnSequence,
-      role: decision.role,
+      sequence,
+      role: spec.role,
       agentId: participant.agentId,
-      kind: decision.turnKind,
-      wavePurpose: "session_execution",
+      kind: spec.turnKind,
+      wavePurpose,
       status: "scheduled",
       attemptCount: 0,
-      inputArtifactIds: [...decision.inputArtifactIds],
+      inputArtifactIds: [...spec.inputArtifactIds],
       lastValidationErrors: [],
       createdAt: this.dependencies.clock.nowIso(),
     };
@@ -873,7 +1090,18 @@ export class CoordinationService implements CoordinationServiceContract {
     scheduledRun: CoordinationRun,
     scheduledTurn: CoordinationTurn,
     ownsLoop: () => boolean,
+    /**
+     * Present when this turn is one member of a wave. A wave member never fails
+     * the run itself: it returns `exhausted` and the supervisor applies the
+     * purpose-specific policy once every sibling has settled (PA13-11/12).
+     */
+    wavePurpose?: CoordinationWavePurpose,
   ): Promise<TurnExecutionOutcome> {
+    // PA13-09: bid-shaped turns always start from a fresh provider thread, so a
+    // participant with a long Playground history and one with none receive
+    // exactly the same explicit coordination context.
+    const threadPolicy: ExecutionThreadPolicy =
+      wavePurpose === "session_bidding" ? "fresh" : "agent_default";
     let validationErrors: string[] = [];
     let lastErrorCode: CoordinationErrorCode = "AGENT_EXECUTION_FAILED";
     let lastErrorMessage = "Agent execution failed";
@@ -939,13 +1167,17 @@ export class CoordinationService implements CoordinationServiceContract {
           agentId: currentTurn.agentId,
           prompt: envelope.prompt,
           timeoutMs: details.run.policy.perAttemptTimeoutMs,
+          threadPolicy,
         });
       } catch {
         runtimeStart = { kind: "failed" as const, message: "Agent execution could not start" };
       }
 
       if (runtimeStart.kind === "failed") {
-        lastErrorCode = "AGENT_EXECUTION_FAILED";
+        // PA13-13: contention consumes exactly one unit of this turn's bounded
+        // budget and nothing waits on a lock. A busy participant is retried
+        // within its ceiling and then handled by its wave's failure policy.
+        lastErrorCode = runtimeStart.busy ? "AGENT_RESERVED" : "AGENT_EXECUTION_FAILED";
         lastErrorMessage = runtimeStart.message;
         validationErrors = boundedRetryFeedback([lastErrorMessage]);
         if (!(await this.finishAttempt(attempt, "failed", lastErrorCode, lastErrorMessage))) {
@@ -1062,6 +1294,12 @@ export class CoordinationService implements CoordinationServiceContract {
       }
     }
 
+    if (wavePurpose !== undefined) {
+      // The supervisor owns the consequence. Failing the run here would settle
+      // it while siblings are still executing, which is exactly what PA13-11
+      // forbids.
+      return "exhausted";
+    }
     await this.dependencies.repository.failRun({
       runId: scheduledRun.id,
       code: "MAX_ATTEMPTS_EXCEEDED",

@@ -2432,3 +2432,31 @@ summary:focus-visible {
 .legacy-summary {
   border-color: rgba(148, 163, 184, 0.35);
 }
+
+/* Wave evidence (PA13-19): purpose badge and per-attempt token counts. */
+.wave-purpose {
+  align-self: center;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.55rem;
+  text-transform: uppercase;
+}
+
+.wave-purpose-bidding {
+  background: rgba(99, 102, 241, 0.14);
+  color: #4338ca;
+}
+
+.attempt-usage {
+  color: var(--muted, #64748b);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-totals {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

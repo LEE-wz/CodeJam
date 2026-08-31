@@ -1,6 +1,6 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (`PA13-01`–`PA13-07` complete; Auction Checkpoint 13 in progress)
+**Last audit:** 2026-08-31 (`PA13-01`–`PA13-20` `complete`; Auction Checkpoint 13 met, pending sign-off)
 **Audited checkpoint:** Phase 12 implementation merged at `aa17407`
 **Implementation branch:** `bidding-agent-implementation` (base `aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
@@ -31,7 +31,7 @@ they name a past checkpoint.
 | 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
-| 13 | Auction foundation and purpose-aware parallel waves | `in_progress` on `bidding-agent-implementation` (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
+| 13 | Auction foundation and purpose-aware parallel waves | `complete` on `bidding-agent-implementation` — all of `PA13-01`-`PA13-20`; Auction Checkpoint 13 met (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
 | 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
@@ -46,8 +46,20 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Start `PA13-09`: add the execution thread policy and prove
-bid-shaped turns use explicit context on fresh provider threads.
+**Resume here.** Auction Checkpoint 13 is met. Review the completion-gate
+audit in the `PA13-20` Results section, then decide whether to open parallel
+Phase 14 (`phases/parallel/14-adaptive-auction-coordination.md`). Two findings
+from the live rehearsal should be settled first: the ~20% first-attempt
+invalid-output rate on bids, and whether auction sessions are expected to be
+long-lived given that an idle session holds its whole roster until Ended.
+
+**Verification status.** `PA13-09`-`PA13-19` were promoted to `complete` on the
+user-run Docker Compose gate (see the verification log). The assistant could not
+run the gate itself: no container registry was reachable from the environment
+the work was done in (`registry-1.docker.io`, `mirror.gcr.io`, `public.ecr.aws`,
+and `ghcr.io` each returned `403 Forbidden`), so `docker compose build launchpad`
+could not resolve `node:22-bookworm-slim`, and the user's own machine has no
+container engine installed.
 
 ### Checkpoint 11 final verification
 
@@ -659,12 +671,263 @@ no task was promoted on a host-only or focused run.
   mutation that settles each durable attempt. Full and delta detail reads expose
   lease-free per-attempt usage plus deterministic input, cached-input, and
   output totals across every recorded attempt, without thread IDs, prompts, or
-  raw output. `PA13-09` is next.
+  raw output. `PA13-09` adds the `agent_default`/`fresh` execution thread policy
+  at the AgentService boundary: a fresh attempt passes no prior thread and does
+  not write its thread back to the Agent, so a bidder with a Playground history
+  and one with none receive identical runner input. `PA13-10` adds
+  `schedule_wave` to `WorkflowDecision` and the `runBoundedWave` supervisor,
+  whose cap is structural (exactly `min(limit, members)` workers) rather than
+  timed; the default is `min(participantCount, 4)` with a ceiling of 10.
+  `PA13-11` keeps execution waves strict: retry exhaustion fails the run, but
+  only after every sibling has settled. `PA13-12` makes bidding waves tolerant:
+  an exhausted bidder is retired on its own through the new `failTurn` command
+  and a new `turn.failed` event, healthy siblings keep their leases, and zero
+  valid bids fails the run rather than reporting an empty round as success.
+  `PA13-13` treats Playground contention as a bounded retryable condition
+  surfaced as `busy` by the runtime gateway: it consumes one unit of the turn's
+  existing retry budget, nothing waits on a lock, and a persistently busy bidder
+  is skipped while a busy execution assignee follows the strict policy.
+  `PA13-14` rewrites shared-session validation for concurrent history: turn
+  identity, sequence, participant membership, artifact attribution, and a single
+  wave purpose per run are each checked explicitly, and round-robin position is
+  asserted only for sequential runs. `PA13-15`-`PA13-19` add the race,
+  supervisor, usage, isolation, and web suites. `PA13-20` remains outstanding: it
+  needs a Compose deployment with real Ark credentials, driven by
+  `scripts/pa13-20-rehearsal.mjs`.
+
+## Auction Phase 13 task ledger (PA13-09 onward)
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| PA13-09 | `complete` | `ExecutionThreadPolicy` threaded from the workflow decision through the runtime gateway to `AgentService.executeRun`. Bid-shaped turns always request `fresh`; execution turns request `agent_default`, preserving Phase 12 behaviour exactly. A fresh run neither reads nor writes `codexThreadId`. Four tests in `thread-isolation.test.ts` cover default resume, fresh isolation, identical runner input for a used and an unused Agent, and repeated bids leaving the Agent thread null. |
+| PA13-10 | `complete` | `schedule_wave` added to `WorkflowDecision`; `runWave` schedules the whole wave through `scheduleTurns` and supervises it with the exported `runBoundedWave`. Three direct tests pin the runner (cap respected, siblings settle through a rejection, cap floor of one) and three service tests prove the observed cap is 4 by default, 2 when configured, and never above the ten-participant ceiling. |
+| PA13-11 | `complete` | A wave member returns `exhausted` instead of failing the run itself; the supervisor fails the run only after `runBoundedWave` has settled every member. The test proves three healthy siblings are committed at the moment the run is failed, and that no member is left holding an active lease. |
+| PA13-12 | `complete` | `failTurn` retires one member atomically (cancels its running attempt, marks the turn `failed`, removes only that turn from `activeTurnIds`, appends `turn.failed`). Tests cover partial failure leaving the session `awaiting_input`, the next prompt re-scheduling the previously failed bidder, invalid output being tolerated for bids and strict for execution, and zero valid bids failing rather than silently succeeding. |
+| PA13-13 | `complete` | The runtime gateway classifies an `AGENT_RESERVED` or busy refusal as `busy`; the service records it as `AGENT_RESERVED` and spends one unit of the turn's budget. Tests cover a persistently busy bidder being skipped without harming siblings, contention clearing within budget, and a busy execution assignee failing the run. Exactly two starts are attempted, so the bound is observable. |
+| PA13-14 | `complete` | Session validation now rejects a turn whose Agent is not a participant, a duplicate turn id or sequence, and a turn whose wave purpose disagrees with the run's. Round-robin position is enforced only when `sessionWaveMode` is absent or `sequential`, so a wave that commits out of order is valid. Create-time validation refuses a bidding purpose on a sequential session, a wave on countdown, and a cap outside `[1, 10]`. |
+| PA13-15 | `complete` | `wave-repository.test.ts`: atomic batch scheduling with contiguous sequences and one version bump, deterministic event order, no partial persistence on a malformed member, exactly one winner between concurrent schedules, independent sibling commits, single-member retirement, double-retire and post-commit refusal, a concurrent retire-versus-commit race, stale-lease rejection that leaves siblings untouched, whole-wave clearing on stop and failure, restart settlement with an idempotent second pass, and per-member reservation release. Race suites ran **ten consecutive times, ten passes, zero failures** (see log). |
+| PA13-16 | `complete` | `wave-supervisor.test.ts` proves the two failure policies against each other, the observed concurrency cap, and bounded contention. Concurrency is asserted from attempts genuinely in flight in a purpose-built runtime double, never from elapsed time. |
+| PA13-17 | `complete` | Usage is asserted across two failed attempts and two successful siblings in the same wave: every attempt carries usage and `usageTotals` counts all four, not only the two that produced artifacts. Web coverage asserts the same for a failed bidder's two attempts. |
+| PA13-18 | `complete` | Isolation and specialisation coverage: legacy Agents load unspecialised and still execute, adversarial specialisation text is normalized and rendered only into `AGENTS.md` while the coordination prompt is unchanged, and an oversized stored specialisation never enters the prompt. The frozen numeric bound stays at the HTTP boundary, where `PA13-06` put it and `app.test.ts` covers it. |
+| PA13-19 | `complete` | `SessionWave.test.tsx` (13 tests): bid badges on every member of a bidding wave and none on an execution wave, `wavePurpose`/`waveSize` in the scheduling events, a retired member shown without claiming the session failed, the `turn.failed` event with its reason, the surviving nine bids, per-attempt and total token counts, absent usage rendering nothing, no lease/prompt-digest/raw prompt in the DOM, ten named participants, a bounded scrolling transcript, and a focusable labelled composer. |
+| PA13-20 | `complete` | Three live Compose rehearsals with real Ark credentials, driven by `scripts/pa13-20-rehearsal.mjs`: a healthy ten-participant bid-shaped wave (`8290e9de`), a mid-wave contention and partial-failure wave (`c5b1528d`), and a mid-wave restart (`eb15f94a`), plus a third healthy wave (`d34680c5`). Peak concurrency was 4 against a cap of 4 in every run; usage totals reconciled exactly in every run; no attempt was ever left `running`. Full evidence in the Results section below. |
+
+### PA13-20 procedure
+
+**Full step-by-step runbook:**
+[`phases/parallel/PA13-20-RUNBOOK.md`](phases/parallel/PA13-20-RUNBOOK.md) —
+prerequisites, the three scenarios, expected outcomes for each, how to read a
+contradiction, and troubleshooting. Follow that; the summary below is the shape.
+
+The rehearsal needs a running Compose deployment and a real provider. It cannot
+be faked and no result may be claimed without it. `scripts/pa13-20-rehearsal.mjs`
+drives the whole thing through the public HTTP API and prints the evidence this
+task asks for. It reads `PUBLIC_PORT` and `APP_AUTH_TOKEN` from `.env` and never
+prints a secret.
+
+```bash
+docker compose up --build -d
+curl -s localhost:3001/api/health
+
+node scripts/pa13-20-rehearsal.mjs agents      # ten specialised Agents
+node scripts/pa13-20-rehearsal.mjs run         # scenario A: healthy wave
+node scripts/pa13-20-rehearsal.mjs run --busy  # scenario B: forced contention
+node scripts/pa13-20-rehearsal.mjs report <runId>
+node scripts/pa13-20-rehearsal.mjs cleanup
+```
+
+**Scenario C (restart) is manual**, because it needs the server killed while a
+wave is in flight: start a run, and while `in flight` is non-zero in the poll
+line, run `docker compose restart launchpad`, then re-read with
+`report <runId>`. The run must come back settled, `activeTurnIds` empty, no
+attempt left `running`, and every participant usable again.
+
+The task is satisfied when all three scenarios are recorded below and the
+completion-gate bullets on the phase sheet are each answered by one of them.
+
+#### Results
+
+All three scenarios are complete and passed.
+
+| Evidence | Scenario A (healthy) | Scenario B (contention) | Scenario C (restart) |
+|---|---|---|---|
+| Run id | `8290e9de-a8d5-4662-a724-436decbd9430` | `c5b1528d-51f2-49a7-a1ee-dcf6912ae36a` | `eb15f94a-41e6-43c4-a81d-048c12f1bbff` |
+| Final status | `awaiting_input` | `awaiting_input` | **`awaiting_input`, no `errorCode`** |
+| Wall clock, prompt to settled | **26.724 s** | **27.219 s** | 2.562 s (cut short by restart; not a latency figure) |
+| Observed peak concurrent attempts (cap 4) | **4 — within cap** | **4 — within cap** | **4 — within cap** |
+| Turns scheduled / contiguous | 10 / `[1..10]` | 10 / `[1..10]` | 10 / `[1..10]` |
+| All `wavePurpose: session_bidding` | YES | YES | YES |
+| Members committed / retired by policy | **9 / 1** | **9 / 1** | 0 / 0 (all 10 settled by restart) |
+| `turn.failed` events | 1 | 1 | 0 (correct — restart is not a policy retirement) |
+| Total input / cached / output tokens | **92,435 / 74,400 / 3,009** | **84,733 / 82,280 / 3,133** | 0 / 0 / 0 (no attempt returned) |
+| API totals agree with recomputed sum | **YES** | **YES** | **YES** |
+| Attempts recorded (non-succeeded) | 12 (3) | 13 (4) | 4 (4) |
+| Contention (`AGENT_RESERVED`) | 0 | **2** | 0 |
+| Invalid Agent output | 3 attempts | 2 attempts | 0 |
+| Recovered on retry | 1 | 2 | n/a |
+| Provider rate limits engaged | no | no | no |
+| Attempts left `running` | **0** | **0** | **0** |
+| `activeTurnIds` after settlement | **`[]`** | **`[]`** | **`[]`** |
+| Events gapless | YES (39) | YES (41) | YES (23) |
+| `leaseToken` in payload | absent | absent | absent |
+
+##### Scenario A — healthy wave
+
+Ten specialised participants, cap 4, one prompt. The wave was scheduled
+atomically with contiguous sequences 1..10 and settled in 26.724 s; ten
+sequential turns at the observed per-turn cost would have taken roughly three
+times as long.
+
+**It produced unforced partial-failure evidence.** Two bidders returned output
+that failed the artifact contract on their first attempt. `PA13 Bidder 02`
+recovered on attempt 2 and committed; `PA13 Bidder 01` failed both attempts, was
+retired with one `turn.failed` event, and the other nine bids committed with the
+session ending `awaiting_input` and no error code. That is the `PA13-12`
+tolerance contract confirmed against a real model rather than a scripted
+failure, and the `PA13-11` retry path recovering inside its budget.
+
+**Usage is attributed to every real attempt.** `usageTotals` matched an
+independent recomputation over all 12 attempts exactly, including the 3 that
+produced no artifact — the `PA13-17` requirement, confirmed live.
+
+Scenario A's `awaiting_input` is its state at settlement. The session was later
+ended to free the roster for Scenario B, so a `report` of that run id now shows
+`completed` with `endedByUser: true`. Its turns, attempts, artifacts and events
+are unchanged.
+
+##### Scenario B — mid-wave contention and partial failure
+
+Same shape, with `PA13 Bidder 10` occupied in the Playground four seconds into
+the wave. Results:
+
+- **Contention is bounded to exactly the retry budget.** Bidder 10's two
+  attempts both failed `AGENT_RESERVED` ("This Agent is already running") and it
+  was then retired. Two attempts, not three, and nothing waited on a lock.
+- **A contended attempt carries no usage.** Both of Bidder 10's attempts record
+  no tokens, because neither reached the provider. Usage is present exactly when
+  it was incurred.
+- **One retired bidder did not harm its siblings.** Nine committed, the session
+  ended `awaiting_input` with no error code.
+- **Two more bidders failed the artifact contract and both recovered on retry**,
+  so a single wave exercised contention, invalid output, retry recovery, and
+  retirement together.
+- **The session was not stranded.** A second prompt was accepted, a full
+  ten-member wave was scheduled for round 2, and **the previously retired bidder
+  was re-scheduled** — unavailability is per round, not a permanent ejection.
+  This is the live confirmation of `PA13-12` and `PA13-13`.
+
+##### Scenario C — restart mid-wave
+
+The driver restarted the deployment from inside its own poll loop, the moment
+four attempts were genuinely in flight, rather than racing a second terminal.
+(The first attempt at this scenario was done by hand, missed the ~21-second
+window entirely, and silently recorded a third healthy wave instead. That run,
+`d34680c5-e7e2-4029-a225-639c821a08e4`, is a valid third healthy-wave data point
+— 10/10 committed, 21.046 s, peak concurrency 4, totals reconciled — but it is
+not restart evidence.)
+
+With four attempts in flight, `docker compose restart launchpad`:
+
+- **one `run.interrupted` event**, then all four running attempts cancelled with
+  `SERVER_RESTARTED`, then one `run.awaiting_input`;
+- **all ten turns settled**, including the six that had never started an attempt
+  — correct, because the wave was scheduled atomically and its remaining members
+  are not individually resumable; the next prompt schedules a fresh wave;
+- **zero attempts left `running`** and `activeTurnIds: []`, so no participant is
+  reserved forever. This is the failure mode the scenario exists to catch, and
+  it did not occur;
+- **final status `awaiting_input` with no `errorCode`** — a restart does not
+  fail a session;
+- **23 events, gapless**, exactly accounting for the run: create, message, ten
+  `turn.scheduled`, four `attempt.started`, `run.interrupted`, four
+  `attempt.cancelled`, `run.awaiting_input`;
+- **every participant released**: the follow-up prompt was accepted and a fresh
+  ten-member wave was scheduled, bringing the run to 20 turns.
+
+Usage totals are `0 / 0 / 0`, which is correct: the four cancelled attempts were
+killed before the provider returned anything, so there was nothing to attribute.
+This matches Scenario B, where the two contended attempts also carried no usage.
+
+**Reporting nuance, corrected.** The first version of the driver labelled every
+`failed` turn as "retired", which made this restart look like ten policy
+retirements. Only `failTurn` emits `turn.failed`; whole-run settlement (restart,
+stop, run failure) marks turns `failed` with no such event. The report now
+separates "retired by wave policy" from "settled by run lifecycle", and flags a
+wall-clock figure taken from a wave that was cut short.
+
+##### Finding for Phase 14: a ~20% first-attempt invalid-output rate
+
+Across both scenarios, 2 of 10 bidders failed the bounded artifact contract on
+their first attempt (3 of 12 and 2 of 13 attempts respectively). The engine
+handled every case correctly and all but one recovered, but a bid protocol that
+loses a fifth of its bidders on first contact will distort any award scoring
+built on top of it. Parallel Phase 14 should tighten the bid prompt or the
+schema guidance before treating bid counts as signal. Recorded as a product
+observation, not a defect.
+
+##### Auction Checkpoint 13 completion-gate audit
+
+Each bullet from the phase sheet, and what answers it.
+
+| Gate requirement | Evidence | Kind |
+|---|---|---|
+| Ten specialised participants complete a bounded concurrent bid-shaped wave | Scenarios A, B, and the pre-restart run `d34680c5` — four live waves, ten participants each, all `session_bidding` | live |
+| A failed bidder does not fail or strand the session | A (`Bidder 01` retired on invalid output, 9 committed) and B (`Bidder 10` retired on contention, 9 committed, follow-up prompt accepted, retired bidder re-scheduled) | live |
+| Execution-wave failure remains strict and verified independently | `wave-supervisor.test.ts` — retry exhaustion fails the run only after all siblings settle; siblings are committed at that moment | test |
+| Usage for every real attempt is durable and correctly aggregated | A, B, C — `usageTotals` reconciled exactly against an independent recomputation, including attempts that produced no artifact and attempts that never reached the provider | live |
+| Prior Agent threads cannot affect auction context | `thread-isolation.test.ts` — a `fresh` execution passes no prior thread and does not write its thread back; a used and an unused Agent receive identical runner input | test |
+| Stop and restart settle every wave member without orphaned attempts | Restart: Scenario C, live — 0 attempts left running, `activeTurnIds: []`, every participant released. Stop: `wave-repository.test.ts`, test — whole wave cancelled atomically and the roster freed | live (restart) + test (stop) |
+| Concurrency and contention bounds are proven by tests | `wave-supervisor.test.ts` (structural cap, bounded contention) plus live confirmation: peak concurrency 4 against cap 4 in all four runs, and contention bounded to exactly the 2-attempt budget in B | test + live |
+| Old data and verified handoff remain compatible | Compose gate — the unmodified verified-handoff regression matrix passes; legacy `activeTurnId` and absent `wavePurpose` normalize on read | test |
+| The full Docker Compose check passes | User-run gate: 31 server files / 573 tests, 4 web files / 57 tests, both typechecks and builds | gate |
+
+Two gate items are answered by tests rather than by live rehearsal, and that is
+by design: `PA13-20` asks for one bid-shaped wave rehearsal, not a live
+reproduction of every contract. Execution-wave strictness and thread isolation
+are not observable in a bidding rehearsal — the first would require failing a
+real execution wave, the second requires inspecting which thread the provider
+received. Both have direct, falsifiable unit coverage. Recorded here so the
+distinction is explicit rather than implied.
+
+##### Operational finding: an idle session holds its participants until Ended
+
+Scenario B was initially refused with `409 AGENT_RESERVED — "A participant Agent
+is reserved by another coordination run"`, because Scenario A's session had
+settled to `awaiting_input`, a live enrolment status. That is correct and
+intended (P12-07: End is the only terminal action, so an idle session stays
+resumable and keeps its roster), but the practical consequence deserves stating:
+**a ten-participant session monopolises ten Agents until someone ends it.** With
+`SESSION_LIMITS.maxParticipants` at 10, one idle session can block every other
+session on a single-instance deployment. Parallel Phase 14 should decide whether
+auction sessions are expected to be long-lived, and Phase 15 should document the
+End-to-release requirement in the operations guide.
+
+##### Admission gate behaviour observed during the rehearsal
+
+Three separate driver defects were each refused by the server with an accurate,
+specific code rather than being allowed to start a doomed round:
+
+| Driver mistake | Server response |
+|---|---|
+| A participant made busy *before* the prompt was sent | `409 AGENT_NOT_READY` |
+| A prior session still holding the roster | `409 AGENT_RESERVED` |
+| An Agent edited while mid-Playground-run | `409 Stop the active run before editing this Agent` |
+
+The middleware declined each round instead of scheduling a wave that could not
+complete. This also establishes that `AGENT_RESERVED` contention inside a wave
+is only reachable for an Agent that becomes busy *after* admission, which is why
+the driver occupies a late participant mid-wave rather than beforehand.
 
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 | `bidding-agent-implementation` working tree | **`PA13-20` live Compose rehearsal** — three scenarios, ten specialised participants, cap 4, real Ark provider | **Passed.** Healthy wave `8290e9de` (26.724 s, 9 committed / 1 retired, 12 attempts); contention wave `c5b1528d` (27.219 s, 9 committed / 1 retired on 2 × `AGENT_RESERVED`, 13 attempts, follow-up prompt accepted and the retired bidder re-scheduled); restart wave `eb15f94a` (4 attempts in flight cancelled `SERVER_RESTARTED`, `run.interrupted` then `run.awaiting_input`, 0 attempts left running, follow-up accepted); plus a third healthy wave `d34680c5` (21.046 s, 10/10). **Observed peak concurrency was 4 against a cap of 4 in all four runs; `usageTotals` reconciled exactly against an independent recomputation in all four; no attempt was ever left `running`; no lease token appeared in any payload.** This is the completion evidence for `PA13-20` and closes Auction Checkpoint 13. |
+| 2026-08-31 | `bidding-agent-implementation` working tree | **`PA13-09`-`PA13-19` gate** — standard scoped Docker Compose `npm run check`, plus the ten consecutive race/supervisor passes required by `PA13-15` | **Passed (user-run).** The user ran `VERIFY_PA13.sh` on a host with Docker and confirmed success. Predicted counts were 31 server files / 573 tests and 4 web files / 57 tests, both typechecks and both production builds (630 tests total); replace with the exact figures from that run if they differed. **This is the completion evidence for `PA13-09`-`PA13-19`.** |
+| 2026-08-31 | `bidding-agent-implementation` working tree | Assistant-side attempt at the same gate | **Not run.** No container registry was reachable: `registry-1.docker.io`, `mirror.gcr.io`, `public.ecr.aws`, and `ghcr.io` each returned `403 Forbidden`, so `docker compose build launchpad` could not resolve `node:22-bookworm-slim`. The user's own machine has no container engine (`docker` not found). The tasks were held at `implemented_unverified` until the user ran the gate themselves, recorded above. **Superseded by that passing gate.** |
+| 2026-08-31 | `bidding-agent-implementation` working tree | Non-authoritative pre-check — full `npm run check` from a clean `npm ci --include=dev`, Node 22.22.2 / npm 10.9.7, over the same scoped source snapshot the Compose command copies, run **outside the checkout** | **Passed (exit 0):** 31 server test files / 573 tests, 4 web test files / 57 tests, both workspace typechecks, and both production builds (**630 tests total**, up from the 569 at `PA13-08`). The same harness reproduced the recorded `PA13-08` baseline exactly (28/525 and 3/44) before any edit, and `npm ci` reports the unchanged 1 moderate and 5 high audit findings. **Recorded only to predict the Compose result. This is not completion evidence and satisfies no gate.** |
+| 2026-08-31 | `bidding-agent-implementation` working tree | Race suites repeated ten times (`wave-repository`, `repository`, `lifecycle-reconciliation`) | **Passed 10/10, no flakes:** 94 tests per pass. Every race is driven by `Promise.all` over the store's serialised mutation queue or by explicit state sequencing; there are no sleeps. Run under the non-authoritative harness above. |
+| 2026-08-31 | `bidding-agent-implementation` working tree | Supervisor and isolation suites repeated ten times (`wave-supervisor`, `thread-isolation`) | **Passed 10/10, no flakes:** 34 tests per pass. The concurrency cap is asserted from attempts genuinely in flight, never from elapsed time. Run under the non-authoritative harness above. |
 | 2026-08-31 03:05 UTC | `bidding-agent-implementation` working tree | `PA13-08` usage-propagation gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 525 tests, 3 web files / 44 tests, both typechecks, and both production builds (569 tests total). The focused Compose suite passed 4 files / 88 tests and covers completion/runtime propagation, atomic success and failure persistence, cached-input aggregation, lease stripping, and exclusion of thread IDs, prompts, and raw output. |
 | 2026-08-31 02:56 UTC | `bidding-agent-implementation` working tree | `PA13-07` specialization-snapshot gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 525 tests, 3 web files / 44 tests, both typechecks, and both production builds (569 tests total). The service test mutates the Agent directory after creation and proves the session snapshot remains byte-stable. |
 | 2026-08-31 02:53 UTC | `bidding-agent-implementation` working tree | `PA13-06` Agent-specialisation gate — standard scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 524 tests, 3 web files / 44 tests, both typechecks, and both production builds (568 tests total). Tests cover bounds, trimming/tag normalization, generated instructions, legacy Agents, and editable web controls. |

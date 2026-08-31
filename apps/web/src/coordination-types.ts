@@ -43,7 +43,7 @@ export type CoordinationEventType =
   | "attempt.cancelled" | "attempt.stale_ignored" | "turn.committed"
   | "review.approved" | "review.rejected" | "run.stop_requested"
   | "run.stopped" | "run.completed" | "run.failed" | "run.interrupted"
-  | "run.reconciled" | "user.message_appended" | "run.awaiting_input";
+  | "run.reconciled" | "turn.failed" | "user.message_appended" | "run.awaiting_input";
 
 export const SESSION_LIMITS = {
   minParticipants: 2,
@@ -68,7 +68,12 @@ export interface CoordinationPolicy {
   outputMaxChars: number;
   sessionProtocol?: SessionProtocol;
   sessionStartValue?: number;
+  sessionWaveMode?: SessionWaveMode;
+  sessionWavePurpose?: CoordinationWavePurpose;
+  maxParallelTurns?: number;
 }
+
+export type SessionWaveMode = "sequential" | "parallel";
 
 export interface CoordinationParticipant {
   role: CoordinationRole;

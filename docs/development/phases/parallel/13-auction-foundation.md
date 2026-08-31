@@ -164,53 +164,53 @@ award, or execution remains from committed artifacts for that user message.
   and persist it on `CoordinationAttempt`. Add API read fields and aggregate
   helpers for input, cached-input, and output tokens without exposing provider
   thread IDs, prompts, raw output, or leases.
-- [ ] **PA13-09** Add the execution thread policy. Bid-shaped test turns always
+- [x] **PA13-09** Add the execution thread policy. Bid-shaped test turns always
   invoke the runner with a fresh thread. Prove that an Agent with an existing
   Playground thread and another with no thread receive equivalent explicit
   coordination context.
 
 ### Purpose-aware supervisor
 
-- [ ] **PA13-10** Add `schedule_wave` to `WorkflowDecision` and implement the
+- [x] **PA13-10** Add `schedule_wave` to `WorkflowDecision` and implement the
   bounded wave supervisor with `Promise.allSettled`. Enforce
   `maxParallelTurns`, defaulting to `min(participantCount, 4)` with a ceiling of
   10, through a semaphore rather than timing assumptions.
-- [ ] **PA13-11** Define execution-wave settlement exactly as the main Phase 13
+- [x] **PA13-11** Define execution-wave settlement exactly as the main Phase 13
   contract: siblings settle independently, but retry exhaustion of an execution
   turn fails the run only after all siblings have settled.
-- [ ] **PA13-12** Define bidding-wave settlement differently: invalid output,
+- [x] **PA13-12** Define bidding-wave settlement differently: invalid output,
   timeout, busy exhaustion, or retry exhaustion marks that bidder unavailable
   for the round and does not fail healthy siblings. The workflow proceeds when
   the wave settles and Phase 14 decides whether enough valid bids exist. Zero
   valid bids is not silently successful; Phase 14 owns its bounded fallback.
-- [ ] **PA13-13** Treat Playground contention as a bounded retryable condition.
+- [x] **PA13-13** Treat Playground contention as a bounded retryable condition.
   A busy bidder may be skipped after its bid retry budget; a busy execution
   assignee follows the stricter execution failure policy. Never wait without a
   deadline.
-- [ ] **PA13-14** Rewrite shared-session validation for concurrent history and
+- [x] **PA13-14** Rewrite shared-session validation for concurrent history and
   explicit wave purpose. Reject unknown participants, duplicate turn IDs or
   sequences, foreign artifacts, invalid Agent attribution, and mixed-purpose
   active waves for the same user-message round.
 
 ### Tests and evidence
 
-- [ ] **PA13-15** Add repository races for atomic scheduling, concurrent sibling
+- [x] **PA13-15** Add repository races for atomic scheduling, concurrent sibling
   commits, stale leases, concurrent commit/failure, stop, and restart. Run the
   race suite at least ten consecutive times through Docker Compose.
-- [ ] **PA13-16** Add supervisor tests proving the different failure policies:
+- [x] **PA13-16** Add supervisor tests proving the different failure policies:
   one failed bidder plus valid siblings leaves the session usable; one failed
   execution assignee fails only after siblings settle; the concurrency cap is
   never exceeded; and contention cannot wait forever.
-- [ ] **PA13-17** Add usage tests for completed, failed, cancelled, missing-usage,
+- [x] **PA13-17** Add usage tests for completed, failed, cancelled, missing-usage,
   cached-input, and retry cases. The aggregate must count every actual attempt,
   not only accepted artifacts.
-- [ ] **PA13-18** Add specialisation and isolation tests covering old Agents,
+- [x] **PA13-18** Add specialisation and isolation tests covering old Agents,
   session snapshots, edits after session creation, malicious specialisation
   text, bounded prompts, and pre-existing Agent threads.
-- [ ] **PA13-19** Add web evidence coverage for a purpose-aware wave, per-attempt
+- [x] **PA13-19** Add web evidence coverage for a purpose-aware wave, per-attempt
   usage, partial bidder failure, and ten participant specialisations without
   exposing raw prompts or losing keyboard and narrow-screen behaviour.
-- [ ] **PA13-20** Rehearse one real ten-participant bid-shaped wave. Record total
+- [x] **PA13-20** (runbook: [`PA13-20-RUNBOOK.md`](./PA13-20-RUNBOOK.md)) Rehearse one real ten-participant bid-shaped wave. Record total
   and per-attempt usage, concurrency, wall-clock time, partial-failure behaviour,
   and whether provider rate limits engaged. The output is test-shaped evidence;
   no award is made until Phase 14.

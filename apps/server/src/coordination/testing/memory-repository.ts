@@ -8,6 +8,8 @@ import type {
   CommitAcceptedArtifactResult,
   CoordinationRepository,
   CreateRunRecordInput,
+  FailTurnInput,
+  FailTurnResult,
   FinishAttemptInput,
   NonTerminalRunSummary,
   ReconcileRunResult,
@@ -202,6 +204,35 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     run.version += 1;
     run.updatedAt = this.clock.nowIso();
     return { kind: "scheduled", run: structuredClone(run), turns: structuredClone(turns) };
+  }
+
+  /** Mirror of the durable single-turn retirement used by bidding waves. */
+  async failTurn(input: FailTurnInput): Promise<FailTurnResult> {
+    const run = this.runs.get(input.runId);
+    const turn = this.findTurn(input.turnId);
+    if (!run || !turn) return { kind: "not_found" };
+    if (
+      run.status !== "running" ||
+      !run.activeTurnIds.includes(turn.id) ||
+      turn.status === "committed" ||
+      turn.status === "failed" ||
+      turn.status === "cancelled"
+    ) {
+      return { kind: "stale" };
+    }
+    const attempt = turn.activeAttemptId ? this.findAttempt(turn.activeAttemptId) : undefined;
+    if (attempt && attempt.status === "running") {
+      attempt.status = "cancelled";
+      attempt.errorCode = input.code;
+      attempt.errorMessage = input.message;
+      attempt.finishedAt = this.clock.nowIso();
+    }
+    turn.status = "failed";
+    turn.completedAt = this.clock.nowIso();
+    delete turn.activeAttemptId;
+    run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
+    run.version += 1;
+    return { kind: "failed", run: structuredClone(run), turn: structuredClone(turn) };
   }
 
   async beginAttempt(input: BeginAttemptInput): Promise<BeginAttemptResult> {

@@ -13,6 +13,8 @@ import type {
   CoordinationRepository,
   CoordinationReservationAdvisory,
   CreateRunRecordInput,
+  FailTurnInput,
+  FailTurnResult,
   FinishAttemptInput,
   IdGenerator,
   NonTerminalRunSummary,
@@ -46,6 +48,8 @@ export type {
   CoordinationRepository,
   CoordinationReservationAdvisory,
   CreateRunRecordInput,
+  FailTurnInput,
+  FailTurnResult,
   FinishAttemptInput,
   NonTerminalRunSummary,
   ReconcileRunResult,
@@ -489,6 +493,8 @@ export class DurableCoordinationRepository implements CoordinationRepository {
           revision: run.revision,
           expectedArtifactType: expectedArtifactTypeForTurn(turn),
           inputArtifactCount: turn.inputArtifactIds.length,
+          ...(turn.wavePurpose === undefined ? {} : { wavePurpose: turn.wavePurpose }),
+          ...(turns.length > 1 ? { waveSize: turns.length } : {}),
         }));
       }
       return {
@@ -733,6 +739,84 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
       this.append(database, this.attemptSettlementEvent(run, turn, attempt, input));
       return "finished" as const;
+    });
+  }
+
+  /**
+   * Retire one member of a live wave (PA13-12).
+   *
+   * Only this turn is touched: siblings keep their leases, the run keeps its
+   * status, and no terminal pointer moves. A running attempt on this turn is
+   * cancelled in the same mutation so no attempt is left durably `running`, and
+   * the reservation invariant therefore holds the moment this returns.
+   */
+  async failTurn(input: FailTurnInput): Promise<FailTurnResult> {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
+      const turn = database.coordinationTurns.find((candidate) => candidate.id === input.turnId);
+      if (!run || !turn) {
+        return { kind: "not_found" } as const;
+      }
+      if (
+        run.status !== "running" ||
+        !run.activeTurnIds.includes(turn.id) ||
+        turn.status === "committed" ||
+        turn.status === "failed" ||
+        turn.status === "cancelled"
+      ) {
+        return { kind: "stale" } as const;
+      }
+
+      const now = this.clock.nowIso();
+      const attempt = turn.activeAttemptId
+        ? database.coordinationAttempts.find(
+            (candidate) => candidate.id === turn.activeAttemptId,
+          )
+        : undefined;
+      if (attempt && attempt.status === "running") {
+        attempt.status = "cancelled";
+        attempt.errorCode = input.code;
+        attempt.errorMessage = input.message;
+        attempt.finishedAt = now;
+        this.append(
+          database,
+          this.events.attemptCancelled({
+            runId: run.id,
+            turnId: turn.id,
+            attemptId: attempt.id,
+            attemptNumber: attempt.number,
+            role: turn.role,
+            agentId: attempt.agentId,
+            code: input.code,
+            reason: input.message,
+          }),
+        );
+      }
+
+      turn.status = "failed";
+      turn.completedAt = now;
+      delete turn.activeAttemptId;
+      run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
+      run.version += 1;
+      run.updatedAt = now;
+
+      this.append(
+        database,
+        this.events.turnFailed({
+          runId: run.id,
+          turnId: turn.id,
+          sequence: turn.sequence,
+          role: turn.role,
+          agentId: turn.agentId,
+          code: input.code,
+          reason: input.message,
+        }),
+      );
+      return {
+        kind: "failed",
+        run: structuredClone(run),
+        turn: structuredClone(turn),
+      } as const;
     });
   }
 

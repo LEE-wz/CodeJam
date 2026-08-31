@@ -3,6 +3,7 @@ import type {
   CoordinationArtifact,
   CoordinationArtifactId,
   CoordinationParticipant,
+  CoordinationWavePurpose,
 } from "./types.js";
 import { SESSION_LIMITS } from "./types.js";
 
@@ -25,6 +26,13 @@ interface ValidSessionView {
   committedArtifacts: SessionArtifact[];
   transcriptArtifacts: Array<SessionArtifact | UserArtifact>;
 }
+
+/**
+ * Pre-auction turns and every verified-handoff turn are execution turns; the
+ * field is optional on stored history and normalized here on read (PA13-03).
+ */
+const turnPurpose = (turn: { wavePurpose?: CoordinationWavePurpose }): CoordinationWavePurpose =>
+  turn.wavePurpose ?? "session_execution";
 
 const validateSessionView = (
   view: WorkflowView,
@@ -70,6 +78,11 @@ const validateSessionView = (
     return invalidState("Session run contains a non-session artifact");
   }
 
+  // PA13-14: history may now be concurrent, so identity, sequence, attribution,
+  // and wave purpose are each checked explicitly rather than being implied by a
+  // strictly ordered one-turn-at-a-time transcript.
+  const runPurpose: CoordinationWavePurpose =
+    run.policy.sessionWavePurpose ?? "session_execution";
   const turnIds = new Set<string>();
   const sequences = new Set<number>();
   for (const turn of turns) {
@@ -80,6 +93,8 @@ const validateSessionView = (
       turn.sequence >= run.nextTurnSequence ||
       turn.kind !== "session_turn" ||
       turn.role !== "participant" ||
+      !participantIds.has(turn.agentId) ||
+      turnPurpose(turn) !== runPurpose ||
       !["committed", "cancelled", "failed"].includes(turn.status)
     ) {
       return invalidState("Session run contains an invalid turn");
@@ -98,6 +113,11 @@ const validateSessionView = (
     if (artifact.type === "session_message") artifactsById.set(artifact.id, artifact);
   }
 
+  // A wave's members commit in whatever order their Agents finish, so
+  // round-robin position is asserted only for sequential runs. Attribution is
+  // asserted for both: an artifact must belong to its own turn and to the Agent
+  // that turn was routed to.
+  const isWaveRun = run.policy.sessionWaveMode === "parallel";
   const committedTurns = [...turns].sort((left, right) => left.sequence - right.sequence);
   const committedArtifacts: SessionArtifact[] = [];
   for (const turn of committedTurns) {
@@ -107,8 +127,7 @@ const validateSessionView = (
       ? artifactsById.get(turn.outputArtifactId)
       : undefined;
     if (
-      !expectedParticipant ||
-      turn.agentId !== expectedParticipant.agentId ||
+      (!isWaveRun && (!expectedParticipant || turn.agentId !== expectedParticipant.agentId)) ||
       !artifact ||
       artifact.turnId !== turn.id ||
       artifact.createdByRole !== "participant" ||
@@ -227,6 +246,39 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
         );
       if (unanimous) {
         return { kind: "await_input" };
+      }
+
+      // PA13-10: a parallel run answers each user message with exactly one wave
+      // of every participant. Once any member of that wave has committed, the
+      // round is over and the session returns to the user. A round in which no
+      // member committed never reaches here: the supervisor has already failed
+      // the run, which is what keeps "nothing came back" from looking like
+      // success.
+      if (run.policy.sessionWaveMode === "parallel") {
+        if (currentWave.length > 0) {
+          return { kind: "await_input" };
+        }
+        if (committedArtifacts.length + participants.length > run.policy.maxTurns) {
+          return {
+            kind: "fail",
+            code: "MAX_TURNS_EXCEEDED",
+            message: "Session wave would exceed its turn limit",
+          };
+        }
+        const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
+        return {
+          kind: "schedule_wave",
+          wavePurpose: run.policy.sessionWavePurpose ?? "session_execution",
+          phase: "sessioning",
+          revision: 0,
+          members: participants.map(({ agentId }) => ({
+            role: "participant" as const,
+            agentId,
+            turnKind: "session_turn" as const,
+            inputArtifactIds: [...inputArtifactIds],
+            expectedArtifactType: "session_message" as const,
+          })),
+        };
       }
     }
 

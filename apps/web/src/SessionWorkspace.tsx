@@ -10,6 +10,7 @@ import type {
   CoordinationRunStatus,
   CoordinationTurn,
   CreateSessionRunRequest,
+  RunUsage,
 } from "./coordination-types";
 import { SESSION_LIMITS } from "./coordination-types";
 import type { Agent } from "./types";
@@ -184,6 +185,22 @@ function participantName(run: CoordinationRun, agentId: string): string {
   return run.participants.find((participant) => participant.agentId === agentId)?.agentNameSnapshot ?? "Unknown Agent";
 }
 
+/**
+ * Token counts for one attempt. Numbers only: a digest, prompt, or raw output
+ * never reaches this component, so per-attempt cost can be shown without
+ * widening what the evidence view exposes.
+ */
+function AttemptUsage({ usage }: { usage: RunUsage | null | undefined }) {
+  if (!usage) return null;
+  const parts = [
+    usage.inputTokens === undefined ? undefined : `${usage.inputTokens} in`,
+    usage.cachedInputTokens === undefined ? undefined : `${usage.cachedInputTokens} cached`,
+    usage.outputTokens === undefined ? undefined : `${usage.outputTokens} out`,
+  ].filter((part): part is string => part !== undefined);
+  if (parts.length === 0) return null;
+  return <span className="attempt-usage">Tokens: {parts.join(" \u00b7 ")}</span>;
+}
+
 function TurnEvidence({ turn, details }: { turn: CoordinationTurn; details: CoordinationRunDetails }) {
   const attempts = details.attempts
     .filter(({ turnId }) => turnId === turn.id)
@@ -198,6 +215,9 @@ function TurnEvidence({ turn, details }: { turn: CoordinationTurn; details: Coor
           <span className="eyebrow">{label}</span>
           <h4>{humanize(turn.kind)}</h4>
         </div>
+        {turn.wavePurpose === "session_bidding" && (
+          <span className="wave-purpose wave-purpose-bidding">Bid</span>
+        )}
         <span className={`turn-status turn-status-${turn.status}`}>{humanize(turn.status)}</span>
       </header>
       <div className="attempt-list" aria-label={`Attempts for turn ${turn.sequence}`}>
@@ -205,6 +225,7 @@ function TurnEvidence({ turn, details }: { turn: CoordinationTurn; details: Coor
           <div className="attempt-row" key={attempt.id}>
             <strong>Attempt {attempt.number}</strong>
             <span className={`attempt-status attempt-status-${attempt.status}`}>{humanize(attempt.status)}</span>
+            <AttemptUsage usage={attempt.usage} />
             {attempt.errorMessage && <p>{attempt.errorMessage}</p>}
           </div>
         ))}
@@ -721,7 +742,20 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
               )}
 
               <section className="evidence-section">
-                <div className="session-section-heading"><div><span className="eyebrow">Evidence timeline</span><h3>Turns and attempts</h3></div><span className="evidence-count">{details.events.length} events</span></div>
+                <div className="session-section-heading">
+                  <div>
+                    <span className="eyebrow">Evidence timeline</span>
+                    <h3>Turns and attempts</h3>
+                  </div>
+                  <span className="evidence-count">
+                    {details.events.length} events
+                    {details.usageTotals && (
+                      <span className="usage-totals" aria-label="Total token usage">
+                        {` \u00b7 ${details.usageTotals.inputTokens} in \u00b7 ${details.usageTotals.cachedInputTokens} cached \u00b7 ${details.usageTotals.outputTokens} out`}
+                      </span>
+                    )}
+                  </span>
+                </div>
                 {ungroupedEvents.length > 0 && <ol className="event-list run-events">{ungroupedEvents.map((event) => <EventRow event={event} key={event.id} />)}</ol>}
                 {details.turns.length === 0 ? <p className="session-muted">No turns have been scheduled.</p> : details.turns.map((turn) => <TurnEvidence turn={turn} details={details} key={turn.id} />)}
               </section>

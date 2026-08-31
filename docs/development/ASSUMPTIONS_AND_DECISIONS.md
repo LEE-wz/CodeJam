@@ -692,3 +692,68 @@ specialisation, isolation, web, and real ten-participant tests are the acceptanc
 matrix. Auction Phase 14 must not begin while a purpose-aware wave race is
 flaky, while actual usage attribution is incomplete, or while an earlier Agent
 thread can influence a bid.
+
+### Addendum: contract additions made by `PA13-09`–`PA13-19` (2026-08-31)
+
+These are the concrete contract widenings the approved auction mini-RFC above
+implied but did not name. All are additive, all are backend-owned, and none
+changes a verified-handoff shape.
+
+**One new frozen event type: `turn.failed`.** Bidding-wave tolerance needs a
+durable record that one member was retired while the run continued. The frozen
+set had no turn-level failure event — `run.failed` is terminal and
+`attempt.failed` is per attempt — so the set is widened exactly as `P11-02`
+widened it for `run.reconciled`. It is emitted only by `failTurn`, only for a
+member of a live wave, and it carries `sequence`, `role`, `agentId`, `code`,
+and `reason` and nothing else. An execution wave never produces one: its
+failure is the run's failure.
+
+**Two new event-detail allowlist keys: `wavePurpose` and `waveSize`.** Both are
+enum values or small integers. `turn.scheduled` carries `wavePurpose` whenever
+the turn has one, and `waveSize` only when more than one turn was scheduled in
+the same mutation, so a single-turn schedule is still distinguishable from a
+one-member wave in the ledger. Neither can carry free text.
+
+**One new repository command: `failTurn`.** It retires exactly one member of a
+live wave: it cancels that member's running attempt, marks the turn `failed`,
+removes only that turn from `activeTurnIds`, bumps the run version, and appends
+`turn.failed` — all in one mutation. It refuses a turn that already settled, a
+turn that is not a member of the run's active wave, and any non-`running` run,
+so it can never resurrect or re-settle anything. Because it cancels the attempt
+in the same mutation, the reservation invariant holds the instant it returns.
+
+**Three new optional session policy fields.**
+
+| Field | Meaning | Default |
+|---|---|---|
+| `sessionWaveMode` | `sequential` keeps the exact Phase 12 one-turn-at-a-time behaviour; `parallel` answers each user message with one atomic wave of every participant | `sequential` |
+| `sessionWavePurpose` | The purpose stamped on every member of that wave | `session_execution` |
+| `maxParallelTurns` | Concurrency cap for a wave | `min(participantCount, 4)`, ceiling `SESSION_LIMITS.maxParallelTurns` (10) |
+
+All three are validated by the route and the service, fixed at create time, and
+read only by backend code. Absent fields mean the pre-auction behaviour, so every
+run stored before this branch reloads unchanged. Three combinations are refused:
+a bidding purpose on a sequential session (there is nothing to bid against), a
+wave on the strictly ordered countdown protocol, and a cap outside `[1, 10]`.
+
+`sessionWavePurpose` is a **Phase 13 rehearsal seam**, not the auction's routing
+contract. It exists so a bid-shaped wave can be exercised end to end and
+measured before any award logic exists. Parallel Phase 14 replaces it with the
+`direct` / `auction` / `auto` routing policy and per-round overrides; when it
+does, this field should be folded into that policy rather than kept alongside it.
+
+**Scope note on `agent-service.ts`.** The Phase 13 filesystem map lists it as a
+conditional path "only for the busy-Agent contention path". `PA13-09` also
+requires the thread policy at that same boundary, which is where `codexThreadId`
+is read and written. Both changes are confined to `startExecution` and
+`executeRun`. A `fresh` execution passes `threadId: null` to the runner **and
+does not write the resulting thread back to the Agent**; without that second
+half, the first bid would seed a thread that every later bid inherits, which is
+the exact asymmetry `PA13-09` exists to prevent.
+
+**Concurrency is structural, not timed.** `runBoundedWave` creates exactly
+`min(limit, memberCount)` workers, each pulling the next member only after its
+previous one settled. No test asserts the cap by measuring elapsed time, and no
+production path sleeps or polls waiting for a busy Agent: contention consumes one
+unit of the turn's existing retry budget and is then handled by the wave's
+failure policy.

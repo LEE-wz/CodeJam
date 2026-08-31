@@ -64,10 +64,35 @@ const sessionPolicySchema = z
     // Countdown permits a two-turn 2 -> 1 run; free chat is tightened below.
     maxTurns: z.number().int().min(2).max(SESSION_LIMITS.maxSessionTurns).optional(),
     perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),
+    sessionWaveMode: z.enum(["sequential", "parallel"]).optional(),
+    sessionWavePurpose: z.enum(["session_execution", "session_bidding"]).optional(),
+    maxParallelTurns: z
+      .number()
+      .int()
+      .min(SESSION_LIMITS.minParallelTurns)
+      .max(SESSION_LIMITS.maxParallelTurns)
+      .optional(),
   })
   .strict()
   .superRefine((policy, context) => {
     const protocol = policy.sessionProtocol ?? "countdown";
+    const waveMode = policy.sessionWaveMode ?? "sequential";
+    // A bidding wave only exists inside a parallel wave: there is nothing to
+    // bid against when one participant answers at a time.
+    if (waveMode === "sequential" && policy.sessionWavePurpose === "session_bidding") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sessionWavePurpose"],
+        message: "A bidding wave requires sessionWaveMode 'parallel'",
+      });
+    }
+    if (protocol === "countdown" && waveMode === "parallel") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sessionWaveMode"],
+        message: "Countdown sessions are strictly ordered and cannot run a wave",
+      });
+    }
     if (protocol === "free_chat") {
       if (policy.sessionStartValue !== undefined) {
         context.addIssue({

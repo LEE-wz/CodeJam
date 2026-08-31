@@ -9,6 +9,8 @@ import type {
   CommitAcceptedArtifactResult,
   ContextBuildInput,
   CoordinationAgentDirectory,
+  FailTurnInput,
+  FailTurnResult,
   CoordinationAgentView,
   CoordinationRepository,
   CoordinationRuntime,
@@ -121,6 +123,10 @@ export class FakeCoordinationRepository implements CoordinationRepository {
 
   async scheduleTurns(_input: ScheduleTurnsInput): Promise<ScheduleTurnsResult> {
     return notImplemented("FakeCoordinationRepository.scheduleTurns");
+  }
+
+  async failTurn(_input: FailTurnInput): Promise<FailTurnResult> {
+    return notImplemented("FakeCoordinationRepository.failTurn");
   }
 
   async beginAttempt(_input: BeginAttemptInput): Promise<BeginAttemptResult> {
