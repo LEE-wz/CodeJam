@@ -439,9 +439,17 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
               message: "Awarded execution did not complete",
             };
           }
-          const attemptedAgentIds = new Set(awardExecutionTurns.map(({ agentId }) => agentId));
+          // Only a committed turn discharges an assignment (PA14-27). A turn
+          // cancelled by boot recovery is not evidence that its Agent answered,
+          // so counting it here would leave a restarted round permanently one
+          // assignment short with nothing left to schedule.
+          const executedAgentIds = new Set(
+            awardExecutionTurns
+              .filter(({ status }) => status === "committed")
+              .map(({ agentId }) => agentId),
+          );
           const remaining = assignments.filter(
-            ({ agentId }) => !attemptedAgentIds.has(agentId),
+            ({ agentId }) => !executedAgentIds.has(agentId),
           );
           if (remaining.length === 0) {
             return { kind: "await_input" };
