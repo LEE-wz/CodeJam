@@ -36,12 +36,22 @@ const BASE = process.env.BASE_URL ?? `http://127.0.0.1:${env.PUBLIC_PORT || 3001
 const TOKEN = env.APP_AUTH_TOKEN ?? "";
 const AGENT_PREFIX = "PA14 Bidder";
 const RUN_PREFIX = "PA14-27";
+const REHEARSAL_AGENT_INSTRUCTIONS =
+  "During Session coordination, follow the awarded assignment exactly. " +
+  "Return only one concise response of at most 300 characters, with no preamble or commentary.";
 const TERMINAL = new Set(["completed", "failed", "stopped"]);
 const SETTLED = new Set(["awaiting_input", ...TERMINAL]);
 const POLL_MS = Number(process.env.POLL_MS ?? 1_000);
 const ROUND_TIMEOUT_MS = Number(process.env.ROUND_TIMEOUT_MS ?? 15 * 60_000);
-const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 2);
+// PA14-27 requires an awarded three-Agent parallel plan. The rehearsal must
+// therefore admit at least three sibling execution turns; a lower cap makes
+// the acceptance scenario impossible by construction.
+const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 3);
 const COOLDOWN_MS = Number(process.env.ROUND_COOLDOWN_MS ?? 60_000);
+
+if (!Number.isInteger(MAX_PARALLEL) || MAX_PARALLEL < 3 || MAX_PARALLEL > 10) {
+  throw new Error("MAX_PARALLEL must be an integer from 3 through 10 for PA14-27");
+}
 
 const SPECIALISATIONS = [
   ["Security reviewer", ["security", "abuse"]],
@@ -106,17 +116,26 @@ async function ensureAgents() {
       focusAreas,
       biddingInstructions:
         "Follow an explicitly requested single, sequential, or parallel collaboration shape exactly. " +
-        "Recommend direct only for genuinely simple self-contained work; otherwise propose the smallest valid team.",
+        "Recommend direct only for genuinely simple self-contained work; otherwise propose the smallest valid team. " +
+        "Every execution assignment must require one concise response of at most 300 characters.",
     };
     let agent = existing.get(name);
     if (agent) {
-      if (agent.status !== "busy") {
-        ({ agent } = await api("PATCH", `/api/agents/${agent.id}`, { specialization }));
+      // A previous interrupted rehearsal may leave its deliberate contention
+      // run active. These Agents are owned by this harness, so settle that run
+      // before refreshing and reusing the roster.
+      if (agent.status === "busy") {
+        ({ agent } = await api("POST", `/api/agents/${agent.id}/stop`));
       }
+      ({ agent } = await api("PATCH", `/api/agents/${agent.id}`, {
+        instructions: REHEARSAL_AGENT_INSTRUCTIONS,
+        specialization,
+      }));
     } else {
       ({ agent } = await api("POST", "/api/agents", {
         name,
         description: perspective,
+        instructions: REHEARSAL_AGENT_INSTRUCTIONS,
         specialization,
       }));
     }
@@ -318,6 +337,17 @@ async function occupyLateBidder(agent) {
   });
 }
 
+async function restoreRehearsalAgent(agentId) {
+  let { agent } = await api("GET", `/api/agents/${agentId}`);
+  if (agent.status === "busy") {
+    ({ agent } = await api("POST", `/api/agents/${agentId}/stop`));
+  }
+  if (agent.status === "stopped" || agent.status === "error") {
+    await api("POST", `/api/agents/${agentId}/start`);
+  }
+  await waitUntilReady(new Set([agentId]), 120_000);
+}
+
 /**
  * Run beside the server inside its container. It polls the same durable JSON
  * document and SIGSTOPs the server process at the exact observable boundary:
@@ -442,6 +472,7 @@ async function run() {
   );
   const sequentialWinner = sequential.bids.find(({ id }) => id === sequential.award?.payload.winningBidArtifactId);
   requireEvidence(sequentialWinner?.payload.plan.mode === "sequential", "countdown was not awarded as a sequential plan");
+  requireEvidence(sequentialWinner.payload.plan.assignments.length === 3, "countdown award did not contain exactly three assignments");
   requireEvidence(sequential.messages.length === sequentialWinner.payload.plan.assignments.length, "sequential award did not execute every assignment");
   rounds.push(sequential);
   await cooldown();
@@ -454,6 +485,7 @@ async function run() {
   );
   const parallelWinner = parallel.bids.find(({ id }) => id === parallel.award?.payload.winningBidArtifactId);
   requireEvidence(parallelWinner?.payload.plan.mode === "parallel", "fan-out was not awarded as a parallel plan");
+  requireEvidence(parallelWinner.payload.plan.assignments.length === 3, "fan-out award did not contain exactly three assignments");
   requireEvidence(parallel.messages.length === parallelWinner.payload.plan.assignments.length, "parallel award did not execute every assignment");
   rounds.push(parallel);
   await cooldown();
@@ -474,6 +506,7 @@ async function run() {
     ),
     "partial bidder failure did not durably retire a bidder",
   );
+  await restoreRehearsalAgent(held.id);
   rounds.push(partial);
   await cooldown();
 
@@ -516,7 +549,26 @@ async function run() {
     (userArtifactId) => restartAfterBidSettlement(runId, userArtifactId),
   );
   requireEvidence(restarted.bids.length === 10, "restart boundary did not preserve all ten settled bids");
-  requireEvidence(restarted.award === undefined, "an award committed before the deliberate boundary restart");
+  requireEvidence(
+    restarted.award?.payload.outcome === "execute_plan",
+    "restart did not recover the settled bids into one executing award",
+  );
+  const restartWinner = restarted.bids.find(
+    ({ id }) => id === restarted.award.payload.winningBidArtifactId,
+  );
+  requireEvidence(restartWinner !== undefined, "restart award did not name one of the settled bids");
+  requireEvidence(
+    restarted.messages.length === restartWinner.payload.plan.assignments.length,
+    "restart award did not execute every assignment exactly once",
+  );
+  requireEvidence(
+    restarted.details.artifacts.filter(
+      (artifact) =>
+        artifact.type === "session_award" &&
+        artifact.payload.userArtifactId === restarted.userArtifactId,
+    ).length === 1,
+    "restart recovery did not commit exactly one award",
+  );
   requireEvidence(restarted.attempts.every(({ status }) => status !== "running"), "restart left a call running");
   requireEvidence(
     restarted.details.events.some(
