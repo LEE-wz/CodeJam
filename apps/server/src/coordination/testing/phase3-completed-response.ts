@@ -102,6 +102,7 @@ export const PHASE3_COMPLETED_RESPONSE: GetCoordinationRunResponse = {
     phase: "done",
     revision: 0,
     nextTurnSequence: 4,
+    activeTurnIds: [],
     latestProposalArtifactId: "artifact-proposal",
     latestReviewArtifactId: "artifact-review-approve",
     finalArtifactId: "artifact-final",
