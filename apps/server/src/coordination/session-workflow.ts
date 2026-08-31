@@ -39,9 +39,6 @@ const validateSessionView = (
   ) {
     return invalidState("Session decisions require a live session run");
   }
-  if (run.activeTurnId) {
-    return invalidState("Session workflow cannot schedule while a turn is active");
-  }
   if (!isPositiveInteger(run.nextTurnSequence) || run.revision !== 0) {
     return invalidState("Session run has invalid sequence or revision state");
   }
@@ -64,8 +61,14 @@ const validateSessionView = (
     return invalidState("Session run has invalid participants");
   }
 
-  const turns = view.turns.filter(({ runId }) => runId === run.id);
-  const artifacts = view.artifacts.filter(({ runId }) => runId === run.id);
+  if (
+    view.turns.some(({ runId }) => runId !== run.id) ||
+    view.artifacts.some(({ runId }) => runId !== run.id)
+  ) {
+    return invalidState("Session view contains records from another run");
+  }
+  const turns = view.turns;
+  const artifacts = view.artifacts;
   if (artifacts.some(({ type }) => type !== "session_message" && type !== "user_message")) {
     return invalidState("Session run contains a non-session artifact");
   }
@@ -80,7 +83,8 @@ const validateSessionView = (
       turn.sequence >= run.nextTurnSequence ||
       turn.kind !== "session_turn" ||
       turn.role !== "participant" ||
-      !["committed", "cancelled", "failed"].includes(turn.status)
+      !participantIds.has(turn.agentId) ||
+      !["scheduled", "running", "committed", "cancelled", "failed"].includes(turn.status)
     ) {
       return invalidState("Session run contains an invalid turn");
     }
@@ -102,19 +106,16 @@ const validateSessionView = (
   const committedArtifacts: SessionArtifact[] = [];
   for (const turn of committedTurns) {
     if (turn.status !== "committed") continue;
-    const expectedParticipant = participants[committedArtifacts.length % participants.length];
     const artifact = turn.outputArtifactId
       ? artifactsById.get(turn.outputArtifactId)
       : undefined;
     if (
-      !expectedParticipant ||
-      turn.agentId !== expectedParticipant.agentId ||
       !artifact ||
       artifact.turnId !== turn.id ||
       artifact.createdByRole !== "participant" ||
       artifact.createdByAgentId !== turn.agentId
     ) {
-      return invalidState("Committed session turn has invalid routing or output");
+      return invalidState("Committed session turn has invalid output");
     }
     committedArtifacts.push(artifact);
   }
@@ -230,18 +231,40 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
       }
     }
 
-    const participant = participants[committedArtifacts.length % participants.length];
-    if (!participant) return invalidState("Session run has no next participant");
+    const activeUser = run.lastUserArtifactId
+      ? transcriptArtifacts.find(
+          (artifact): artifact is UserArtifact =>
+            artifact.type === "user_message" && artifact.id === run.lastUserArtifactId,
+        )
+      : undefined;
+    const activeSequence = activeUser?.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+    const answered = new Set(
+      committedArtifacts
+        .filter((artifact) => (artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER) > activeSequence)
+        .map((artifact) => artifact.createdByAgentId),
+    );
+    const remaining = participants.filter(({ agentId }) => !answered.has(agentId));
+    // A pre-v2 countdown run may have no user artifact. Preserve its original
+    // deterministic round robin until Phase 14 removes that protocol.
+    const next = activeUser
+      ? remaining
+      : [participants[committedArtifacts.length % participants.length]].flatMap((participant) =>
+          participant ? [participant] : [],
+        );
+    if (next.length === 0) return { kind: "await_input" };
 
-    return {
-      kind: "schedule",
-      role: "participant",
+    const turn = (participant: CoordinationParticipant) => ({
+      role: "participant" as const,
       agentId: participant.agentId,
-      turnKind: "session_turn",
-      phase: "sessioning",
+      turnKind: "session_turn" as const,
+      phase: "sessioning" as const,
       revision: 0,
       inputArtifactIds: transcriptArtifacts.map(({ id }) => id),
-      expectedArtifactType: "session_message",
-    };
+      expectedArtifactType: "session_message" as const,
+    });
+    if (!run.policy.sessionParallel || next.length === 1) {
+      return { kind: "schedule", ...turn(next[0]!) };
+    }
+    return { kind: "schedule_wave", turns: next.map(turn) };
   }
 }

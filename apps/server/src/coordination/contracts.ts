@@ -52,21 +52,23 @@ export interface CoordinationAgentDirectory {
   getAgentsByIds(ids: AgentId[]): Promise<CoordinationAgentView[]>;
 }
 
+export interface ScheduledTurnSpec {
+  role: CoordinationRole;
+  /**
+   * Session turns name the selected member of the repeated participant role.
+   * Verified-handoff decisions omit this and retain role lookup.
+   */
+  agentId?: AgentId;
+  turnKind: CoordinationTurn["kind"];
+  phase: CoordinationRun["phase"];
+  revision: number;
+  inputArtifactIds: CoordinationArtifactId[];
+  expectedArtifactType: ArtifactType;
+}
+
 export type WorkflowDecision =
-  | {
-      kind: "schedule";
-      role: CoordinationRole;
-      /**
-       * Session turns name the selected member of the repeated participant
-       * role. Verified-handoff decisions omit this and retain role lookup.
-       */
-      agentId?: AgentId;
-      turnKind: CoordinationTurn["kind"];
-      phase: CoordinationRun["phase"];
-      revision: number;
-      inputArtifactIds: CoordinationArtifactId[];
-      expectedArtifactType: ArtifactType;
-    }
+  | ({ kind: "schedule" } & ScheduledTurnSpec)
+  | { kind: "schedule_wave"; turns: ScheduledTurnSpec[] }
   | { kind: "complete"; finalArtifactId: CoordinationArtifactId }
   | { kind: "await_input" }
   | { kind: "fail"; code: CoordinationErrorCode; message: string };
@@ -168,8 +170,22 @@ export interface ScheduleTurnInput {
   nextRevision: number;
 }
 
+/** Atomically schedules every sibling in one session wave. */
+export interface ScheduleTurnsInput {
+  runId: CoordinationRunId;
+  expectedRunVersion: number;
+  turns: CoordinationTurn[];
+  nextPhase: CoordinationRun["phase"];
+  nextRevision: number;
+}
+
 export type ScheduleTurnResult =
   | { kind: "scheduled"; run: CoordinationRun; turn: CoordinationTurn }
+  | { kind: "stale"; currentRun: CoordinationRun }
+  | { kind: "not_found" };
+
+export type ScheduleTurnsResult =
+  | { kind: "scheduled"; run: CoordinationRun; turns: CoordinationTurn[] }
   | { kind: "stale"; currentRun: CoordinationRun }
   | { kind: "not_found" };
 
@@ -232,7 +248,7 @@ export interface FinishAttemptInput {
 export interface NonTerminalRunSummary {
   runId: CoordinationRunId;
   status: "running" | "stop_requested";
-  activeTurnId?: CoordinationTurnId;
+  activeTurnIds: CoordinationTurnId[];
   hasRunningAttempt: boolean;
 }
 
@@ -281,6 +297,7 @@ export interface CoordinationRepository {
     | { kind: "not_found" }
   >;
   scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult>;
+  scheduleTurns(input: ScheduleTurnsInput): Promise<ScheduleTurnsResult>;
   beginAttempt(input: BeginAttemptInput): Promise<BeginAttemptResult>;
   attachAgentRun(input: {
     attemptId: CoordinationAttemptId;
