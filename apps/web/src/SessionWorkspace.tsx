@@ -126,7 +126,7 @@ function validateForm(form: FormState, agents: Agent[]): Record<string, string> 
  * Renders the typed artifacts of a verified-handoff run. Sessions never produce
  * these; the card exists so a run created before P10-06 still opens.
  */
-function LegacyArtifactCard({ artifact }: { artifact: Exclude<CoordinationArtifact, { type: "session_message" }> }) {
+function LegacyArtifactCard({ artifact }: { artifact: Extract<CoordinationArtifact, { type: "proposal" | "review" | "final" }> }) {
   const payload = artifact.payload;
   return (
     <article className={`artifact-card artifact-${artifact.type}`}>
@@ -228,16 +228,34 @@ function latestDoneByParticipant(details: CoordinationRunDetails): Map<string, b
 }
 
 function SessionTranscript({ details }: { details: CoordinationRunDetails }) {
-  const messages = details.artifacts.filter(
-    (artifact): artifact is Extract<CoordinationArtifact, { type: "session_message" }> =>
-      artifact.type === "session_message",
-  );
+  const messages = details.artifacts
+    .filter(
+      (artifact): artifact is Extract<CoordinationArtifact, { type: "session_message" | "user_message" }> =>
+        artifact.type === "session_message" || artifact.type === "user_message",
+    )
+    .sort((left, right) =>
+      (left.transcriptSequence ?? Number.MIN_SAFE_INTEGER) -
+        (right.transcriptSequence ?? Number.MIN_SAFE_INTEGER) ||
+      left.createdAt.localeCompare(right.createdAt),
+    );
   if (messages.length === 0) {
     return <div className="transcript-empty"><strong>No messages yet</strong><p>The transcript will appear after the first committed turn.</p></div>;
   }
   return (
-    <ol className="session-transcript" aria-label="Session transcript">
+    <ol
+      className="session-transcript"
+      aria-label="Session transcript"
+      style={{ maxHeight: "34rem", overflowY: "auto" }}
+    >
       {messages.map((message) => {
+        if (message.type === "user_message") {
+          return (
+            <li className="transcript-message transcript-message-user" key={message.id}>
+              <header><div><strong>You</strong><span>User message</span></div></header>
+              <p>{message.payload.content}</p>
+            </li>
+          );
+        }
         const turn = details.turns.find(({ id }) => id === message.turnId);
         const attempts = details.attempts
           .filter(({ turnId }) => turnId === message.turnId)
@@ -265,6 +283,24 @@ function SessionTranscript({ details }: { details: CoordinationRunDetails }) {
     </ol>
   );
 }
+
+const mergeById = <T extends { id: string }>(current: T[], incoming: T[]): T[] => {
+  const merged = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) merged.set(item.id, item);
+  return [...merged.values()];
+};
+
+const mergeDetails = (
+  current: CoordinationRunDetails,
+  delta: CoordinationRunDetails,
+): CoordinationRunDetails => ({
+  run: delta.run,
+  turns: mergeById(current.turns, delta.turns).sort((a, b) => a.sequence - b.sequence),
+  attempts: mergeById(current.attempts, delta.attempts),
+  artifacts: mergeById(current.artifacts, delta.artifacts),
+  events: mergeById(current.events, delta.events).sort((a, b) => a.sequence - b.sequence),
+  cursor: delta.cursor ?? current.cursor,
+});
 
 function SessionParticipantPicker({
   agents,
@@ -449,10 +485,12 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [action, setAction] = useState<"start" | "stop" | null>(null);
+  const [action, setAction] = useState<"send" | "stop" | "end" | null>(null);
+  const [message, setMessage] = useState("");
   const [pollEpoch, setPollEpoch] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
+  const detailsRef = useRef<CoordinationRunDetails | null>(null);
 
   const loadRuns = useCallback(async (preferredId?: string) => {
     const { runs: next } = await coordinationApi.list();
@@ -469,6 +507,7 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
 
   useEffect(() => {
     if (!selectedRunId) {
+      detailsRef.current = null;
       setDetails(null);
       return;
     }
@@ -476,16 +515,27 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
     const controller = new AbortController();
     let timer: number | undefined;
     let disposed = false;
+    let accumulated =
+      detailsRef.current?.run.id === selectedRunId ? detailsRef.current : null;
 
     const poll = async () => {
       try {
-        const next = await coordinationApi.detail(selectedRunId, controller.signal);
+        const next = await coordinationApi.detail(
+          selectedRunId,
+          controller.signal,
+          accumulated?.cursor,
+        );
         if (disposed || generation !== requestGeneration.current) return;
-        setDetails(next);
-        setRuns((current) => current.map((run) => run.id === next.run.id ? next.run : run));
+        accumulated = accumulated ? mergeDetails(accumulated, next) : {
+          ...next,
+          cursor: (next.events.at(-1)?.sequence ?? -1) + 1,
+        };
+        detailsRef.current = accumulated;
+        setDetails(accumulated);
+        setRuns((current) => current.map((run) => run.id === accumulated!.run.id ? accumulated!.run : run));
         setError(null);
         setLoadingDetail(false);
-        if (activeStatuses.has(next.run.status)) timer = window.setTimeout(() => void poll(), 1_500);
+        if (activeStatuses.has(accumulated.run.status)) timer = window.setTimeout(() => void poll(), 1_500);
       } catch (reason) {
         if (disposed || controller.signal.aborted) return;
         setLoadingDetail(false);
@@ -493,8 +543,11 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
       }
     };
 
-    setLoadingDetail(true);
-    setDetails(null);
+    setLoadingDetail(accumulated === null);
+    if (accumulated === null) {
+      detailsRef.current = null;
+      setDetails(null);
+    }
     void poll();
     return () => {
       disposed = true;
@@ -508,13 +561,19 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
     await loadRuns(run.id);
   };
 
-  const start = async () => {
-    if (!details) return;
-    setAction("start");
+  const send = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!details || action !== null || !message.trim()) return;
+    const content = message.trim();
+    setAction("send");
     setError(null);
     try {
-      const { run } = await coordinationApi.start(details.run.id);
-      setDetails({ ...details, run });
+      const clientMessageId = crypto.randomUUID();
+      const { run } = await coordinationApi.sendMessage(details.run.id, content, clientMessageId);
+      setMessage("");
+      const nextDetails = { ...details, run };
+      detailsRef.current = nextDetails;
+      setDetails(nextDetails);
       setRuns((current) => current.map((item) => item.id === run.id ? run : item));
       setPollEpoch((current) => current + 1);
     } catch (reason) {
@@ -530,9 +589,28 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
     setError(null);
     try {
       const { run } = await coordinationApi.stop(details.run.id);
-      setDetails({ ...details, run });
+      const nextDetails = { ...details, run };
+      detailsRef.current = nextDetails;
+      setDetails(nextDetails);
       setRuns((current) => current.map((item) => item.id === run.id ? run : item));
       setPollEpoch((current) => current + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const end = async () => {
+    if (!details || action !== null) return;
+    setAction("end");
+    setError(null);
+    try {
+      const { run } = await coordinationApi.end(details.run.id);
+      const nextDetails = { ...details, run };
+      detailsRef.current = nextDetails;
+      setDetails(nextDetails);
+      setRuns((current) => current.map((item) => item.id === run.id ? run : item));
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -580,8 +658,8 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
               <header className="run-detail-header">
                 <div><div className="run-title-row"><h2>{selectedRun.name}</h2><RunStatus status={selectedRun.status} /></div><p>{selectedRun.objective}</p></div>
                 <div className="run-actions">
-                  {!legacy && selectedRun.status === "created" && <button className="button button-primary" onClick={() => void start()} disabled={action !== null}>{action === "start" ? "Starting…" : "Start session"}</button>}
-                  {!legacy && activeStatuses.has(selectedRun.status) && <button className="button button-danger" onClick={() => void stop()} disabled={action !== null}>{action === "stop" ? "Stopping…" : "Stop session"}</button>}
+                  {!legacy && activeStatuses.has(selectedRun.status) && <button className="button button-danger" onClick={() => void stop()} disabled={action !== null}>{action === "stop" ? "Stopping…" : "Stop wave"}</button>}
+                  {!legacy && (selectedRun.status === "created" || selectedRun.status === "awaiting_input") && <button className="button button-ghost" onClick={() => void end()} disabled={action !== null}>{action === "end" ? "Ending…" : "End session"}</button>}
                 </div>
               </header>
 
@@ -620,8 +698,24 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
 
               {session && (
                 <section className="evidence-section transcript-section">
-                  <div className="session-section-heading"><div><span className="eyebrow">Shared conversation</span><h3>Transcript</h3></div><span className="evidence-count">{details.artifacts.filter(({ type }) => type === "session_message").length} messages</span></div>
+                  <div className="session-section-heading"><div><span className="eyebrow">Shared conversation</span><h3>Transcript</h3></div><span className="evidence-count">{details.artifacts.filter(({ type }) => type === "session_message" || type === "user_message").length} messages</span></div>
                   <SessionTranscript details={details} />
+                  <form className="session-composer" onSubmit={send}>
+                    <label htmlFor="session-message">Message the session</label>
+                    <textarea
+                      id="session-message"
+                      value={message}
+                      maxLength={4_000}
+                      rows={3}
+                      disabled={selectedRun.status !== "created" && selectedRun.status !== "awaiting_input"}
+                      onChange={(event) => setMessage(event.target.value)}
+                      placeholder={activeStatuses.has(selectedRun.status) ? "Agents are working…" : "Ask the Agents what to do next"}
+                    />
+                    <div className="session-composer-actions">
+                      <p>{activeStatuses.has(selectedRun.status) ? "Agents are working. Stop ends only this wave; End session permanently closes the conversation." : selectedRun.status === "completed" ? "This session has ended." : "Send starts the next wave. Stop cancels a wave; End session permanently closes the conversation."}</p>
+                      <button className="button button-primary" disabled={!message.trim() || action !== null || (selectedRun.status !== "created" && selectedRun.status !== "awaiting_input")}>{action === "send" ? "Sending…" : "Send message"}</button>
+                    </div>
+                  </form>
                 </section>
               )}
 
@@ -636,7 +730,7 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                   <div className="session-section-heading"><div><span className="eyebrow">Committed output</span><h3>Artifacts</h3></div><span className="evidence-count">{details.artifacts.length}</span></div>
                   {details.artifacts.length === 0
                     ? <p className="session-muted">No artifacts have been committed yet.</p>
-                    : <div className="artifact-list">{details.artifacts.filter((artifact): artifact is Exclude<CoordinationArtifact, { type: "session_message" }> => artifact.type !== "session_message").map((artifact) => <LegacyArtifactCard artifact={artifact} key={artifact.id} />)}</div>}
+                    : <div className="artifact-list">{details.artifacts.filter((artifact): artifact is Extract<CoordinationArtifact, { type: "proposal" | "review" | "final" }> => artifact.type === "proposal" || artifact.type === "review" || artifact.type === "final").map((artifact) => <LegacyArtifactCard artifact={artifact} key={artifact.id} />)}</div>}
                 </section>
               )}
             </>

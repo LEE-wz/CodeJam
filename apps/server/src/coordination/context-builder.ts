@@ -146,7 +146,7 @@ const VERIFIED_TASK_INSTRUCTIONS: Readonly<
 const taskInstruction = (run: CoordinationRun, turn: CoordinationTurn): string => {
   if (turn.kind !== "session_turn") return VERIFIED_TASK_INSTRUCTIONS[turn.kind];
   return run.policy.sessionProtocol === "free_chat"
-    ? "Contribute the next message toward the shared objective based on the transcript. Set done to true only when you consider the shared objective fully met; the backend decides when the run completes."
+    ? "Respond to the most recent User message and contribute the next message toward the shared objective based on the transcript. Set done to true only when you consider the current user request fully addressed; the backend decides when the wave ends."
     : "Continue the countdown by publishing the next number exactly one lower than the last number in the transcript. If the transcript is empty, derive the starting number from the objective.";
 };
 
@@ -162,6 +162,7 @@ const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
   ].join(""),
   final: '{"schemaVersion":1,"type":"final","title":"<string>","content":"<string>"}',
   session_message: '{"schemaVersion":1,"type":"session_message","content":"<string>"}',
+  user_message: '{"schemaVersion":1,"type":"user_message","content":"<string>"}',
 };
 
 const OUTPUT_LIMITS: Readonly<Record<ArtifactType, string>> = {
@@ -169,6 +170,7 @@ const OUTPUT_LIMITS: Readonly<Record<ArtifactType, string>> = {
   review: `0-${ARTIFACT_SCHEMA_LIMITS.reviewIssues} issues; each message <= ${ARTIFACT_SCHEMA_LIMITS.reviewIssueMessageChars} and feedback <= ${ARTIFACT_SCHEMA_LIMITS.reviewFeedbackChars} characters. A rejecting review lists at least one issue; an approving review lists none.`,
   final: `title <= ${ARTIFACT_SCHEMA_LIMITS.titleChars} and content <= ${ARTIFACT_SCHEMA_LIMITS.finalContentChars} characters.`,
   session_message: "content must be non-empty and <= 500 characters.",
+  user_message: "content must be non-empty and <= 4,000 characters.",
 };
 
 const buildContractSection = (run: CoordinationRun, turn: CoordinationTurn): string => {
@@ -199,7 +201,7 @@ const ROLE_VISIBILITY: Readonly<Record<CoordinationTurnKind, readonly ArtifactTy
   proposal_review: ["proposal"],
   proposal_revision: ["proposal", "review"],
   finalization: ["proposal", "review"],
-  session_turn: ["session_message"],
+  session_turn: ["session_message", "user_message"],
 };
 
 /**
@@ -226,7 +228,13 @@ const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[
   if (input.turn.kind === "session_turn") {
     return input.turn.inputArtifactIds.flatMap((id) => {
       const artifact = byId.get(id);
-      return artifact?.type === "session_message" ? [artifact] : [];
+      return artifact?.type === "session_message" || artifact?.type === "user_message"
+        ? [artifact]
+        : [];
+    }).sort((left, right) => {
+      const leftSequence = left.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+      const rightSequence = right.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+      return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);
     });
   }
 
@@ -262,9 +270,17 @@ const buildArtifactSection = (
     return [SECTION.artifacts, NO_ARTIFACTS].join("\n");
   }
 
-  if (visible[0]?.type === "session_message") {
+  if (visible[0]?.type === "session_message" || visible[0]?.type === "user_message") {
     const windowed = visible.slice(windowStart);
+    const newestUserId = visible.findLast((artifact) => artifact.type === "user_message")?.id;
     const blocks = windowed.map((artifact, index) => {
+      if (artifact.type === "user_message") {
+        const cap =
+          artifact.id !== newestUserId && index < sessionTruncatedCount
+            ? fieldCap
+            : Number.POSITIVE_INFINITY;
+        return `User: ${capText(artifact.payload.content, cap)}`;
+      }
       if (artifact.type !== "session_message") return "";
       const participant = run.participants.find(
         ({ agentId }) => agentId === artifact.createdByAgentId,
@@ -347,6 +363,7 @@ interface PromptCandidate {
 const sessionCandidates = (
   participantCount: number,
   visibleCount: number,
+  newestUserIndex: number,
 ): PromptCandidate[] => {
   const candidates: PromptCandidate[] = [
     { fieldCap: Number.POSITIVE_INFINITY, sessionTruncatedCount: 0, windowStart: 0 },
@@ -358,7 +375,7 @@ const sessionCandidates = (
     size >= 1;
     size = Math.floor(size / 2)
   ) {
-    const windowStart = visibleCount - size;
+    const windowStart = Math.min(visibleCount - size, newestUserIndex);
     if (windowStart > 0 && !windowStarts.includes(windowStart)) {
       windowStarts.push(windowStart);
     }
@@ -396,10 +413,15 @@ export class RoleScopedContextBuilder implements ContextBuilder {
     const contract = buildContractSection(input.run, input.turn);
     const output = buildOutputSection(input.run, expected);
     const limit = input.run.policy.contextMaxChars;
+    const newestUserIndex = visible.findLastIndex((artifact) => artifact.type === "user_message");
 
     const candidates =
       input.turn.kind === "session_turn"
-        ? sessionCandidates(input.run.participants.length, visible.length)
+        ? sessionCandidates(
+            input.run.participants.length,
+            visible.length,
+            newestUserIndex < 0 ? visible.length : newestUserIndex,
+          )
         : [Number.POSITIVE_INFINITY, ...FIELD_CAP_LADDER].map((fieldCap) => ({
             fieldCap,
             sessionTruncatedCount: 0,

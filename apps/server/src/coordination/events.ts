@@ -200,7 +200,7 @@ export interface CoordinationEventFactory {
 
   runCompleted(input: {
     runId: CoordinationRunId;
-    artifactId: CoordinationArtifactId;
+    artifactId?: CoordinationArtifactId | undefined;
     /** The durable repository supplies session_message for session runs. */
     artifactType?: ArtifactType | undefined;
   }): CoordinationEventDraft;
@@ -226,6 +226,14 @@ export interface CoordinationEventFactory {
     code: CoordinationErrorCode;
     reason: string;
   }): CoordinationEventDraft;
+
+  userMessageAppended(input: {
+    runId: CoordinationRunId;
+    artifactId: CoordinationArtifactId;
+    transcriptSequence: number;
+  }): CoordinationEventDraft;
+
+  runAwaitingInput(input: { runId: CoordinationRunId }): CoordinationEventDraft;
 }
 
 /**
@@ -468,7 +476,7 @@ export const createCoordinationEventFactory = (
     runCompleted: ({ runId, artifactId, artifactType = "final" }) =>
       draft({
         runId,
-        artifactId,
+        ...(artifactId === undefined ? {} : { artifactId }),
         type: "run.completed",
         actor: SYSTEM,
         message: "Run completed.",
@@ -503,6 +511,25 @@ export const createCoordinationEventFactory = (
         // backend bookkeeping step, and its evidence stays at that level.
         message: "Run reconciled after an orchestration exit.",
         details: { code, reason },
+      }),
+
+    userMessageAppended: ({ runId, artifactId, transcriptSequence }) =>
+      draft({
+        runId,
+        artifactId,
+        type: "user.message_appended",
+        actor: USER,
+        message: "User message appended.",
+        details: { transcriptSequence },
+      }),
+
+    runAwaitingInput: ({ runId }) =>
+      draft({
+        runId,
+        type: "run.awaiting_input",
+        actor: SYSTEM,
+        message: "Session is awaiting user input.",
+        details: {},
       }),
   };
 };

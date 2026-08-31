@@ -1,6 +1,8 @@
 import type {
   BeginAttemptInput,
   BeginAttemptResult,
+  AppendUserMessageInput,
+  AppendUserMessageResult,
   Clock,
   CommitAcceptedArtifactInput,
   CommitAcceptedArtifactResult,
@@ -89,6 +91,82 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     return { kind: "started", run: structuredClone(run) };
   }
 
+  async appendUserMessage(input: AppendUserMessageInput): Promise<AppendUserMessageResult> {
+    const run = this.runs.get(input.runId);
+    if (!run) return { kind: "not_found" };
+    if (run.status === "completed" || run.status === "failed" || run.status === "stopped") {
+      return { kind: "terminal", run: structuredClone(run) };
+    }
+    const latest = run.lastUserArtifactId
+      ? this.artifacts.find((artifact) => artifact.id === run.lastUserArtifactId)
+      : undefined;
+    if (
+      input.clientMessageId !== undefined &&
+      latest?.type === "user_message" &&
+      latest.clientMessageId === input.clientMessageId
+    ) {
+      return { kind: "duplicate", run: structuredClone(run) };
+    }
+    if (run.status !== "created" && run.status !== "awaiting_input") {
+      return { kind: "conflict", run: structuredClone(run) };
+    }
+    const now = this.clock.nowIso();
+    const transcriptSequence = this.nextTranscriptSequence(run.id);
+    const artifact: CoordinationArtifact = {
+      id: `user-${run.id}-${transcriptSequence}`,
+      runId: run.id,
+      type: "user_message",
+      payload: { schemaVersion: 1, type: "user_message", content: input.content.trim() },
+      createdBy: { kind: "user" },
+      ...(input.clientMessageId === undefined ? {} : { clientMessageId: input.clientMessageId }),
+      transcriptSequence,
+      sizeChars: input.content.trim().length,
+      createdAt: now,
+    };
+    this.artifacts.push(artifact);
+    run.lastUserArtifactId = artifact.id;
+    run.status = "running";
+    run.startedAt ??= now;
+    run.updatedAt = now;
+    run.version += 1;
+    return { kind: "appended", run: structuredClone(run), artifact: structuredClone(artifact) };
+  }
+
+  async awaitInput(id: CoordinationRunId): Promise<CoordinationRun | undefined> {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    if (run.status === "running") {
+      run.status = "awaiting_input";
+      delete run.activeTurnId;
+      run.version += 1;
+      run.updatedAt = this.clock.nowIso();
+    }
+    return structuredClone(run);
+  }
+
+  async endSession(id: CoordinationRunId): Promise<
+    | { kind: "ended"; run: CoordinationRun }
+    | { kind: "conflict"; run: CoordinationRun }
+    | { kind: "not_found" }
+  > {
+    const run = this.runs.get(id);
+    if (!run) return { kind: "not_found" };
+    if (run.status !== "created" && run.status !== "awaiting_input") {
+      return { kind: "conflict", run: structuredClone(run) };
+    }
+    const latest = this.artifacts
+      .filter((artifact) => artifact.runId === id && artifact.type === "session_message")
+      .at(-1);
+    run.status = "completed";
+    run.phase = "done";
+    run.endedByUser = true;
+    if (latest) run.finalArtifactId = latest.id;
+    run.completedAt = this.clock.nowIso();
+    run.updatedAt = this.clock.nowIso();
+    run.version += 1;
+    return { kind: "ended", run: structuredClone(run) };
+  }
+
   async scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult> {
     const run = this.runs.get(input.runId);
     if (!run) return { kind: "not_found" };
@@ -166,6 +244,9 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     }
 
     const artifact = structuredClone(input.artifact);
+    if (artifact.type === "session_message") {
+      artifact.transcriptSequence = this.nextTranscriptSequence(run.id);
+    }
     let nextExpectedNumber: number | undefined;
     if (
       artifact.type === "session_message" &&
@@ -248,9 +329,13 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     if (!run) return undefined;
     if (run.status === "stop_requested" || run.status === "running") {
       this.settleActiveWork(run, "cancelled");
-      run.status = "stopped";
-      run.errorCode = "STOPPED_BY_USER";
-      run.stoppedAt = this.clock.nowIso();
+      if (run.policy.workflow === "shared_session_v1") {
+        run.status = "awaiting_input";
+      } else {
+        run.status = "stopped";
+        run.errorCode = "STOPPED_BY_USER";
+        run.stoppedAt = this.clock.nowIso();
+      }
       run.version += 1;
       run.updatedAt = this.clock.nowIso();
     }
@@ -360,5 +445,11 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
 
   private findAttempt(id: string): CoordinationAttempt | undefined {
     return this.attempts.find((attempt) => attempt.id === id);
+  }
+
+  private nextTranscriptSequence(runId: CoordinationRunId): number {
+    return this.artifacts
+      .filter((artifact) => artifact.runId === runId)
+      .reduce((maximum, artifact) => Math.max(maximum, artifact.transcriptSequence ?? 0), 0) + 1;
   }
 }

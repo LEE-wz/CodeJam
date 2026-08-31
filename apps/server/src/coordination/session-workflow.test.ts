@@ -76,9 +76,22 @@ const committedView = (
     payload,
     createdByRole: "participant",
     createdByAgentId: runParticipants[index % runParticipants.length]!.agentId,
+    transcriptSequence: protocol === "free_chat" ? index + 2 : index + 1,
     sizeChars: payload.content.length,
     createdAt: now,
   }));
+  const userArtifact: CoordinationArtifact | undefined = protocol === "free_chat"
+    ? {
+        id: "user-artifact-1",
+        runId: "run-session",
+        type: "user_message",
+        payload: { schemaVersion: 1, type: "user_message", content: "Help with this request" },
+        createdBy: { kind: "user" },
+        transcriptSequence: 1,
+        sizeChars: 22,
+        createdAt: now,
+      }
+    : undefined;
   const turns: CoordinationTurn[] = artifacts.map((artifact, index) => ({
     id: artifact.turnId,
     runId: artifact.runId,
@@ -107,10 +120,10 @@ const committedView = (
       },
       ...(protocol === "countdown"
         ? { sharedState: { nextExpectedNumber: startValue - payloads.length } }
-        : {}),
+        : { lastUserArtifactId: userArtifact!.id }),
     }),
     turns,
-    artifacts,
+    artifacts: userArtifact ? [userArtifact, ...artifacts] : artifacts,
   };
 };
 
@@ -153,16 +166,13 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
     ).toMatchObject({ kind: "fail", code: "MAX_TURNS_EXCEEDED" });
   });
 
-  it("completes free chat on a unanimous latest done round", () => {
+  it("awaits another prompt after a unanimous latest done wave", () => {
     const view = committedView("free_chat", [
       freeChatPayload("Ready", true),
       freeChatPayload("Ready", true),
       freeChatPayload("Ready", true),
     ]);
-    expect(workflow.decideNext(view)).toEqual({
-      kind: "complete",
-      finalArtifactId: "artifact-3",
-    });
+    expect(workflow.decideNext(view)).toEqual({ kind: "await_input" });
   });
 
   it("continues for partial signals and cannot complete before every participant speaks", () => {
@@ -189,15 +199,15 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
     });
   });
 
-  it("completes free chat at maxTurns without done signals", () => {
+  it("fails free chat at the hard maxTurns ceiling", () => {
     const view = committedView("free_chat", [
       freeChatPayload("One"),
       freeChatPayload("Two"),
       freeChatPayload("Three"),
     ], { maxTurns: 3 });
-    expect(workflow.decideNext(view)).toEqual({
-      kind: "complete",
-      finalArtifactId: "artifact-3",
+    expect(workflow.decideNext(view)).toMatchObject({
+      kind: "fail",
+      code: "MAX_TURNS_EXCEEDED",
     });
   });
 

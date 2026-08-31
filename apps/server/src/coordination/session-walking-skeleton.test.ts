@@ -41,7 +41,7 @@ import {
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 
-const terminal = new Set(["completed", "failed", "stopped"]);
+const settled = new Set(["awaiting_input", "completed", "failed", "stopped"]);
 
 const sessionHarness = (
   steps: ScriptedRuntimeStep[],
@@ -77,7 +77,7 @@ const settle = async (
 ): Promise<CoordinationRunDetails> => {
   for (let tick = 0; tick < ticks; tick += 1) {
     const details = await service.getRun(runId);
-    if (details && terminal.has(details.run.status)) return details;
+    if (details && settled.has(details.run.status)) return details;
     await Promise.resolve();
   }
   throw new Error("session run did not reach a terminal state");
@@ -93,7 +93,11 @@ const startSession = async (
 ) => {
   const context = sessionHarness(steps);
   const run = await context.service.createRun(request);
-  await context.service.startRun(run.id);
+  if (request.policy?.sessionProtocol === "free_chat") {
+    await context.service.resumeRun(run.id, { content: "Work on the shared objective" });
+  } else {
+    await context.service.startRun(run.id);
+  }
   return { ...context, runId: run.id };
 };
 
@@ -329,13 +333,13 @@ describe("session walking skeleton", () => {
   it("stops a deferred session attempt and ignores its late result", async () => {
     const { service, runtime, runId } = await startSession([deferred()]);
     await runtime.waitForStarts(1);
-    expect((await service.stopRun(runId)).status).toBe("stopped");
+    expect((await service.stopRun(runId)).status).toBe("awaiting_input");
     const pending = runtime.pendingAttemptIds()[0];
     expect(pending).toBeDefined();
     runtime.resolveAttempt(pending!, { kind: "succeeded", rawOutput: VALID_COUNTDOWN_OUTPUT });
     await flush();
     const details = await service.getRun(runId);
-    expect(details?.run.status).toBe("stopped");
+    expect(details?.run.status).toBe("awaiting_input");
     expect(details?.artifacts).toEqual([]);
     expect(details?.attempts[0]?.status).toBe("cancelled");
   });
@@ -377,7 +381,7 @@ describe("session walking skeleton", () => {
     expect(details.artifacts).toHaveLength(3);
   });
 
-  it("completes free chat at maxTurns and on a unanimous done round", async () => {
+  it("fails free chat at maxTurns and awaits input after a unanimous done wave", async () => {
     const atLimit = await startSession([
       succeeds(JSON.stringify(freeChatPayload("One"))),
       succeeds(JSON.stringify(freeChatPayload("Two"))),
@@ -387,17 +391,16 @@ describe("session walking skeleton", () => {
       policy: { sessionProtocol: "free_chat", maxTurns: 3 },
     });
     const limitDetails = await settle(atLimit.service, atLimit.runId);
-    expect(limitDetails.run.status).toBe("completed");
-    expect(limitDetails.run.finalArtifactId).toBe(limitDetails.artifacts.at(-1)?.id);
+    expect(limitDetails.run).toMatchObject({ status: "failed", errorCode: "MAX_TURNS_EXCEEDED" });
 
     const unanimous = await startSession(
       UNANIMOUS_DONE_ROUND.map((payload) => succeeds(JSON.stringify(payload))),
       { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 6 } },
     );
     const unanimousDetails = await settle(unanimous.service, unanimous.runId);
-    expect(unanimousDetails.run.status).toBe("completed");
+    expect(unanimousDetails.run.status).toBe("awaiting_input");
     expect(unanimousDetails.turns).toHaveLength(3);
-    expect(unanimousDetails.run.finalArtifactId).toBe(unanimousDetails.artifacts.at(-1)?.id);
+    expect(unanimousDetails.run.finalArtifactId).toBeUndefined();
   });
 
   it("retries and fails malformed free-chat output", async () => {

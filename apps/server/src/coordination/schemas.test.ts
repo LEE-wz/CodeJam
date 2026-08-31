@@ -11,6 +11,7 @@ import {
   proposalPayloadSchema,
   reviewPayloadSchema,
   sessionMessagePayloadSchema,
+  userMessagePayloadSchema,
 } from "./schemas.js";
 import { SESSION_LIMITS } from "./types.js";
 
@@ -273,5 +274,25 @@ describe("artifact payload schemas", () => {
     expect(sessionMessagePayloadSchema.safeParse({ ...base, done: "yes" }).success).toBe(false);
     expect(sessionMessagePayloadSchema.safeParse({ ...base, agentId: "forged" }).success).toBe(false);
     expect(sessionMessagePayloadSchema.safeParse({ ...base, schemaVersion: 2 }).success).toBe(false);
+  });
+
+  it("strictly validates, trims, and bounds durable user messages", () => {
+    expect(userMessagePayloadSchema.parse({
+      schemaVersion: 1,
+      type: "user_message",
+      content: "  Continue with the risks  ",
+    })).toEqual({
+      schemaVersion: 1,
+      type: "user_message",
+      content: "Continue with the risks",
+    });
+    const base = { schemaVersion: 1, type: "user_message" as const };
+    expect(userMessagePayloadSchema.safeParse({ ...base, content: "x".repeat(4_000) }).success)
+      .toBe(true);
+    expect(userMessagePayloadSchema.safeParse({ ...base, content: "x".repeat(4_001) }).success)
+      .toBe(false);
+    expect(userMessagePayloadSchema.safeParse({ ...base, content: "   " }).success).toBe(false);
+    expect(userMessagePayloadSchema.safeParse({ ...base, content: "valid", done: true }).success)
+      .toBe(false);
   });
 });

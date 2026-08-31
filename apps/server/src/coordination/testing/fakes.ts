@@ -1,6 +1,8 @@
 import type {
   ArtifactProtocol,
   ArtifactValidationResult,
+  AppendUserMessageInput,
+  AppendUserMessageResult,
   BeginAttemptInput,
   BeginAttemptResult,
   CommitAcceptedArtifactInput,
@@ -93,6 +95,22 @@ export class FakeCoordinationRepository implements CoordinationRepository {
 
   async startRun(_id: string): Promise<StartRunCommitResult> {
     return notImplemented("FakeCoordinationRepository.startRun");
+  }
+
+  async appendUserMessage(_input: AppendUserMessageInput): Promise<AppendUserMessageResult> {
+    return notImplemented("FakeCoordinationRepository.appendUserMessage");
+  }
+
+  async awaitInput(_id: string): Promise<CoordinationRun | undefined> {
+    return notImplemented("FakeCoordinationRepository.awaitInput");
+  }
+
+  async endSession(_id: string): Promise<
+    | { kind: "ended"; run: CoordinationRun }
+    | { kind: "conflict"; run: CoordinationRun }
+    | { kind: "not_found" }
+  > {
+    return notImplemented("FakeCoordinationRepository.endSession");
   }
 
   async scheduleTurn(_input: ScheduleTurnInput): Promise<ScheduleTurnResult> {

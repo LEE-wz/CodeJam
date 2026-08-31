@@ -77,6 +77,7 @@ describe("defaultRedactor.eventDetails", () => {
       authorization: "Bearer abc123",
       cookie: "sid=abc",
       objective: "the user objective",
+      content: "the user prompt must not enter event details",
     });
 
     expect(details).toEqual({ role: "planner" });

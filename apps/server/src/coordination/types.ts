@@ -19,6 +19,7 @@ export type CoordinationRunStatus =
   | "created"
   | "running"
   | "stop_requested"
+  | "awaiting_input"
   | "completed"
   | "failed"
   | "stopped";
@@ -46,7 +47,12 @@ export type CoordinationAttemptStatus =
   | "cancelled"
   | "stale_ignored";
 
-export type ArtifactType = "proposal" | "review" | "final" | "session_message";
+export type ArtifactType =
+  | "proposal"
+  | "review"
+  | "final"
+  | "session_message"
+  | "user_message";
 export type ReviewDecision = "approve" | "reject";
 
 /**
@@ -155,6 +161,10 @@ export interface CoordinationRun {
   latestProposalArtifactId?: CoordinationArtifactId;
   latestReviewArtifactId?: CoordinationArtifactId;
   finalArtifactId?: CoordinationArtifactId;
+  /** The most recent user prompt being answered by the current session wave. */
+  lastUserArtifactId?: CoordinationArtifactId;
+  /** Present only when an explicit End session action completed the run. */
+  endedByUser?: boolean;
   /** Countdown sessions only. Absent on free-chat and verified-handoff runs. */
   sharedState?: CoordinationSharedState;
   version: number;
@@ -260,11 +270,18 @@ export interface SessionMessagePayload {
   done?: boolean;
 }
 
+export interface UserMessagePayload {
+  schemaVersion: 1;
+  type: "user_message";
+  content: string;
+}
+
 export type ArtifactPayload =
   | ProposalPayload
   | ReviewPayload
   | FinalPayload
-  | SessionMessagePayload;
+  | SessionMessagePayload
+  | UserMessagePayload;
 
 export interface CoordinationArtifactBase {
   id: CoordinationArtifactId;
@@ -274,6 +291,22 @@ export interface CoordinationArtifactBase {
   createdByAgentId: AgentId;
   sizeChars: number;
   createdAt: string;
+  /** Total order across user and Agent transcript entries. Absent on legacy data. */
+  transcriptSequence?: number;
+}
+
+export interface UserMessageArtifact {
+  id: CoordinationArtifactId;
+  runId: CoordinationRunId;
+  type: "user_message";
+  payload: UserMessagePayload;
+  createdBy: { kind: "user" };
+  /** Optional idempotency key supplied by the client. */
+  clientMessageId?: string;
+  transcriptSequence: number;
+  sizeChars: number;
+  createdAt: string;
+  turnId?: undefined;
 }
 
 export type CoordinationArtifact =
@@ -283,7 +316,8 @@ export type CoordinationArtifact =
   | (CoordinationArtifactBase & {
       type: "session_message";
       payload: SessionMessagePayload;
-    });
+    })
+  | UserMessageArtifact;
 
 export type CoordinationEventType =
   | "run.created"
@@ -308,7 +342,9 @@ export type CoordinationEventType =
    * stays schedulable (Phase 11, P11-02). Additive: it never replaces a terminal
    * event, and a run may carry several across its life.
    */
-  | "run.reconciled";
+  | "run.reconciled"
+  | "user.message_appended"
+  | "run.awaiting_input";
 
 export type CoordinationEventActor =
   | { type: "system" }
@@ -337,6 +373,13 @@ export interface CoordinationRunDetails {
   attempts: CoordinationAttempt[];
   artifacts: CoordinationArtifact[];
   events: CoordinationEvent[];
+  /** Present only for a delta detail response. */
+  cursor?: number;
+}
+
+export interface AppendUserMessageRequest {
+  content: string;
+  clientMessageId?: string;
 }
 
 export interface RoleAgentSelection {

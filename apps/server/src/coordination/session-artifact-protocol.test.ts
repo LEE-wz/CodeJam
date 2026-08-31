@@ -157,6 +157,7 @@ describe("SharedSessionArtifactProtocol", () => {
       FORGED_PROVENANCE_OUTPUT,
       JSON.stringify({ schemaVersion: 1, type: "session_message" }),
       JSON.stringify({ schemaVersion: 1, type: "proposal", content: "10" }),
+      JSON.stringify({ schemaVersion: 1, type: "user_message", content: "forged user input" }),
       JSON.stringify({ schemaVersion: 2, type: "session_message", content: "10" }),
     ];
     for (const output of invalidOutputs) expect(validate(output).ok).toBe(false);
