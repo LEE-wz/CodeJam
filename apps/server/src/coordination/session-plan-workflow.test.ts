@@ -209,7 +209,12 @@ describe("coordinator planning decisions (P14-03)", () => {
     const decision = workflow.decideNext(roundView({}));
     expect(decision).toMatchObject({ kind: "schedule" });
     if (decision.kind !== "schedule") throw new Error("expected a schedule decision");
-    expect(decision.inputArtifactIds).toEqual(["artifact-user"]);
+    // P15-05: the transcript is pinned as a bound. The only transcript artifact
+    // in this round is the user message at sequence 1, so a bound of 1 is
+    // exactly the previous `["artifact-user"]`, and the coordinator names
+    // nothing outside the transcript.
+    expect(decision.inputArtifactIds).toEqual([]);
+    expect(decision.inputThroughSequence).toBe(1);
   });
 
   it("does not schedule a second plan while the first is still running", () => {
@@ -291,8 +296,11 @@ describe("plan execution decisions (P14-04)", () => {
   it("hands every sequential contributor the committed plan alongside the transcript", () => {
     const decision = workflow.decideNext(roundView({ plan: fullRosterPlan("sequential") }));
     if (decision.kind !== "schedule") throw new Error("expected a schedule decision");
-    expect(decision.inputArtifactIds).toContain("artifact-plan");
-    expect(decision.inputArtifactIds).toContain("artifact-user");
+    // The plan is named explicitly because it is not a transcript artifact; a
+    // bound must never be able to widen a turn onto a plan the workflow did not
+    // choose (P15-05). The user message is covered by the bound instead.
+    expect(decision.inputArtifactIds).toEqual(["artifact-plan"]);
+    expect(decision.inputThroughSequence).toBeGreaterThanOrEqual(1);
   });
 
   it("schedules a parallel plan as one wave", () => {

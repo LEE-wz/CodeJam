@@ -593,3 +593,47 @@ describe("SessionWorkspace coordinator planning", () => {
     expect(state.textContent).toContain("Coordinator");
   });
 });
+
+/**
+ * P15-03: the measured session-length guidance from `P15-01` has to reach the
+ * user. Prompt latency is 1.65s at 500 committed turns, 6.01s at 1,000, and
+ * 23.84s at 2,000, so the UI warns before a session gets there.
+ */
+describe("session length guidance (P15-03)", () => {
+  const withTurns = (count: number) => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const template = base.turns[0]!;
+    return {
+      ...base,
+      turns: Array.from({ length: count }, (_unused, index) => ({
+        ...template,
+        id: `turn-scale-${index + 1}`,
+      })),
+    };
+  };
+
+  const renderWith = async (count: number) => {
+    const fixture = withTurns(count);
+    mockedApi.list.mockResolvedValue({ runs: [fixture.run] });
+    mockedApi.detail.mockResolvedValue(fixture);
+    render(<SessionWorkspace agents={agents} />);
+    await screen.findByRole("heading", { name: fixture.run.name });
+  };
+
+  it("stays quiet well below the measured threshold", async () => {
+    await renderWith(SESSION_LIMITS.sessionTurnWarningThreshold - 1);
+    expect(screen.queryByText(/measured/i)).toBeNull();
+  });
+
+  it("warns as a session approaches the measured comfortable length", async () => {
+    await renderWith(SESSION_LIMITS.sessionTurnWarningThreshold);
+    const notice = await screen.findByText(/approaching/i);
+    expect(notice.textContent).toContain(String(SESSION_LIMITS.recommendedMaxSessionTurns));
+  });
+
+  it("warns harder once a session is past the measured comfortable length", async () => {
+    await renderWith(SESSION_LIMITS.recommendedMaxSessionTurns);
+    const notice = await screen.findByText(/past the measured comfortable length/i);
+    expect(notice.textContent).toContain("Start a new session");
+  });
+});

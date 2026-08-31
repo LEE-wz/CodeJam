@@ -1218,6 +1218,24 @@ textarea:focus {
   font-size: 11px;
 }
 
+/* Measured session-length guidance from P15-01/P15-03. */
+.session-notice-warning {
+  margin-top: 12px;
+  border-color: #e0b48c;
+  color: #8a4b1d;
+  background: #fdf0e4;
+}
+
+.field-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.field-hint-warning {
+  color: #8a4b1d;
+}
+
 .session-layout {
   min-height: calc(100vh - 150px);
   display: grid;

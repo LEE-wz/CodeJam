@@ -4,6 +4,7 @@ import type { AgentService } from "../agent-service.js";
 import { loadConfig } from "../config.js";
 import type { CoordinationServiceContract } from "./contracts.js";
 import type { CoordinationRun, CoordinationRunDetails } from "./types.js";
+import { SESSION_LIMITS } from "./types.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
 const run: CoordinationRun = {
@@ -205,6 +206,59 @@ describe("Coordination HTTP routes", () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+    await app.close();
+  });
+});
+
+/**
+ * P15-05: `P15-01` measured the store throwing `RangeError: Invalid string
+ * length` near 4,426 committed turns, because `persist()` serialises the whole
+ * database into one string. A session above that can be created but never
+ * saved, so the route refuses the request rather than accepting guaranteed data
+ * loss. The type-level `maxSessionTurns` is unchanged; only what a caller may
+ * ask for is bounded.
+ */
+describe("session turn cap (P15-05)", () => {
+  const sessionBody = (maxTurns: number) => ({
+    workflow: "shared_session_v1" as const,
+    name: "Scale guard",
+    objective: "Check the saveable cap.",
+    agents: ["agent-one", "agent-two"],
+    policy: { sessionProtocol: "free_chat" as const, maxTurns },
+  });
+
+  const appWithSessionCreate = async () => {
+    const coordination: CoordinationServiceContract = {
+      initialize: async () => undefined,
+      listRuns: async () => [run],
+      getRun: async () => details,
+      createRun: async () => run,
+      startRun: async () => run,
+      stopRun: async () => run,
+    };
+    return createApp(loadConfig({ NODE_ENV: "test" }), agentService, coordination);
+  };
+
+  it("refuses a session longer than the store can persist", async () => {
+    const app = await appWithSessionCreate();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      payload: sessionBody(SESSION_LIMITS.maxSaveableSessionTurns + 1),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+    await app.close();
+  });
+
+  it("accepts a session exactly at the cap", async () => {
+    const app = await appWithSessionCreate();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      payload: sessionBody(SESSION_LIMITS.maxSaveableSessionTurns),
+    });
+    expect(response.statusCode).toBe(201);
     await app.close();
   });
 });

@@ -136,11 +136,13 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
       expect(second).toEqual(first);
       if (first.kind === "schedule") {
         // A free-chat round is driven by a user message, so the transcript the
-        // next participant reads opens with it.
-        expect(first.inputArtifactIds).toEqual([
-          "user-artifact-1",
-          ...payloads.map((_payload, index) => `artifact-${index + 1}`),
-        ]);
+        // next participant reads opens with it. Since P15-05 that transcript is
+        // pinned as a sequence bound rather than a list of every id: the user
+        // message is sequence 1 and message `index` is `index + 2`, so the bound
+        // covers exactly the same artifacts the id list used to name. Nothing
+        // outside the transcript is named for a round-robin turn.
+        expect(first.inputArtifactIds).toEqual([]);
+        expect(first.inputThroughSequence).toBe(payloads.length + 1);
       }
     });
   }

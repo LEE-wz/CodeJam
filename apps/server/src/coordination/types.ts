@@ -219,6 +219,28 @@ export interface CoordinationTurn {
   attemptCount: number;
   activeAttemptId?: CoordinationAttemptId;
   inputArtifactIds: CoordinationArtifactId[];
+  /**
+   * Transcript bound for session turns (P15-05).
+   *
+   * The workflow pins what this turn may read as "every `session_message` and
+   * `user_message` of this run with `transcriptSequence` at or below this
+   * value", instead of listing every id. Listing them made turn *n* store *n*
+   * ids, so the ledger grew O(n^2): `P15-01` measured `inputArtifactIds` as 93%
+   * of all turn bytes at 400 turns, and that growth is what puts a hard
+   * `RangeError` ceiling near 4,400 committed turns.
+   *
+   * The trust boundary is unchanged. The workflow still decides what is
+   * readable, the durable record still pins that decision, and the context
+   * builder still applies the role whitelist on top; only the encoding is
+   * smaller. Artifacts outside the transcript - the round's committed plan -
+   * stay listed explicitly in `inputArtifactIds`, so a bound can never widen a
+   * turn onto a plan the workflow did not name.
+   *
+   * Absent on turns stored before P15-05 and on verified-handoff turns, which
+   * name their few inputs explicitly. When absent, `inputArtifactIds` is the
+   * whole answer and the legacy path applies.
+   */
+  inputThroughSequence?: number;
   outputArtifactId?: CoordinationArtifactId;
   lastValidationErrors: string[];
   createdAt: string;
@@ -531,6 +553,33 @@ export const SESSION_LIMITS = {
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
   defaultSessionTurns: 200,
+  /**
+   * Measured guidance from `P15-01`, re-measured after the `P15-05` data-model
+   * fix. Not a type bound.
+   *
+   * Before the fix a session cost O(n^2) and one prompt took 1.65s at 500
+   * committed turns. With the transcript pinned as a bound the ledger is linear
+   * at ~4.28 KB per turn, and one prompt takes 0.45s at 500, 0.94s at 1,000 and
+   * 2.06s at 2,000. 2,000 is where a prompt first crosses two seconds, so it is
+   * the honest comfortable length. `defaultSessionTurns` stays well under it.
+   */
+  recommendedMaxSessionTurns: 2_000,
+  /** Where the UI starts warning: 80% of the measured recommendation. */
+  sessionTurnWarningThreshold: 1_600,
+  /**
+   * The largest session a caller may request (P15-05).
+   *
+   * `persist()` serialises the whole database into one string, so Node's
+   * 512 MiB `MAX_STRING_LENGTH` is a hard wall: past it the session cannot be
+   * saved at all. Before the `P15-05` fix that wall sat near 4,426 committed
+   * turns. At the measured post-fix rate it sits near 120,000, so this cap is
+   * set at roughly half of that - headroom for longer messages, more
+   * participants, and retry attempts, none of which the measurement maximised.
+   *
+   * `maxSessionTurns` remains the type-level ceiling; stored runs above this cap
+   * keep loading, and only new requests are bounded.
+   */
+  maxSaveableSessionTurns: 50_000,
   maxParallelTurns: 10,
   messageMinChars: 1,
   messageMaxChars: 500,

@@ -507,6 +507,11 @@ export class DurableCoordinationRepository implements CoordinationRepository {
             revision: run.revision,
             expectedArtifactType: expectedArtifactTypeForTurn(turn),
             inputArtifactCount: turn.inputArtifactIds.length,
+            // A session turn pins its transcript as a bound (P15-05), so the id
+            // count alone would understate what it reads.
+            ...(turn.inputThroughSequence === undefined
+              ? {}
+              : { inputThroughSequence: turn.inputThroughSequence }),
           }),
         );
       }

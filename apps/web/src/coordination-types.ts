@@ -72,6 +72,11 @@ export const SESSION_LIMITS = {
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
   defaultSessionTurns: 200,
+  /** Measured guidance from `P15-01`; mirrors the server constant. */
+  recommendedMaxSessionTurns: 2_000,
+  sessionTurnWarningThreshold: 1_600,
+  /** Largest requestable session; above this the store cannot persist (P15-05). */
+  maxSaveableSessionTurns: 50_000,
   maxParallelTurns: 10,
 } as const;
 

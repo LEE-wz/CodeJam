@@ -255,3 +255,118 @@ describe("session context builder", () => {
     expect(first.promptDigest).toBe(digestPrompt(first.prompt));
   });
 });
+
+/**
+ * P15-05: a session turn now pins its transcript as a sequence bound instead of
+ * listing every artifact id, because listing them made the ledger grow O(n^2)
+ * (`P15-01`). These tests hold the bound to the same trust boundary the id list
+ * had: it selects exactly the transcript the workflow chose, and it can never
+ * widen a turn onto anything the workflow did not name.
+ */
+describe("session context builder transcript bound (P15-05)", () => {
+  const seq = (artifact: CoordinationArtifact, value: number): CoordinationArtifact => ({
+    ...artifact,
+    transcriptSequence: value,
+  });
+
+  const boundedTurn = (
+    inputThroughSequence: number,
+    inputArtifactIds: string[] = [],
+  ): CoordinationTurn => ({
+    id: "turn-session-bounded",
+    runId: "run-session-context",
+    sequence: 9,
+    role: "participant",
+    agentId: PARTICIPANT_ONE.id,
+    kind: "session_turn",
+    status: "scheduled",
+    attemptCount: 0,
+    inputArtifactIds,
+    inputThroughSequence,
+    lastValidationErrors: [],
+    createdAt: FIXED_NOW,
+  });
+
+  const buildBounded = (
+    artifacts: CoordinationArtifact[],
+    inputThroughSequence: number,
+    inputArtifactIds: string[] = [],
+  ) =>
+    new RoleScopedContextBuilder().build({
+      run: sessionRun(),
+      turn: boundedTurn(inputThroughSequence, inputArtifactIds),
+      artifacts,
+      retryValidationErrors: [],
+    });
+
+  const transcript = [
+    seq(userMessage(0, "Start with seller verification."), 1),
+    seq(message(0, "Verification first, then listings."), 2),
+    seq(message(1, "Add an escrow hold."), 3),
+  ];
+
+  it("selects the same transcript the equivalent id list would", () => {
+    const bounded = buildBounded(transcript, 3);
+    const listed = build(transcript, transcript.map(({ id }) => id));
+    expect(bounded.prompt).toBe(listed.prompt);
+    expect(bounded.promptDigest).toBe(listed.promptDigest);
+  });
+
+  it("excludes an artifact committed above the bound", () => {
+    const later = seq(message(2, "A reporting route a moderator reads daily."), 4);
+    const bounded = buildBounded([...transcript, later], 3);
+    expect(bounded.prompt).toContain("Add an escrow hold.");
+    expect(bounded.prompt).not.toContain("A reporting route a moderator reads daily.");
+  });
+
+  // The security property. `session_turn` may read a plan, so a bound that
+  // swept up every allowed type would hand this turn a plan the workflow never
+  // chose - including a previous round's.
+  it("never sweeps in a plan the workflow did not name", () => {
+    const plan: CoordinationArtifact = {
+      id: "artifact-plan-unnamed",
+      runId: "run-session-context",
+      turnId: "turn-plan-unnamed",
+      type: "session_plan",
+      payload: {
+        schemaVersion: 1,
+        type: "session_plan",
+        mode: "sequential",
+        assignments: [
+          { agentId: PARTICIPANT_TWO.id, position: 1, instruction: "Leaked instruction." },
+        ],
+      },
+      createdByRole: "participant",
+      createdByAgentId: PARTICIPANT_THREE.id,
+      transcriptSequence: 2,
+      sizeChars: 40,
+      createdAt: FIXED_NOW,
+    };
+    const bounded = buildBounded([...transcript, plan], 3);
+    expect(bounded.prompt).not.toContain("Leaked instruction.");
+  });
+
+  it("includes a plan that is named explicitly alongside the bound", () => {
+    const plan: CoordinationArtifact = {
+      id: "artifact-plan-named",
+      runId: "run-session-context",
+      turnId: "turn-plan-named",
+      type: "session_plan",
+      payload: {
+        schemaVersion: 1,
+        type: "session_plan",
+        mode: "sequential",
+        assignments: [
+          { agentId: PARTICIPANT_ONE.id, position: 1, instruction: "Open with the headline risk." },
+        ],
+      },
+      createdByRole: "participant",
+      createdByAgentId: PARTICIPANT_ONE.id,
+      transcriptSequence: 4,
+      sizeChars: 40,
+      createdAt: FIXED_NOW,
+    };
+    const bounded = buildBounded([...transcript, plan], 3, [plan.id]);
+    expect(bounded.prompt).toContain("Open with the headline risk.");
+  });
+});

@@ -15,6 +15,21 @@ type PlanArtifact = Extract<CoordinationArtifact, { type: "session_plan" }>;
 const sequenceOf = (artifact: { transcriptSequence?: number }): number =>
   artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
 
+/**
+ * The transcript bound a turn scheduled now may read (P15-05).
+ *
+ * `transcriptArtifacts` is already sorted by sequence, so the highest sequence
+ * is the last entry. Pinning the bound rather than every id keeps a turn record
+ * O(1) instead of O(n); see `CoordinationTurn.inputThroughSequence`.
+ */
+const transcriptBoundOf = (
+  transcriptArtifacts: ReadonlyArray<{ transcriptSequence?: number }>,
+): number =>
+  transcriptArtifacts.reduce(
+    (highest, artifact) => Math.max(highest, sequenceOf(artifact)),
+    Number.MIN_SAFE_INTEGER,
+  );
+
 const invalidState = (message: string): WorkflowDecision => ({
   kind: "fail",
   code: "INVALID_STATE",
@@ -254,7 +269,8 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
       turnKind: "session_turn" as const,
       phase: "sessioning" as const,
       revision: 0,
-      inputArtifactIds: transcriptArtifacts.map(({ id }) => id),
+      inputArtifactIds: [],
+      inputThroughSequence: transcriptBoundOf(transcriptArtifacts),
       expectedArtifactType: "session_message" as const,
     });
     if (!run.policy.sessionParallel || next.length === 1) {
@@ -303,7 +319,8 @@ const decidePlannedRound = (input: {
       turnKind: "session_plan",
       phase: "sessioning",
       revision: 0,
-      inputArtifactIds: transcriptArtifacts.map(({ id }) => id),
+      inputArtifactIds: [],
+      inputThroughSequence: transcriptBoundOf(transcriptArtifacts),
       expectedArtifactType: "session_plan",
     };
   }
@@ -333,7 +350,10 @@ const decidePlannedRound = (input: {
 
   // The plan is an input to every turn it assigns, so the context builder can
   // hand each participant its own instruction without re-deriving the round.
-  const inputArtifactIds = [...transcriptArtifacts.map(({ id }) => id), plan.id];
+  // It is named explicitly rather than covered by the transcript bound: a bound
+  // must never be able to widen a turn onto a plan the workflow did not choose.
+  const inputArtifactIds = [plan.id];
+  const inputThroughSequence = transcriptBoundOf(transcriptArtifacts);
   const turn = (agentId: string) => ({
     role: "participant" as const,
     agentId,
@@ -341,6 +361,7 @@ const decidePlannedRound = (input: {
     phase: "sessioning" as const,
     revision: 0,
     inputArtifactIds,
+    inputThroughSequence,
     expectedArtifactType: "session_message" as const,
   });
 

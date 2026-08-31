@@ -114,9 +114,9 @@ function validateForm(form: FormState, agents: Agent[]): Record<string, string> 
   if (
     !Number.isInteger(maxTurns) ||
     maxTurns < SESSION_LIMITS.minSessionTurns ||
-    maxTurns > SESSION_LIMITS.maxSessionTurns
+    maxTurns > SESSION_LIMITS.maxSaveableSessionTurns
   ) {
-    errors.policy = `Maximum turns must be an integer from ${SESSION_LIMITS.minSessionTurns}-${SESSION_LIMITS.maxSessionTurns.toLocaleString()}.`;
+    errors.policy = `Maximum turns must be an integer from ${SESSION_LIMITS.minSessionTurns}-${SESSION_LIMITS.maxSaveableSessionTurns.toLocaleString()}.`;
   }
   const timeout = Number(form.perAttemptTimeoutSeconds);
   if (!Number.isInteger(timeout) || timeout < 10 || timeout > 180) {
@@ -485,7 +485,13 @@ function CreationForm({
       <details className="policy-controls" open>
         <summary>Safety limits</summary>
         <div className="session-policy-grid">
-          <label>Maximum turns<input ref={policyRef} type="number" min={SESSION_LIMITS.minSessionTurns} max={SESSION_LIMITS.maxSessionTurns} value={form.maxTurns} onChange={(event) => setForm({ ...form, maxTurns: event.target.value })} /></label>
+          <label>Maximum turns<input ref={policyRef} type="number" min={SESSION_LIMITS.minSessionTurns} max={SESSION_LIMITS.maxSaveableSessionTurns} value={form.maxTurns} onChange={(event) => setForm({ ...form, maxTurns: event.target.value })} /></label>
+          {Number(form.maxTurns) > SESSION_LIMITS.recommendedMaxSessionTurns && (
+            <p className="field-hint field-hint-warning">
+              Measured guidance is {SESSION_LIMITS.recommendedMaxSessionTurns} turns or fewer; a
+              session cannot be saved at all beyond roughly 4,400.
+            </p>
+          )}
           <label>Attempt timeout (seconds)<input type="number" min="10" max="180" value={form.perAttemptTimeoutSeconds} onChange={(event) => setForm({ ...form, perAttemptTimeoutSeconds: event.target.value })} /></label>
           <label>
             Planning
@@ -743,6 +749,14 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                 <div><span>Turns</span><strong>{details.turns.length} / {selectedRun.policy.maxTurns.toLocaleString()}</strong></div>
                 <div><span>Attempt timeout</span><strong>{selectedRun.policy.perAttemptTimeoutMs / 1_000}s</strong></div>
               </div>
+
+              {details.turns.length >= SESSION_LIMITS.sessionTurnWarningThreshold && (
+                <div className="session-notice session-notice-warning" role="status">
+                  {details.turns.length >= SESSION_LIMITS.recommendedMaxSessionTurns
+                    ? `This session has ${details.turns.length.toLocaleString()} turns, past the measured comfortable length of ${SESSION_LIMITS.recommendedMaxSessionTurns}. Every prompt now rewrites the whole transcript, so replies keep getting slower. Start a new session to stay responsive.`
+                    : `This session is approaching ${SESSION_LIMITS.recommendedMaxSessionTurns} turns, the measured length beyond which prompts get noticeably slower.`}
+                </div>
+              )}
 
               {session && (
                 <section className="session-state" aria-label="Session state">

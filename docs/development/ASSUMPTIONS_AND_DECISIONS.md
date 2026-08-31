@@ -701,3 +701,73 @@ participant's own assignment is delivered through the task section instead.
 coordination — a sequential plan plus transcript visibility — rather than by an
 engine-side numeric validator. The countdown protocol is deleted from the
 engine in this phase; stored countdown runs keep their fields and stay readable.
+
+## Mini-RFC: Phase 15 storage decision (approved, P15-04)
+
+**Recorded:** 2026-08-31. Evidence is `P15-01` and `P15-02` in
+[`STATUS.md`](./STATUS.md); every number below was measured, not modelled.
+
+**The question the sheet asks.** Keep `JsonStore` with the measured ceiling, or
+move the five coordination collections behind a different implementation of
+`CoordinationRepository`.
+
+**What the measurements actually showed.** The problem was not the storage
+engine. Every scheduled turn stored `inputArtifactIds` for the entire
+transcript, so turn *n* stored *n* ids and the ledger grew O(n^2). At 400
+committed turns `coordinationTurns` was 70.9% of the database file and 93% of
+that was those ids. Cost per turn rose from 7.2 KB at 100 turns to 57.3 KB at
+2,000. Because `persist()` serialises the whole database into a single string,
+that curve hit Node's 512 MiB `MAX_STRING_LENGTH` - a hard
+`RangeError: Invalid string length`, verified directly - near **4,426 committed
+turns**, which is 4.4% of the advertised 100,000 ceiling. Swapping to SQLite or
+JSONL would have moved those bytes to a different medium without removing them.
+
+**Decision.** Fix the data model; defer the engine swap.
+
+1. A session turn pins its readable transcript as a single
+   `inputThroughSequence` bound instead of listing every id. The trust boundary
+   is unchanged: the workflow still decides what is readable, the durable record
+   still pins that decision, and the context builder still applies the role
+   whitelist on top. Artifacts outside the transcript - the round's committed
+   plan - stay named explicitly, so a bound can never widen a turn onto a plan
+   the workflow did not choose. That property has its own tests.
+2. `JsonStore` stays. `P15-05` is therefore closed as `deferred` with the
+   measured ceiling recorded, per the sheet's own provision.
+
+**Measured result of the fix.** Growth became linear at ~4.28 KB per turn, and
+the ledger stopped dominating:
+
+| Committed turns | DB before | DB after | Prompt before | Prompt after |
+|---|---|---|---|---|
+| 100 | 0.68 MiB | 0.43 MiB | 0.14 s | 0.09 s |
+| 500 | 8.43 MiB | 2.14 MiB | 1.65 s | 0.45 s |
+| 1000 | 29.43 MiB | 4.28 MiB | 6.01 s | 0.94 s |
+| 2000 | 109.22 MiB | 8.56 MiB | 23.84 s | 2.06 s |
+
+At 2,000 turns the database is **92% smaller** and a prompt is **11.6x faster**.
+The whole 2,000-turn harness run fell from 1,895s to 196s. The serialisation
+wall moved from ~4,426 turns to roughly **120,000**, past the advertised
+ceiling, so the store now fails on time rather than on correctness.
+
+**What this does not fix.** `JsonStore` still rewrites the entire document on
+every mutation, so a mutation stays O(file size) and building a session stays
+O(n^2) in time even though storage is linear. Reaching 100,000 turns would still
+take days. That is the remaining reason to swap engines, and it is now a
+performance argument rather than a data-loss one - which is why deferring is
+safe where it previously was not.
+
+**Consequences recorded in code.**
+
+- `recommendedMaxSessionTurns` is **2,000**, the point where one prompt first
+  crosses two seconds, re-measured after the fix. The UI warns from 1,600.
+- `maxSaveableSessionTurns` is **50,000**, roughly half the measured
+  serialisation limit, and the create route refuses more. The headroom covers
+  longer messages, more participants, and retries, none of which the
+  measurement maximised.
+- `maxSessionTurns` stays 100,000 as the type-level ceiling. Stored runs above
+  the cap keep loading; only new requests are bounded.
+
+**Deviation from the sheet.** `P15-03` says the 100,000 ceiling "stays available
+for callers who ask for it". A request that large was measured to be unsaveable,
+so it is now refused at 50,000 rather than accepted and lost. Refusing a request
+is recoverable; losing a session is not.

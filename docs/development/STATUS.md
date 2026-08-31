@@ -1,15 +1,18 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (`P15-01` measured: the JSON store has a hard ceiling
-around 4,400 committed turns, not 100,000)
+**Last audit:** 2026-08-31 (`P15-01`-`P15-05`: the O(n^2) transcript encoding was
+found, measured, and removed; storage is now linear and the hard ceiling moved
+from ~4,400 to ~120,000 committed turns)
 **Audited checkpoint:** Checkpoint 14 on `phase-14`, merged to `main`
 **Implementation branch:** Phase 15 work is on `main` (no task branch; see the
 Phase 15 recorded deviation)
 **Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Phase 15 - Scale, Storage, and Release
-**Current gate:** `P15-01` complete for every reachable size; `P15-02` is the next
-action. The 10,000-turn row is measured-impossible, not skipped.
+**Current gate:** `P15-01`-`P15-04` complete and `P15-05` closed (engine swap
+`deferred`, data-model fix implemented and re-measured). `P15-06` is the next
+action, but see the deviation note: documentation freezes whichever coordination
+model `main` carries.
 **Overall state:** Phases 0-8 and 10-14 `complete`; Phase 9 `superseded` by Phase 15;
 Phase 15 `in_progress`
 
@@ -37,7 +40,7 @@ they name a past checkpoint.
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `complete` (Checkpoint 13 verified; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `complete` (Checkpoint 14 verified; sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
-| 15 | Scale, storage, and release | `in_progress` (`P15-01` done; sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
+| 15 | Scale, storage, and release | `in_progress` (`P15-01`-`P15-05` closed; sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
 [`plans/session-v2-plan.md`](plans/session-v2-plan.md), approved through the
@@ -50,11 +53,16 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** `P15-01` is complete and its numbers are in the Phase 15 ledger
-below. They are decisive: the JSON store cannot reach the documented 100,000-turn
-ceiling, and fails hard at roughly 4,400 committed turns. `P15-02` (delta read
-path) is the next action, but `P15-04` (the storage decision) is now the
-load-bearing one and its evidence is already gathered.
+**Resume here.** `P15-01`-`P15-05` are closed. The measurements found an O(n^2)
+transcript encoding, and removing it made storage linear, shrank a 2,000-turn
+database by 92%, and moved the hard serialisation ceiling from ~4,400 to
+~120,000 committed turns. `JsonStore` is kept by recorded decision.
+
+`P15-06` (README rewrite) is next, but documentation freezes whichever
+coordination model `main` carries, so the auction-track comparison should be
+settled first. One measured item is deliberately left open: an idle delta poll
+still costs 355ms of server time at 2,000 turns pre-fix, because the route
+clones the whole database before filtering. See `P15-02` finding 2.
 
 ### Checkpoint 11 final verification
 
@@ -74,10 +82,11 @@ load repository-local secrets or runtime state.
 | Task | Status | Current implementation/evidence |
 |---|---|---|
 | P15-01 | `complete` (10,000 row measured-impossible) | Reproducible harness at `apps/server/src/scale/p15-01-store-scale.ts`, run with `npm run scale:p15-01`. It drives one growing session through the **real** service, repository, workflow, artifact protocol, and `JsonStore` in a fresh `mkdtemp` directory, and refuses to run outside the system temp directory so it can never touch runtime data. Only the Agent runtime is a double, and it always commits one valid `session_message` with `done: true`, so a round-robin wave is exactly one message per participant. Measured 100, 500, 1,000 and 2,000 committed turns; 10,000 is unreachable and the reason is measured, not extrapolated. See the table and findings below. |
-| P15-02 | `not_started` | Next action. |
-| P15-03 | `not_started` | `P15-01` already fixes the honest number far below the current default; see findings. |
-| P15-04 | `not_started` | The decision is now load-bearing rather than optional. Its evidence is gathered. |
-| P15-05 - P15-20 | `not_started` | |
+| P15-02 | `complete` | Harness at `apps/server/src/scale/p15-02-read-path.ts` (`npm run scale:p15-02`), sharing `scale/session-harness.ts` with `P15-01` so both measure the same session the same way. Requests go through the real Fastify route via `app.inject`, so recorded bytes are wire bytes. The client was already delta-only after first load (`SessionWorkspace.tsx` passes `accumulated?.cursor`), so the sheet's "tighten the client to delta-only" condition was already satisfied and no client change was needed. Table and findings below. |
+| P15-03 | `complete` | `SESSION_LIMITS.recommendedMaxSessionTurns: 500` and `sessionTurnWarningThreshold: 400` added to the server `types.ts` and mirrored in the web `coordination-types.ts`, each carrying the measured reasoning. `maxSessionTurns` stays 100,000 for callers that ask explicitly, per the sheet; `defaultSessionTurns` stays 200, already below the measured recommendation. The session panel warns at 400 turns and warns harder past 500, and the create form flags a requested ceiling above the recommendation. Three new web tests (47 -> 50). |
+| P15-04 | `complete` | Decision recorded as a mini-RFC in [`ASSUMPTIONS_AND_DECISIONS.md`](ASSUMPTIONS_AND_DECISIONS.md) with the `P15-01`/`P15-02` measurements as evidence: **fix the data model, defer the engine swap**. The quadratic was `inputArtifactIds`, not `JsonStore`; a repository swap would have moved those bytes without removing them. |
+| P15-05 | `deferred` (data-model half implemented) | The engine swap is closed as `deferred` per the sheet's own provision, with the measured ceiling recorded. The data-model half is implemented: a session turn now pins its transcript as `inputThroughSequence` instead of listing every id, the create route refuses a session larger than the store can persist, and the trust boundary is unchanged and separately tested. Re-measured results below. |
+| P15-06 - P15-20 | `not_started` | Documentation (`P15-06`-`P15-08`) should not start before the auction-track comparison is settled. |
 
 ### P15-01 measured store cost
 
@@ -132,6 +141,111 @@ the growth leading to it. Total harness wall clock 1,895s.
    row alone took 32 minutes. The row is therefore recorded as measured-impossible
    with the mechanism identified, rather than filled in by extrapolation, which
    the phase sheet forbids.
+
+### P15-02 measured read path
+
+Same session shape as `P15-01`. Requests go through the real route with
+`app.inject`, so these are wire bytes. "Wave delta" is a poll issued from the
+pre-wave cursor while one ten-participant wave is in flight - 32 events in every
+row, so the rows are directly comparable. Polling cost per minute assumes the
+client's 1.5s cadence (40 polls). Total harness wall clock 1,660s.
+
+| Committed turns | Full read | Full read time | Idle delta | Wave delta | Delta read time | Full-poll cost/min | Delta-poll cost/min | Saving |
+|---|---|---|---|---|---|---|---|---|
+| 100 | 0.53 MiB | 7.68 ms | 1,617 B | 80,798 B | 3.15 ms | 21.25 MiB | 3.08 MiB | 6.9x |
+| 500 | 6.74 MiB | 62.17 ms | 1,619 B | 252,422 B | 30.37 ms | 269.74 MiB | 9.63 MiB | 28.01x |
+| 1000 | 23.71 MiB | 154.91 ms | 1,620 B | 466,996 B | 101.98 ms | 948.59 MiB | 17.81 MiB | 53.25x |
+| 2000 | 88.35 MiB | 622.77 ms | 1,620 B | 895,996 B | 369.53 ms | 3,533.95 MiB | 34.18 MiB | 103.39x |
+
+### P15-02 findings
+
+1. **The delta model is load-bearing and already correct on the client.** It
+   saves **103x** of bandwidth at 2,000 turns. Full-fetch polling would cost
+   **3.53 GiB per minute per viewer** there, which is not a product. The client
+   has passed a cursor since `P12-13`, so the sheet's conditional client change
+   was already in place and nothing was tightened.
+2. **The delta saves bytes but not server time.** `GET /:id?sinceSequence=`
+   calls the full `getRun` and filters afterwards (`routes.ts` line 134), so an
+   idle poll returning **1,620 bytes still costs 355.5 ms** at 2,000 turns. At
+   the 1.5s cadence that is **23.7% of a core per idle viewer**, for a payload
+   that says nothing changed. Ten idle viewers would saturate more than two
+   cores displaying no new information. This is the single cheapest thing to
+   fix in `P15-05`: filter before cloning, or index events by sequence.
+3. **The quadratic leaks into the delta payload.** The same 32 events cost
+   **80 KB at 100 turns and 896 KB at 2,000** - 11x more bytes for identical
+   information - because each delta turn carries its whole-transcript
+   `inputArtifactIds`. Trimming that field from the read model would shrink both
+   the delta and the full read without touching storage.
+4. **First open is the worst moment.** A session at 2,000 turns makes a browser
+   download **88.35 MiB** before it can render anything, and the server spends
+   622.77 ms building it. Even at the recommended 500-turn length it is 6.74 MiB.
+   A paginated or artifact-only first read belongs in the `P15-05` scope.
+
+### P15-03 recorded practical ceiling
+
+**Measured recommendation: 2,000 committed turns**, re-measured after the
+`P15-05` fix. One prompt takes 0.45s at 500, 0.94s at 1,000 and 2.06s at 2,000,
+so 2,000 is where a prompt first crosses two seconds.
+`recommendedMaxSessionTurns` is 2,000 and the UI warns from 1,600. The
+pre-fix figures that first set this at 500 (1.65s / 6.01s / 23.84s) are kept in
+the `P15-01` table above as the before-and-after evidence.
+
+`defaultSessionTurns` stays **200**: it was already below the measured
+recommendation, so no default needed widening or narrowing, and changing a
+shipped default without cause would be churn.
+
+`maxSessionTurns` stays **100,000** as the type-level ceiling, but the create
+route now refuses more than `maxSaveableSessionTurns` (**50,000**, about half
+the measured post-fix serialisation limit). This deviates from the sheet's "the
+ceiling stays available for callers who ask for it": a request that large was
+measured to be unsaveable, and refusing a request is recoverable where losing a
+session is not. The deviation is recorded in the `P15-04` mini-RFC.
+
+### P15-05 measured result of the data-model fix
+
+Same harness, same session shape, re-run after replacing per-turn
+`inputArtifactIds` with a single `inputThroughSequence` bound.
+
+| Committed turns | DB before | DB after | Mutation p50 before | after | Prompt before | after |
+|---|---|---|---|---|---|---|
+| 100 | 0.68 MiB | **0.43 MiB** | 2.13 ms | **1.48 ms** | 0.14 s | **0.09 s** |
+| 500 | 8.43 MiB | **2.14 MiB** | 26.81 ms | **6.93 ms** | 1.65 s | **0.45 s** |
+| 1000 | 29.43 MiB | **4.28 MiB** | 95.87 ms | **14.50 ms** | 6.01 s | **0.94 s** |
+| 2000 | 109.22 MiB | **8.56 MiB** | 394.58 ms | **30.33 ms** | 23.84 s | **2.06 s** |
+
+- Growth is now **linear** at ~4.28 KB per committed turn. The four sizes give
+  0.43 / 2.14 / 4.28 / 8.56 MiB - exactly proportional - against the previous
+  0.68 / 8.43 / 29.43 / 109.22.
+- At 2,000 turns the database is **92% smaller**, a mutation is **13x faster**,
+  and one prompt is **11.6x faster**. Whole-harness wall clock fell from
+  **1,895s to 196s**.
+- The serialisation wall moved from **~4,426 turns to ~120,000**, past the
+  advertised ceiling. The store now fails on time, not on correctness.
+- What is unchanged: `JsonStore` still rewrites the whole document per mutation,
+  so a mutation is still O(file size) and building a long session is still
+  O(n^2) in time. That is the remaining case for an engine swap, and it is now a
+  performance argument rather than a data-loss one.
+
+### P15-05 recorded contract change
+
+`CoordinationTurn.inputThroughSequence` is additive and optional. Turns stored
+before this change carry the full id list and no bound; the context builder
+keeps the original path for them, so no migration is required and no stored
+history is rewritten.
+
+The trust boundary is explicitly preserved rather than assumed. The bound covers
+only `session_message` and `user_message` - exactly the set the id list held -
+and anything outside the transcript stays named explicitly, so a bound can never
+widen a turn onto a plan the workflow did not choose. Four new context-builder
+tests cover this, including one that plants an unnamed `session_plan` inside the
+bound and asserts its instruction never reaches the prompt.
+
+Two tests that asserted the old encoding were updated to assert the new one; the
+behaviour they pin - which transcript a turn may read - is unchanged, and the
+equivalence is now asserted directly by comparing a bounded turn's prompt and
+digest against the id-listed turn's.
+
+Server tests 571 -> 577, web 47 -> 50.
 
 ### Phase 15 recorded deviation
 
@@ -883,9 +997,18 @@ no task was promoted on a host-only or focused run.
   Quadratic growth from per-turn `inputArtifactIds` gives a hard
   `RangeError` ceiling near 4,400 committed turns and unusable prompt latency
   (23.8s) by 2,000. The 10,000-turn row is measured-impossible.
-- `P15-02` is the next action. `P15-03` and `P15-04` should be taken together:
-  the honest ceiling and the storage decision now follow from the same evidence,
-  and a repository swap alone does not remove the quadratic data model.
+- `P15-02` complete: the delta model saves 103x of bandwidth but no server time,
+  and the delta payload itself inherits the quadratic through `inputArtifactIds`.
+- `P15-03` complete: measured recommendation is 500 turns, enforced as guidance
+  and surfaced in the UI. The 100,000 ceiling is retained per the sheet but is
+  documented as unreachable.
+- `P15-04` complete: recorded mini-RFC — fix the data model, defer the engine
+  swap. `P15-05` closed, engine swap `deferred`, data-model half implemented.
+- Open and measured, not yet fixed: the delta route clones the whole database
+  before filtering, so an idle poll costs 355ms of server time at 2,000 turns
+  (`P15-02` finding 2). It needs a delta-aware repository read.
+- `P15-06`-`P15-20` remain. Documentation should follow the auction-track
+  decision; the demo and release tasks need live Agents and a human operator.
 - `P15-06`-`P15-08` (documentation) should not start until the auction-track
   comparison is settled, since they freeze whichever model `main` carries.
 
@@ -893,6 +1016,10 @@ no task was promoted on a host-only or focused run.
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 | `main` | **`P15-05` data-model fix re-measurement** — `npm run scale:p15-01`, sizes 100/500/1,000/2,000 | **Completed (196s, was 1,895s):** DB 0.43/2.14/4.28/8.56 MiB (was 0.68/8.43/29.43/109.22) — linear at ~4.28 KB/turn; mutation p50 30.33 ms at 2,000 (was 394.58); one prompt 2.06 s at 2,000 (was 23.84 s). Serialisation wall moved from ~4,426 to ~120,000 turns. |
+| 2026-08-31 | `main` | **Phase 15 gate after `P15-03`/`P15-05`** — `npm run check` | **Passed (exit 0):** 30 server files / 577 tests, 3 web files / 50 tests, both typechecks, both production builds. |
+| 2026-08-31 | `main` | **`P15-02` read-path measurement** — `npm run scale:p15-02`, sizes 100/500/1,000/2,000 | **Completed (1,660s):** full read 0.53 → 88.35 MiB (7.68 → 622.77 ms); idle delta flat at ~1.6 KB but 2.54 → 355.5 ms; wave delta 80.8 KB → 896.0 KB for an identical 32 events. Delta saves 103× of bandwidth at 2,000 turns but no server time — the route clones the whole database before filtering. Client was already delta-only; no client change needed. |
+| 2026-08-31 | `main` | **`P15-03` guidance + UI warning** — `npm run check` | **Passed (exit 0):** 30 server files / 571 tests, 3 web files / 50 tests (+3 for the new session-length warning), both typechecks, both production builds. |
 | 2026-08-31 | `main` | **`P15-01` store scale measurement** — `npm run scale:p15-01`, sizes 100/500/1,000/2,000 | **Completed (1,895s):** DB 0.68 → 109.22 MiB; mutation p50 2.13 → 394.58 ms; `getRunDetails` 1.97 → 361.59 ms; one prompt 0.14s → 23.84s. Growth is quadratic (`inputArtifactIds`). Fit over seven sizes reproduces every point to 0.3% and hits Node's 512 MiB string limit at ~4,426 turns — 4.4% of the documented 100,000 ceiling. 10,000 unreachable, recorded as measured-impossible. |
 | 2026-08-31 | `phase-14` | **Checkpoint 14 gate** — disposable Docker Compose `npm run check` | **Passed (exit 0):** 30 server files / 571 tests, 3 web files / 47 tests, both typechecks, and both production builds. The `__proto__` test passes under the locked `zod` 4.4.3. |
 | 2026-08-31 | `phase-14` | **Checkpoint 14 live rehearsal** — three ten-Agent coordinator-planned sessions | **Passed:** `b1f291a8` (countdown 22.72s / fan-out 8.27s / third 9.54s), `7d750f5c` (19.10 / 7.79 / 8.31s), `c4890719` (22.88 / 9.37 / 6.81s). Ordered 10→1 via sequential plan with no numeric validator; fan-out parallel; session live after the third prompt. Genuine rejection + recovery in `f8ae3635` (attempt 1 `invalid_output`, attempt 2 committed). |

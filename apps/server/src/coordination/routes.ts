@@ -64,7 +64,9 @@ const sessionPolicySchema = z
       .number()
       .int()
       .min(SESSION_LIMITS.minSessionTurns)
-      .max(SESSION_LIMITS.maxSessionTurns)
+      // P15-05: bounded by what the store can actually persist, not by the
+      // type-level ceiling. Above this the document cannot be serialised.
+      .max(SESSION_LIMITS.maxSaveableSessionTurns)
       .optional(),
     perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),
   })

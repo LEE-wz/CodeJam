@@ -63,6 +63,8 @@ export interface ScheduledTurnSpec {
   phase: CoordinationRun["phase"];
   revision: number;
   inputArtifactIds: CoordinationArtifactId[];
+  /** Transcript bound for session turns; see `CoordinationTurn` (P15-05). */
+  inputThroughSequence?: number;
   expectedArtifactType: ArtifactType;
 }
 

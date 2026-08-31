@@ -948,6 +948,9 @@ export class CoordinationService implements CoordinationServiceContract {
       status: "scheduled",
       attemptCount: 0,
       inputArtifactIds: [...decision.inputArtifactIds],
+      ...(decision.inputThroughSequence === undefined
+        ? {}
+        : { inputThroughSequence: decision.inputThroughSequence }),
       lastValidationErrors: [],
       createdAt: this.dependencies.clock.nowIso(),
     };

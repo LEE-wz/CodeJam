@@ -302,16 +302,31 @@ const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[
   );
 
   if (input.turn.kind === "session_turn" || input.turn.kind === "session_plan") {
-    return input.turn.inputArtifactIds.flatMap((id) => {
-      const artifact = byId.get(id);
-      return artifact && (allowed as readonly ArtifactType[]).includes(artifact.type)
-        ? [artifact]
-        : [];
-    }).sort((left, right) => {
-      const leftSequence = left.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
-      const rightSequence = right.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
-      return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);
-    });
+    const bound = input.turn.inputThroughSequence;
+    const named = new Set(input.turn.inputArtifactIds);
+    // A turn scheduled since P15-05 pins its transcript as a sequence bound and
+    // names anything outside the transcript - the round's plan - explicitly.
+    // Older turns list every id, so they keep the original path. Either way the
+    // role whitelist below is what actually decides visibility.
+    const selected =
+      bound === undefined
+        ? input.turn.inputArtifactIds.flatMap((id) => {
+            const artifact = byId.get(id);
+            return artifact ? [artifact] : [];
+          })
+        : [...byId.values()].filter(
+            (artifact) =>
+              named.has(artifact.id) ||
+              ((artifact.type === "session_message" || artifact.type === "user_message") &&
+                (artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER) <= bound),
+          );
+    return selected
+      .filter((artifact) => (allowed as readonly ArtifactType[]).includes(artifact.type))
+      .sort((left, right) => {
+        const leftSequence = left.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+        const rightSequence = right.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+        return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);
+      });
   }
 
   const chosen = new Map<ArtifactType, CoordinationArtifact>();
