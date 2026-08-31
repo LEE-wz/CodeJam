@@ -1,13 +1,14 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (Checkpoint 12 passed)
-**Audited checkpoint:** Phase 12 implementation on `phase-12`, based on `main` at `3b11bef`
-**Implementation branch:** `phase-12` (base `3b11bef`)
+**Last audit:** 2026-08-31 (Phase 13 automated gates passed; live-provider gate pending)
+**Audited checkpoint:** Phase 13 implementation on `phase-13-parallel-waves`, based on `aa17407`
+**Implementation branch:** `phase-13-parallel-waves` (base `aa17407`)
+**Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`; final test and status updates are in the working tree.
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 12 - Durable Multi-Prompt Sessions
-**Current gate:** Checkpoint 12 passed
+**Current phase:** Phase 13 - Parallel Waves
+**Current gate:** Automated checkpoint evidence passed; live six- and ten-participant Compose exercises remain.
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 11-12 `complete`; Phases 13-15 `not_started`
+Phases 11-12 `complete`; Phase 13 `implemented_unverified`; Phases 14-15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -31,7 +32,7 @@ they name a past checkpoint.
 | 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
-| 13 | Parallel waves | `not_started` (sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
+| 13 | Parallel waves | `implemented_unverified` (automated evidence complete; live gate pending; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
@@ -46,9 +47,10 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Start `P13-01`: record the Phase 13 mini-RFC for bounded
-parallel waves while preserving the Phase 12 lifecycle, transcript, and delta
-contracts unchanged.
+**Resume here.** With approval to use the configured real Agent provider, deploy
+the Compose service and run one six-participant and one ten-participant parallel
+wave. Record wall-clock latency against the Phase 10 sequential baseline, peak
+memory, and provider rate-limit responses before marking Checkpoint 13 complete.
 
 ### Checkpoint 11 final verification
 
@@ -114,6 +116,45 @@ load repository-local secrets or runtime state.
 - `npm ci` reports the unchanged dependency audit finding: **1 moderate and 5
   high vulnerabilities**. Phase 12 changed no dependency versions; remediation
   remains release-hardening work.
+
+## Phase 13 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P13-01 | `complete` | Replaced the live pointer with `activeTurnIds`; reads of legacy records still present `activeTurnId` as a one-element array without rewriting stored history. Verified handoff remains single-turn through the existing wrapper and regression matrix. |
+| P13-02 | `complete` | `scheduleTurns` atomically persists a whole wave under one version check, advances sequences by wave size, and emits one scheduling event per sibling. `scheduleTurn` delegates to it. |
+| P13-03 | `complete` | Independent sibling commit/retry/cancellation removes only that sibling from the live array. Stop, failure, reconciliation, and restart settle all remaining siblings in one durable mutation. |
+| P13-04 | `complete` | `schedule_wave` is a typed workflow decision. With `sessionParallel`, free-chat deterministically selects each distinct participant not yet represented after the active user message; the default remains sequential. |
+| P13-05 | `complete` | Session validation accepts concurrent committed histories while rejecting foreign records, duplicate identities, unknown participants, uncommitted artifacts, and non-session artifacts. |
+| P13-06 | `complete` | The service schedules waves atomically and supervises bounded workers through all settlement outcomes. A structured or unexpected worker failure is collected only after siblings settle. |
+| P13-07 | `complete` | Route and service validate `maxParallelTurns` in 1..10; the default is `min(participantCount, 4)`. The scripted-runtime test observes a six-member wave executing in batches of two. |
+| P13-08 | `complete` | An already-running Agent is retried with bounded backoff under the normal attempt cap, without aborting other siblings. |
+| P13-09 | `complete` | Durable tests prove atomic scheduling, concurrent commits, stale leases, concurrent retry/commit settlement, stop fencing, restart settlement, and gapless event sequencing. |
+| P13-10 | `complete` | Supervisor coverage proves batching, whole-wave stop, busy retry, a timeout/retry-exhaustion alongside a successful sibling, and durable mid-wave restart settlement. |
+| P13-11 | `complete` | Workflow tests cover deterministic wave membership, accepted non-round-robin parallel history, corrupt histories, and the unchanged verified workflow matrix. |
+| P13-12 | `complete` | The web transcript orders concurrent messages by durable transcript sequence, attributes each message, displays the active wave size, and retains the stop-wave pending/settled interaction. |
+
+### Phase 13 automated verification evidence
+
+- `docker compose build launchpad` completed successfully using the local Node
+  22 Compose image.
+- The disposable Compose `npm run check` passed after the final change: **28
+  server files / 536 tests**, **3 web files / 44 tests**, both workspace
+  typechecks, and both production builds.
+- The Phase 13 durable-wave and supervisor suites
+  (`repository.test.ts` + `session-walking-skeleton.test.ts`) passed **ten
+  consecutive Compose runs**, **101 tests per run**, with zero failures. The
+  final full gate includes the one additional sibling-failure regression test.
+- `npm ci` reports the existing dependency audit finding: **1 moderate and 5
+  high vulnerabilities**. Phase 13 did not change dependencies.
+
+### Phase 13 completion-gate gap
+
+No real-provider six- or ten-participant parallel wave was launched in this
+session. That action can incur provider use and changes the local deployment's
+runtime data, so it requires explicit authorization. Consequently no speed-up,
+peak-memory, or provider-rate-limit claim is made and Checkpoint 13 remains
+`implemented_unverified` despite the passing automated gates.
 
 ## Phase 11 stale-path classification (P11-01 deliverable)
 
