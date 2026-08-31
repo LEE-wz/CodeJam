@@ -280,18 +280,30 @@ export interface FinalPayload {
 /**
  * One participant's contribution to a shared session transcript.
  *
- * `done` is the free-chat completion signal. It is advisory: an Agent may
- * declare that it considers the shared objective met, but the Agent never ends
- * the run. `SharedSessionWorkflowV1` completes a free-chat run only when every
- * participant's most recent committed message carries `done: true` -- unanimous
- * consent across one full round -- or at `maxTurns`, or on user stop, whichever
- * comes first. A later message from the same participant without the flag
- * clears that participant's signal. The rule is computed from committed
- * artifacts by backend code, so the trust boundary in overview.md Section 5.1
- * is unchanged: Agents supply input, the state machine decides.
+ * `done` is the advisory wave signal. An Agent may declare that it considers
+ * the current user request addressed; an Agent never ends the session. What the
+ * signal does depends on how the round is being driven:
  *
- * `done` is rejected on countdown messages, where the numeric validator is the
- * sole authority on completion (P6-05 cross-field rule).
+ * - Under `sessionPlanning: "round_robin"`, a wave ends when every
+ *   participant's most recent message *in that wave* carries `done: true` --
+ *   unanimous consent across one full round. A later message from the same
+ *   participant that omits the flag clears that participant's signal.
+ * - Under `sessionPlanning: "coordinator"` (the default since P14-05), `done`
+ *   is not consulted: the round ends when every assignment in the committed
+ *   plan has committed.
+ *
+ * In both cases the round ends by returning the run to `awaiting_input`, where
+ * it accepts another prompt (P12-07). It does **not** complete the run. A
+ * session becomes terminal only on an explicit user End, on failure, or at the
+ * hard `maxTurns` ceiling -- which fails the run with `MAX_TURNS_EXCEEDED`
+ * rather than completing it.
+ *
+ * Every one of these rules is computed from committed artifacts by backend
+ * code, so the trust boundary in overview.md Section 5.1 is unchanged: Agents
+ * supply input, the state machine decides.
+ *
+ * `done` is valid on any session message. The rule that rejected it on a
+ * countdown message went with that protocol in P14-07.
  */
 export interface SessionMessagePayload {
   schemaVersion: 1;
