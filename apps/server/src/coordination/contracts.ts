@@ -13,6 +13,7 @@ import type {
   CoordinationRunId,
   CoordinationTurn,
   CoordinationTurnId,
+  AppendUserMessageRequest,
   CreateCoordinationRunRequest,
   CreateRunRequest,
 } from "./types.js";
@@ -37,6 +38,8 @@ export interface CoordinationServiceContract {
   createRun(input: CreateRunRequest): Promise<CoordinationRun>;
   startRun(id: CoordinationRunId): Promise<CoordinationRun>;
   stopRun(id: CoordinationRunId): Promise<CoordinationRun>;
+  resumeRun(id: CoordinationRunId, input: AppendUserMessageRequest): Promise<CoordinationRun>;
+  endRun(id: CoordinationRunId): Promise<CoordinationRun>;
 }
 
 export interface CoordinationAgentView {
@@ -65,6 +68,7 @@ export type WorkflowDecision =
       expectedArtifactType: ArtifactType;
     }
   | { kind: "complete"; finalArtifactId: CoordinationArtifactId }
+  | { kind: "await_input" }
   | { kind: "fail"; code: CoordinationErrorCode; message: string };
 
 export interface WorkflowView {
@@ -248,11 +252,34 @@ export type ReconcileRunResult =
   | { kind: "terminal"; run: CoordinationRun }
   | { kind: "not_found" };
 
+export interface AppendUserMessageInput extends AppendUserMessageRequest {
+  runId: CoordinationRunId;
+}
+
+export type AppendUserMessageResult =
+  | { kind: "appended"; run: CoordinationRun; artifact: CoordinationArtifact }
+  | { kind: "duplicate"; run: CoordinationRun }
+  | {
+      kind: "conflict";
+      run: CoordinationRun;
+      code?: "INVALID_STATE" | "AGENT_NOT_READY" | "AGENT_RESERVED";
+      message?: string;
+    }
+  | { kind: "terminal"; run: CoordinationRun }
+  | { kind: "not_found" };
+
 export interface CoordinationRepository {
   listRuns(limit?: number): Promise<CoordinationRun[]>;
   getRunDetails(id: CoordinationRunId): Promise<CoordinationRunDetails | undefined>;
   createRun(input: CreateRunRecordInput): Promise<CoordinationRun>;
   startRun(id: CoordinationRunId): Promise<StartRunCommitResult>;
+  appendUserMessage(input: AppendUserMessageInput): Promise<AppendUserMessageResult>;
+  awaitInput(id: CoordinationRunId): Promise<CoordinationRun | undefined>;
+  endSession(id: CoordinationRunId): Promise<
+    | { kind: "ended"; run: CoordinationRun }
+    | { kind: "conflict"; run: CoordinationRun }
+    | { kind: "not_found" }
+  >;
   scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult>;
   beginAttempt(input: BeginAttemptInput): Promise<BeginAttemptResult>;
   attachAgentRun(input: {

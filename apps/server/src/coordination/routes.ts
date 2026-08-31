@@ -6,6 +6,15 @@ import type { CreateRunRequest, GetCoordinationRunResponse } from "./types.js";
 import { SESSION_LIMITS } from "./types.js";
 
 const runIdParams = z.object({ id: z.string().uuid() });
+const detailQuery = z
+  .object({ sinceSequence: z.coerce.number().int().min(0).optional() })
+  .strict();
+const userMessageBody = z
+  .object({
+    content: z.string().trim().min(1).max(4_000),
+    clientMessageId: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
 const requiredSectionSchema = z
   .object({
     key: z
@@ -151,6 +160,7 @@ export async function registerCoordinationRoutes(
 
   app.get("/api/coordination-runs/:id", async (request) => {
     const { id } = parseInput(runIdParams, request.params);
+    const { sinceSequence } = parseInput(detailQuery, request.query);
     const details = await coordination.getRun(id);
     if (!details) {
       throw new CoordinationError(404, "NOT_FOUND", "Coordination run not found");
@@ -158,7 +168,36 @@ export async function registerCoordinationRoutes(
     const attempts: GetCoordinationRunResponse["attempts"] = details.attempts.map(
       ({ leaseToken: _leaseToken, ...attempt }) => attempt,
     );
-    return { ...details, attempts } satisfies GetCoordinationRunResponse;
+    if (sinceSequence === undefined) {
+      return { ...details, attempts } satisfies GetCoordinationRunResponse;
+    }
+    const events = details.events.filter((event) => event.sequence >= sinceSequence);
+    const turnIds = new Set(events.flatMap((event) => (event.turnId ? [event.turnId] : [])));
+    const attemptIds = new Set(events.flatMap((event) => (event.attemptId ? [event.attemptId] : [])));
+    const artifactIds = new Set(events.flatMap((event) => (event.artifactId ? [event.artifactId] : [])));
+    const deltaTurns = details.turns.filter((turn) => turnIds.has(turn.id));
+    const deltaAttempts = attempts.filter(
+      (attempt) => attemptIds.has(attempt.id) || turnIds.has(attempt.turnId),
+    );
+    const deltaArtifacts = details.artifacts.filter((artifact) => artifactIds.has(artifact.id));
+    return {
+      run: details.run,
+      turns: deltaTurns,
+      attempts: deltaAttempts,
+      artifacts: deltaArtifacts,
+      events,
+      cursor: Math.max(sinceSequence, (details.events.at(-1)?.sequence ?? -1) + 1),
+    } satisfies GetCoordinationRunResponse;
+  });
+
+  app.post("/api/coordination-runs/:id/messages", async (request, reply) => {
+    const { id } = parseInput(runIdParams, request.params);
+    const body = parseInput(userMessageBody, request.body);
+    const run = await coordination.resumeRun(id, {
+      content: body.content,
+      ...(body.clientMessageId === undefined ? {} : { clientMessageId: body.clientMessageId }),
+    });
+    return reply.code(202).send({ run, accepted: true });
   });
 
   app.post("/api/coordination-runs/:id/start", async (request, reply) => {
@@ -170,6 +209,12 @@ export async function registerCoordinationRoutes(
   app.post("/api/coordination-runs/:id/stop", async (request, reply) => {
     const { id } = parseInput(runIdParams, request.params);
     const run = await coordination.stopRun(id);
+    return reply.code(202).send({ run, accepted: true });
+  });
+
+  app.post("/api/coordination-runs/:id/end", async (request, reply) => {
+    const { id } = parseInput(runIdParams, request.params);
+    const run = await coordination.endRun(id);
     return reply.code(202).send({ run, accepted: true });
   });
 }

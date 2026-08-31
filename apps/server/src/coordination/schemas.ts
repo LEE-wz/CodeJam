@@ -5,6 +5,7 @@ import type {
   ReviewIssue,
   ReviewPayload,
   SessionMessagePayload,
+  UserMessagePayload,
 } from "./types.js";
 import { SESSION_LIMITS } from "./types.js";
 
@@ -96,3 +97,11 @@ export const sessionMessagePayloadSchema: z.ZodType<SessionMessagePayload> = z
   .transform(({ done, ...message }): SessionMessagePayload =>
     done === undefined ? message : { ...message, done },
   );
+
+export const userMessagePayloadSchema: z.ZodType<UserMessagePayload> = z
+  .object({
+    schemaVersion: z.literal(COORDINATION_ARTIFACT_SCHEMA_VERSION),
+    type: z.literal("user_message"),
+    content: z.string().trim().min(1).max(4_000),
+  })
+  .strict();

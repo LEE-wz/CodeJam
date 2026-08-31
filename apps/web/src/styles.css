@@ -1309,6 +1309,48 @@ textarea:focus {
   background: #e8e3fc;
 }
 
+.session-status-awaiting_input {
+  color: #285b46;
+  background: #e7f4ed;
+}
+
+.session-transcript {
+  max-height: 34rem;
+  overflow-y: auto;
+}
+
+.transcript-message-user {
+  margin-left: clamp(1rem, 8vw, 6rem);
+  border-color: #b9c9e8;
+  background: #f1f5fc;
+}
+
+.session-composer {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.session-composer textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.session-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.session-composer-actions p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .session-status-completed {
   color: #277756;
   background: #dcf2e9;

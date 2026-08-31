@@ -12,6 +12,8 @@ vi.mock("./coordination-api", () => ({
     detail: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
+    sendMessage: vi.fn(),
+    end: vi.fn(),
   },
 }));
 
@@ -88,7 +90,7 @@ describe("SessionWorkspace", () => {
     await screen.findByRole("heading", { name: created.run.name });
     expect(screen.getByText("Legacy workflow")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Stop session/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop wave/ })).toBeNull();
   });
 
   // P10-07: countdown is no longer creatable, but a stored countdown session
@@ -136,7 +138,8 @@ describe("SessionWorkspace", () => {
       },
     });
     expect(mockedApi.start).not.toHaveBeenCalled();
-    expect(await screen.findByRole("button", { name: "Start session" })).toBeTruthy();
+    expect(await screen.findByLabelText("Message the session")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
   });
 
   // P10-03: ten participants can be selected and are sent in picker order.
@@ -300,10 +303,171 @@ describe("SessionWorkspace", () => {
     let settle!: (value: unknown) => void;
     mockedApi.stop.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
     render(<SessionWorkspace agents={agents} />);
-    const button = await screen.findByRole("button", { name: "Stop session" });
+    const button = await screen.findByRole("button", { name: "Stop wave" });
     fireEvent.click(button);
     expect((await screen.findByRole("button", { name: "Stopping…" }) as HTMLButtonElement).disabled).toBe(true);
     expect(mockedApi.stop).toHaveBeenCalledTimes(1);
     await act(async () => settle({ run: { ...running.run, status: "stopped" }, accepted: true }));
+  });
+
+  it("disables the labelled composer and announces that Agents are working", async () => {
+    const running = UI_SESSION_FIXTURES.freeChatPartial;
+    mockedApi.list.mockResolvedValue({ runs: [running.run] });
+    mockedApi.detail.mockResolvedValue(running);
+    render(<SessionWorkspace agents={agents} />);
+    const composer = await screen.findByLabelText("Message the session") as HTMLTextAreaElement;
+    expect(composer.disabled).toBe(true);
+    expect(composer.placeholder).toBe("Agents are working…");
+    expect(screen.getByText(/Agents are working\. Stop ends only this wave/i)).toBeTruthy();
+  });
+
+  it("renders user and Agent messages as distinct ordered transcript entries", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const sourceAgentArtifact = base.artifacts.find((artifact) => artifact.type === "session_message");
+    if (!sourceAgentArtifact) throw new Error("expected session fixture message");
+    const agentArtifact = {
+      ...sourceAgentArtifact,
+      transcriptSequence: 2,
+    };
+    const userArtifact = {
+      id: "artifact-user-visible",
+      runId: base.run.id,
+      type: "user_message" as const,
+      payload: { schemaVersion: 1 as const, type: "user_message" as const, content: "Please prioritize safety" },
+      createdBy: { kind: "user" as const },
+      transcriptSequence: 1,
+      sizeChars: 24,
+      createdAt: base.run.createdAt,
+    };
+    const idle = {
+      ...base,
+      run: { ...base.run, status: "awaiting_input" as const },
+      artifacts: [agentArtifact, userArtifact],
+    };
+    mockedApi.list.mockResolvedValue({ runs: [idle.run] });
+    mockedApi.detail.mockResolvedValue(idle);
+    const { container } = render(<SessionWorkspace agents={agents} />);
+    const transcript = await screen.findByRole("list", { name: "Session transcript" });
+    expect(transcript.textContent?.indexOf("Please prioritize safety"))
+      .toBeLessThan(transcript.textContent?.indexOf(agentArtifact.payload.content) ?? -1);
+    const userEntry = container.querySelector(".transcript-message-user");
+    expect(userEntry?.textContent).toContain("YouUser message");
+    expect(userEntry?.textContent).toContain("Please prioritize safety");
+    expect(container.querySelectorAll(".transcript-message:not(.transcript-message-user)")).toHaveLength(1);
+  });
+
+  it("appends delta polling results without replacing the existing transcript", async () => {
+    vi.useFakeTimers();
+    const initial = UI_SESSION_FIXTURES.freeChatPartial;
+    const initialMessage = initial.artifacts.find((artifact) => artifact.type === "session_message");
+    if (!initialMessage) throw new Error("expected session fixture message");
+    const cursor = initial.events.at(-1)!.sequence + 1;
+    const deltaArtifact = {
+      id: "artifact-user-delta",
+      runId: initial.run.id,
+      type: "user_message" as const,
+      payload: { schemaVersion: 1 as const, type: "user_message" as const, content: "A later user prompt" },
+      createdBy: { kind: "user" as const },
+      transcriptSequence: 99,
+      sizeChars: 19,
+      createdAt: initial.run.createdAt,
+    };
+    const delta = {
+      run: { ...initial.run, status: "awaiting_input" as const },
+      turns: [],
+      attempts: [],
+      artifacts: [deltaArtifact],
+      events: [{
+        id: "event-user-delta",
+        runId: initial.run.id,
+        sequence: cursor,
+        type: "user.message_appended" as const,
+        actor: { type: "user" as const },
+        artifactId: deltaArtifact.id,
+        message: "User message appended.",
+        details: { transcriptSequence: 99 },
+        createdAt: initial.run.createdAt,
+      }],
+      cursor: cursor + 1,
+    };
+    mockedApi.list.mockResolvedValue({ runs: [initial.run] });
+    mockedApi.detail.mockResolvedValueOnce(initial).mockResolvedValueOnce(delta);
+    render(<SessionWorkspace agents={agents} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByText(initialMessage.payload.content)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(screen.getByText(initialMessage.payload.content)).toBeTruthy();
+    expect(screen.getByText("A later user prompt")).toBeTruthy();
+    expect(mockedApi.detail.mock.calls[1]?.[2]).toBe(cursor);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(mockedApi.detail).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows Stop then Send as separate wave actions", async () => {
+    const running = UI_SESSION_FIXTURES.freeChatPartial;
+    const idle = { ...running, run: { ...running.run, status: "awaiting_input" as const } };
+    mockedApi.list.mockResolvedValue({ runs: [running.run] });
+    mockedApi.detail.mockResolvedValueOnce(running).mockResolvedValue(idle);
+    mockedApi.stop.mockResolvedValue({ run: idle.run, accepted: true });
+    mockedApi.sendMessage.mockResolvedValue({
+      run: { ...idle.run, status: "running" as const },
+      accepted: true,
+    });
+    const user = userEvent.setup();
+    render(<SessionWorkspace agents={agents} />);
+    await user.click(await screen.findByRole("button", { name: "Stop wave" }));
+    const composer = await screen.findByLabelText("Message the session");
+    await waitFor(() => expect((composer as HTMLTextAreaElement).disabled).toBe(false));
+    await user.type(composer, "Continue with a smaller scope");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(mockedApi.sendMessage).toHaveBeenCalledOnce());
+    expect(mockedApi.sendMessage.mock.calls[0]?.slice(0, 2)).toEqual([
+      running.run.id,
+      "Continue with a smaller scope",
+    ]);
+    expect(typeof mockedApi.sendMessage.mock.calls[0]?.[2]).toBe("string");
+    await waitFor(() => expect(mockedApi.detail.mock.calls.length).toBeGreaterThanOrEqual(3));
+    const expectedCursor = running.events.at(-1)!.sequence + 1;
+    expect(mockedApi.detail.mock.calls.slice(1).every((call) => call[2] === expectedCursor)).toBe(true);
+  });
+
+  it("ends an idle session permanently and disables its composer", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const idle = { ...base, run: { ...base.run, status: "awaiting_input" as const } };
+    const ended = { ...idle.run, status: "completed" as const, endedByUser: true };
+    mockedApi.list.mockResolvedValue({ runs: [idle.run] });
+    mockedApi.detail.mockResolvedValue(idle);
+    mockedApi.end.mockResolvedValue({ run: ended, accepted: true });
+    const user = userEvent.setup();
+    render(<SessionWorkspace agents={agents} />);
+    await user.click(await screen.findByRole("button", { name: "End session" }));
+    expect(await screen.findByText("This session has ended.")).toBeTruthy();
+    expect((screen.getByLabelText("Message the session") as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "End session" })).toBeNull();
+  });
+
+  it("keeps a long transcript in a bounded scrollable region", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const long = {
+      ...base,
+      run: { ...base.run, status: "awaiting_input" as const },
+      artifacts: Array.from({ length: 80 }, (_unused, index) => ({
+        ...base.artifacts[index % base.artifacts.length]!,
+        id: `artifact-long-${index}`,
+        transcriptSequence: index + 1,
+        payload: {
+          ...base.artifacts[index % base.artifacts.length]!.payload,
+          content: `Long transcript message ${index}`,
+        },
+      })),
+    };
+    mockedApi.list.mockResolvedValue({ runs: [long.run] });
+    mockedApi.detail.mockResolvedValue(long);
+    render(<SessionWorkspace agents={agents} />);
+    const transcript = await screen.findByRole("list", { name: "Session transcript" });
+    const style = window.getComputedStyle(transcript);
+    expect(style.maxHeight).toBe("34rem");
+    expect(style.overflowY).toBe("auto");
+    expect(transcript.children).toHaveLength(80);
   });
 });

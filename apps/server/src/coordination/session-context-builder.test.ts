@@ -60,6 +60,21 @@ const message = (
   createdAt: FIXED_NOW,
 });
 
+const userMessage = (
+  index: number,
+  content: string,
+  transcriptSequence = index + 1,
+): CoordinationArtifact => ({
+  id: `artifact-user-${index + 1}`,
+  runId: "run-session-context",
+  type: "user_message",
+  payload: { schemaVersion: 1, type: "user_message", content },
+  createdBy: { kind: "user" },
+  transcriptSequence,
+  sizeChars: content.length,
+  createdAt: FIXED_NOW,
+});
+
 const turn = (inputArtifactIds: string[]): CoordinationTurn => ({
   id: "turn-session-next",
   runId: "run-session-context",
@@ -106,13 +121,26 @@ describe("session context builder", () => {
     expect(second).toBeLessThan(third);
   });
 
+  it("interleaves user and Agent messages by transcript sequence", () => {
+    const user = userMessage(0, "Please compare the options", 2);
+    const first = { ...message(0, "Initial comparison", PARTICIPANT_ONE), transcriptSequence: 1 };
+    const second = { ...message(1, "Revised comparison", PARTICIPANT_TWO), transcriptSequence: 3 };
+    const envelope = build("free_chat", [second, user, first], [second.id, user.id, first.id]);
+    const firstIndex = envelope.prompt.indexOf("Relay One: Initial comparison");
+    const userIndex = envelope.prompt.indexOf("User: Please compare the options");
+    const secondIndex = envelope.prompt.indexOf("Relay Two: Revised comparison");
+    expect(firstIndex).toBeGreaterThan(0);
+    expect(firstIndex).toBeLessThan(userIndex);
+    expect(userIndex).toBeLessThan(secondIndex);
+  });
+
   it("uses protocol-specific instructions and exposes done only for free chat", () => {
     const countdown = build("countdown", [message(0, "10")]);
     expect(countdown.prompt).toContain("exactly one lower than the last number");
     expect(countdown.prompt).not.toContain('"done"');
 
     const freeChat = build("free_chat", []);
-    expect(freeChat.prompt).toContain("Contribute the next message toward the shared objective");
+    expect(freeChat.prompt).toContain("contribute the next message toward the shared objective");
     expect(freeChat.prompt).toContain('"done":<optional boolean>');
   });
 
@@ -204,6 +232,30 @@ describe("session context builder", () => {
     expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
     expect(envelope.prompt).toContain("MESSAGE-39");
     expect(envelope.prompt).not.toContain("MESSAGE-0\n");
+  });
+
+  it("always retains the newest user request in full when the transcript is windowed", () => {
+    const request = `LATEST-USER-${"u".repeat(3_500)}`;
+    const artifacts: CoordinationArtifact[] = [
+      ...Array.from({ length: 24 }, (_unused, index) => ({
+        ...message(index, `OLD-${index}-${"o".repeat(300)}`),
+        transcriptSequence: index + 1,
+      })),
+      userMessage(30, request, 25),
+      ...Array.from({ length: 3 }, (_unused, index) => ({
+        ...message(40 + index, `CURRENT-WAVE-${index}`),
+        transcriptSequence: 26 + index,
+      })),
+    ];
+    const envelope = build(
+      "free_chat",
+      [...artifacts].reverse(),
+      artifacts.map(({ id }) => id),
+      6_000,
+    );
+    expect(envelope.prompt).toContain(`User: ${request}`);
+    expect(envelope.prompt).toContain("CURRENT-WAVE-2");
+    expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
   });
 
   it("produces the same prompt and digest for identical input", () => {

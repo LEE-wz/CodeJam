@@ -10,6 +10,7 @@ export type CoordinationRunStatus =
   | "created"
   | "running"
   | "stop_requested"
+  | "awaiting_input"
   | "completed"
   | "failed"
   | "stopped";
@@ -40,7 +41,8 @@ export type CoordinationEventType =
   | "attempt.invalid_output" | "attempt.timed_out" | "attempt.failed"
   | "attempt.cancelled" | "attempt.stale_ignored" | "turn.committed"
   | "review.approved" | "review.rejected" | "run.stop_requested"
-  | "run.stopped" | "run.completed" | "run.failed" | "run.interrupted";
+  | "run.stopped" | "run.completed" | "run.failed" | "run.interrupted"
+  | "run.reconciled" | "user.message_appended" | "run.awaiting_input";
 
 export const SESSION_LIMITS = {
   minParticipants: 2,
@@ -88,6 +90,8 @@ export interface CoordinationRun {
   latestProposalArtifactId?: string;
   latestReviewArtifactId?: string;
   finalArtifactId?: string;
+  lastUserArtifactId?: string;
+  endedByUser?: boolean;
   sharedState?: { nextExpectedNumber: number };
   version: number;
   errorCode?: string;
@@ -171,13 +175,33 @@ interface CoordinationArtifactBase {
   createdByAgentId: string;
   sizeChars: number;
   createdAt: string;
+  transcriptSequence?: number;
+}
+
+export interface UserMessagePayload {
+  schemaVersion: 1;
+  type: "user_message";
+  content: string;
+}
+
+interface UserMessageArtifact {
+  id: string;
+  runId: string;
+  type: "user_message";
+  payload: UserMessagePayload;
+  createdBy: { kind: "user" };
+  clientMessageId?: string;
+  transcriptSequence: number;
+  sizeChars: number;
+  createdAt: string;
 }
 
 export type CoordinationArtifact =
   | (CoordinationArtifactBase & { type: "proposal"; payload: ProposalPayload })
   | (CoordinationArtifactBase & { type: "review"; payload: ReviewPayload })
   | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload })
-  | (CoordinationArtifactBase & { type: "session_message"; payload: SessionMessagePayload });
+  | (CoordinationArtifactBase & { type: "session_message"; payload: SessionMessagePayload })
+  | UserMessageArtifact;
 
 export interface CoordinationEvent {
   id: string;
@@ -199,6 +223,7 @@ export interface CoordinationRunDetails {
   attempts: CoordinationAttempt[];
   artifacts: CoordinationArtifact[];
   events: CoordinationEvent[];
+  cursor?: number;
 }
 
 /**

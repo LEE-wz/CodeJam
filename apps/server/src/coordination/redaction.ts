@@ -49,6 +49,7 @@ export const ALLOWED_EVENT_DETAIL_KEYS = [
   "sizeChars",
   "timeoutMs",
   "truncated",
+  "transcriptSequence",
   "validationErrors",
   "workflow",
 ] as const;

@@ -25,7 +25,10 @@ import type {
   ReviewPayload,
 } from "./types.js";
 
-type VerifiedArtifactPayload = Exclude<ArtifactPayload, { type: "session_message" }>;
+type VerifiedArtifactPayload = Exclude<
+  ArtifactPayload,
+  { type: "session_message" | "user_message" }
+>;
 
 export type {
   ArtifactProtocol,
@@ -89,7 +92,7 @@ const stripOuterFence = (trimmed: string): string => {
 };
 
 const parsePayload = (
-  type: Exclude<ArtifactType, "session_message">,
+  type: Exclude<ArtifactType, "session_message" | "user_message">,
   value: unknown,
 ): { ok: true; payload: VerifiedArtifactPayload } | { ok: false; error: z.ZodError } => {
   const result =
@@ -262,6 +265,9 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
         "unexpected_artifact_type",
         "Session turns must use the shared-session artifact protocol",
       );
+    }
+    if (expectedType === "user_message") {
+      return invalidAt("type", "unexpected_artifact_type", "User messages cannot be Agent output");
     }
     const candidate = parsed as Record<string, unknown>;
 

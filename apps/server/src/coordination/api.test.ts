@@ -49,6 +49,7 @@ import {
   PARTICIPANT_ONE,
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
+  SESSION_PARTICIPANTS,
   countdownPayload,
   freeChatPayload,
 } from "./testing/session-fixtures.js";
@@ -209,7 +210,7 @@ const CREATE_BODY = {
   },
 };
 
-const TERMINAL = new Set(["completed", "failed", "stopped"]);
+const SETTLED = new Set(["awaiting_input", "completed", "failed", "stopped"]);
 
 /**
  * Drives the background loop to a terminal state by yielding to the event loop.
@@ -228,12 +229,12 @@ const settleHttp = async (
       headers,
     });
     const body = response.json() as { run: { status: string } };
-    if (TERMINAL.has(body.run.status)) {
+    if (SETTLED.has(body.run.status)) {
       return body as unknown as Record<string, unknown>;
     }
     await new Promise((resolve) => setImmediate(resolve));
   }
-  throw new Error("coordination run did not reach a terminal state");
+  throw new Error("coordination run did not reach an idle or terminal state");
 };
 
 const createRun = async (app: FastifyInstance, overrides: Record<string, unknown> = {}) =>
@@ -278,6 +279,14 @@ describe("coordination API authentication", () => {
       {
         method: "POST" as const,
         url: "/api/coordination-runs/11111111-1111-4111-8111-000000000001/stop",
+      },
+      {
+        method: "POST" as const,
+        url: "/api/coordination-runs/11111111-1111-4111-8111-000000000001/messages",
+      },
+      {
+        method: "POST" as const,
+        url: "/api/coordination-runs/11111111-1111-4111-8111-000000000001/end",
       },
     ];
 
@@ -953,9 +962,13 @@ describe("durable shared-session API", () => {
     }
     await settleHttp(app, first.run.id);
 
-    // A terminal session releases its derived reservations, so the overlapping
-    // second run can now acquire the same participant set. Its unscripted
-    // runtime will fail safely, but the accepted start proves the release.
+    // Stop ends only the wave. End the now-idle session to release its durable
+    // enrolment before the overlapping session starts.
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${first.run.id}/end`,
+      headers,
+    })).statusCode).toBe(202);
     const released = await app.inject({
       method: "POST",
       url: `/api/coordination-runs/${second.run.id}/start`,
@@ -990,7 +1003,7 @@ describe("durable shared-session evidence timelines", () => {
     expect(details.events.map((event) => event.type)).toContain("attempt.invalid_output");
   });
 
-  it("completes free chat coherently at its turn cap and after a unanimous done round", async () => {
+  it("fails free chat at its hard cap and awaits input after a unanimous done wave", async () => {
     const cases = [
       {
         steps: [
@@ -1020,22 +1033,25 @@ describe("durable shared-session evidence timelines", () => {
       });
       expect(created.statusCode).toBe(201);
       const runId = (created.json() as { run: { id: string } }).run.id;
-      await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+      await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/messages`,
+        headers,
+        payload: { content: "Give me a concise answer", clientMessageId: `message-${runId}` },
+      });
       const details = (await settleHttp(app, runId)) as unknown as {
         run: { status: string; sharedState?: unknown; finalArtifactId?: string };
         artifacts: Array<{ id: string; type: string }>;
         events: Array<{ sequence: number; type: string; details: Record<string, unknown> }>;
       };
-      expect(details.run).toMatchObject({ status: "completed" });
+      const hardCap = scenario.body.policy.maxTurns === 3;
+      expect(details.run).toMatchObject({ status: hardCap ? "failed" : "awaiting_input" });
       expect(details.run.sharedState).toBeUndefined();
-      expect(details.run.finalArtifactId).toBe(details.artifacts.at(-1)?.id);
+      expect(details.run.finalArtifactId).toBeUndefined();
       expect(details.events.map((event) => event.sequence)).toEqual(
         details.events.map((_event, index) => index + 1),
       );
-      expect(details.events.at(-1)).toMatchObject({
-        type: "run.completed",
-        details: { artifactType: "session_message" },
-      });
+      expect(details.events.at(-1)?.type).toBe(hardCap ? "run.failed" : "run.awaiting_input");
     }
   });
 
@@ -1066,8 +1082,7 @@ describe("durable shared-session evidence timelines", () => {
       events: Array<{ sequence: number; type: string }>;
     };
     expect(details.run).toMatchObject({
-      status: "stopped",
-      errorCode: "STOPPED_BY_USER",
+      status: "awaiting_input",
       sharedState: { nextExpectedNumber: 2 },
     });
     expect(details.artifacts).toEqual([]);
@@ -1078,14 +1093,14 @@ describe("durable shared-session evidence timelines", () => {
       "attempt.started",
       "run.stop_requested",
       "attempt.cancelled",
-      "run.stopped",
+      "run.awaiting_input",
     ]);
     expect(details.events.map((event) => event.sequence)).toEqual(
       details.events.map((_event, index) => index + 1),
     );
   });
 
-  it("keeps stopped and restarted session evidence terminal and gapless", async () => {
+  it("keeps restarted session evidence idle, resumable, and gapless", async () => {
     const { app, runtime, store } = await createStack([deferred()]);
     const created = await createSessionRun(app);
     const runId = (created.json() as { run: { id: string } }).run.id;
@@ -1099,12 +1114,12 @@ describe("durable shared-session evidence timelines", () => {
     });
     expect(await restarted.interruptActiveRuns()).toEqual([runId]);
     const interrupted = await restarted.getRunDetails(runId);
-    expect(interrupted?.run).toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
+    expect(interrupted?.run).toMatchObject({ status: "awaiting_input" });
     expect(interrupted?.events.map((event) => event.sequence)).toEqual(
       interrupted?.events.map((_event, index) => index + 1),
     );
     expect(interrupted?.events.map((event) => event.type)).toEqual(
-      expect.arrayContaining(["run.interrupted", "attempt.cancelled", "run.failed"]),
+      expect.arrayContaining(["run.interrupted", "attempt.cancelled", "run.awaiting_input"]),
     );
 
     const lateAttempt = runtime.pendingAttemptIds()[0];
@@ -1115,6 +1130,299 @@ describe("durable shared-session evidence timelines", () => {
       });
     }
     await new Promise((resolve) => setImmediate(resolve));
-    expect((await restarted.getRunDetails(runId))?.run.status).toBe("failed");
+    expect((await restarted.getRunDetails(runId))?.run.status).toBe("awaiting_input");
+  });
+});
+
+describe("durable multi-prompt session API", () => {
+  it("holds three prompt waves in one totally ordered durable transcript", async () => {
+    const steps = Array.from({ length: 3 }, (_wave, wave) =>
+      SESSION_PARTICIPANTS.map((participant, participantIndex) =>
+        succeeds(JSON.stringify(freeChatPayload(
+          `Wave ${wave + 1} answer from ${participant.name}`,
+          true,
+        ))),
+      ),
+    ).flat();
+    const { app, store } = await createStack(steps);
+    const created = await createSessionRun(app, {
+      name: "Three prompt session",
+      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+    });
+    const runId = (created.json() as { run: { id: string; version: number } }).run.id;
+    const versions: number[] = [];
+
+    for (let wave = 1; wave <= 3; wave += 1) {
+      const sent = await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/messages`,
+        headers,
+        payload: { content: `User prompt ${wave}`, clientMessageId: `prompt-${wave}` },
+      });
+      expect(sent.statusCode).toBe(202);
+      versions.push((sent.json() as { run: { version: number } }).run.version);
+      const idle = (await settleHttp(app, runId)) as unknown as {
+        run: { status: string; version: number };
+      };
+      expect(idle.run.status).toBe("awaiting_input");
+      versions.push(idle.run.version);
+    }
+
+    const detail = (await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}`,
+      headers,
+    })).json() as {
+      run: { id: string; status: string; participants: unknown[] };
+      artifacts: Array<{ type: string; transcriptSequence?: number; payload: { content: string } }>;
+      events: Array<{ sequence: number }>;
+    };
+    expect(detail.run).toMatchObject({ id: runId, status: "awaiting_input" });
+    expect(detail.run.participants).toHaveLength(SESSION_PARTICIPANTS.length);
+    expect(detail.artifacts).toHaveLength(12);
+    expect(detail.artifacts.map(({ transcriptSequence }) => transcriptSequence)).toEqual(
+      Array.from({ length: 12 }, (_unused, index) => index + 1),
+    );
+    expect(detail.artifacts.filter(({ type }) => type === "user_message").map(({ payload }) => payload.content))
+      .toEqual(["User prompt 1", "User prompt 2", "User prompt 3"]);
+    expect(detail.events.map(({ sequence }) => sequence)).toEqual(
+      detail.events.map((_event, index) => index + 1),
+    );
+    expect(versions.every((version, index) => index === 0 || version > versions[index - 1]!)).toBe(true);
+
+    const beforeRestart = structuredClone(detail.run);
+    const restarted = new DurableCoordinationRepository({
+      store,
+      clock: new AdvancingClock(),
+      ids: new SequentialUuidGenerator(),
+    });
+    expect(await restarted.interruptActiveRuns()).toEqual([]);
+    expect((await restarted.getRunDetails(runId))?.run).toEqual(beforeRestart);
+    expect(await restarted.listReservedAgentIds()).toEqual([]);
+  });
+
+  it("defuses duplicate sends and conflicts while a wave is running", async () => {
+    const { app, runtime } = await createStack([deferred()]);
+    const created = await createSessionRun(app, {
+      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+    });
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "First prompt", clientMessageId: "same-client-id" },
+    });
+    expect(first.statusCode).toBe(202);
+    await runtime.waitForStarts(1);
+
+    const conflict = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "Racing prompt", clientMessageId: "racing-client-id" },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ error: { code: "INVALID_STATE" } });
+
+    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/stop`, headers });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "First prompt", clientMessageId: "same-client-id" },
+    });
+    expect(duplicate.statusCode).toBe(202);
+    const detail = (await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}`,
+      headers,
+    })).json() as { run: { status: string }; artifacts: Array<{ type: string }> };
+    expect(detail.run.status).toBe("awaiting_input");
+    expect(detail.artifacts.filter(({ type }) => type === "user_message")).toHaveLength(1);
+  });
+
+  it("separates stop from end and keeps an ended session immutable", async () => {
+    const { app, runtime } = await createStack([deferred()]);
+    const created = await createSessionRun(app, {
+      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+    });
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "Start work" },
+    });
+    await runtime.waitForStarts(1);
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/end`,
+      headers,
+    })).statusCode).toBe(409);
+
+    const stopped = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/stop`,
+      headers,
+    });
+    expect(stopped.json()).toMatchObject({ run: { status: "awaiting_input" } });
+    const ended = await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/end`,
+      headers,
+    });
+    expect(ended.json()).toMatchObject({ run: { status: "completed", endedByUser: true } });
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "Too late" },
+    })).statusCode).toBe(409);
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/end`,
+      headers,
+    })).statusCode).toBe(409);
+  });
+
+  it("stops a pending wave, starts a new prompt immediately, and fences the late result", async () => {
+    const { app, runtime } = await createStack([
+      deferred(),
+      ...SESSION_PARTICIPANTS.map((participant) =>
+        succeeds(JSON.stringify(freeChatPayload(`${participant.name} answered the new prompt`, true))),
+      ),
+    ]);
+    const created = await createSessionRun(app, {
+      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+    });
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "Prompt that will be stopped" },
+    });
+    await runtime.waitForStarts(1);
+    const lateAttemptId = runtime.pendingAttemptIds()[0];
+    expect(lateAttemptId).toBeDefined();
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/stop`,
+      headers,
+    })).json()).toMatchObject({ run: { status: "awaiting_input" } });
+
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "New prompt after stop" },
+    })).statusCode).toBe(202);
+    const idle = (await settleHttp(app, runId)) as unknown as {
+      run: { status: string };
+      artifacts: Array<{ type: string; payload: { content: string } }>;
+      attempts: Array<{ status: string }>;
+    };
+    expect(idle.run.status).toBe("awaiting_input");
+    expect(idle.artifacts.map(({ payload }) => payload.content)).toEqual([
+      "Prompt that will be stopped",
+      "New prompt after stop",
+      ...SESSION_PARTICIPANTS.map((participant) => `${participant.name} answered the new prompt`),
+    ]);
+    expect(idle.attempts.some(({ status }) => status === "cancelled")).toBe(true);
+
+    runtime.resolveAttempt(lateAttemptId!, {
+      kind: "succeeded",
+      rawOutput: JSON.stringify(freeChatPayload("LATE RESULT MUST BE FENCED", true)),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const afterLate = (await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}`,
+      headers,
+    })).json() as { run: { status: string }; artifacts: Array<{ payload: { content: string } }> };
+    expect(afterLate.run.status).toBe("awaiting_input");
+    expect(afterLate.artifacts.map(({ payload }) => payload.content)).not.toContain(
+      "LATE RESULT MUST BE FENCED",
+    );
+  });
+
+  it("returns inclusive detail deltas at zero, mid-ledger, and past the end", async () => {
+    const { app } = await createStack(
+      SESSION_PARTICIPANTS.map((participant) =>
+        succeeds(JSON.stringify(freeChatPayload(`${participant.name} done`, true))),
+      ),
+    );
+    const created = await createSessionRun(app, {
+      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+    });
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${runId}/messages`,
+      headers,
+      payload: { content: "Build the delta ledger" },
+    });
+    const full = (await settleHttp(app, runId)) as unknown as {
+      events: Array<{ sequence: number }>;
+    };
+    const last = full.events.at(-1)!.sequence;
+    const atZero = (await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}?sinceSequence=0`,
+      headers,
+    })).json() as { events: Array<{ sequence: number }>; cursor: number };
+    expect(atZero.events).toHaveLength(full.events.length);
+    expect(atZero.cursor).toBe(last + 1);
+
+    const middle = full.events[Math.floor(full.events.length / 2)]!.sequence;
+    const atMiddle = (await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}?sinceSequence=${middle}`,
+      headers,
+    })).json() as { events: Array<{ sequence: number }>; cursor: number };
+    expect(atMiddle.events[0]?.sequence).toBe(middle);
+    expect(atMiddle.cursor).toBe(last + 1);
+
+    const past = last + 20;
+    const afterEnd = (await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}?sinceSequence=${past}`,
+      headers,
+    })).json() as { events: unknown[]; turns: unknown[]; attempts: unknown[]; artifacts: unknown[]; cursor: number };
+    expect(afterEnd).toMatchObject({ events: [], turns: [], attempts: [], artifacts: [], cursor: past });
+    expect((await app.inject({
+      method: "GET",
+      url: `/api/coordination-runs/${runId}?sinceSequence=bad`,
+      headers,
+    })).statusCode).toBe(400);
+  });
+
+  it("validates message bodies and reports unknown sessions", async () => {
+    const { app } = await createStack([]);
+    const unknown = "22222222-2222-4222-8222-222222222222";
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/coordination-runs/${unknown}/messages`,
+      headers,
+      payload: { content: "Hello" },
+    })).statusCode).toBe(404);
+    const created = await createSessionRun(app, {
+      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+    });
+    const runId = (created.json() as { run: { id: string } }).run.id;
+    for (const payload of [
+      { content: "" },
+      { content: "x".repeat(4_001) },
+      { content: "valid", extra: true },
+      { content: "valid", clientMessageId: "" },
+    ]) {
+      expect((await app.inject({
+        method: "POST",
+        url: `/api/coordination-runs/${runId}/messages`,
+        headers,
+        payload,
+      })).statusCode).toBe(400);
+    }
   });
 });

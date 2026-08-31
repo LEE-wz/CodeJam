@@ -1,16 +1,13 @@
 # Session Development Status
 
-**Last audit:** 2026-08-30 (Phase 11 implemented; Checkpoint 11 gate blocked on the Compose run)
-**Audited checkpoint:** Phase 10 implementation `0cfe11b`, merged to `main`
-**Implementation branch:** `phase11-lifecycle-reconciliation` (base `0cfe11b`, uncommitted)
+**Last audit:** 2026-08-31 (Checkpoint 12 passed)
+**Audited checkpoint:** Phase 12 implementation on `phase-12`, based on `main` at `3b11bef`
+**Implementation branch:** `phase-12` (base `3b11bef`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 11 - Lifecycle Reconciliation and Agent Recovery
-**Current gate:** Checkpoint 11 `implemented_unverified` - every task done and every
-suite green on host Node, but the mandatory Docker Compose `npm run check` has
-**not** been run (see the blocker below). Checkpoint 11 cannot be declared passed
-until it has.
+**Current phase:** Phase 12 - Durable Multi-Prompt Sessions
+**Current gate:** Checkpoint 12 passed
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phase 11 `implemented_unverified`; Phases 12-15 `not_started`
+Phases 11-12 `complete`; Phases 13-15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -32,8 +29,8 @@ they name a past checkpoint.
 | 8 | Session UI and real rehearsal | `complete` (Checkpoint 8 verified; sheet: [`phases/08-session-ui.md`](phases/08-session-ui.md)) |
 | 9 | Documentation, demo, release candidate (both workflows) | `superseded` by Phase 15 (sheet: [`phases/09-release.md`](phases/09-release.md)) |
 | 10 | Session v2 surface, limits, and rename | `complete` (Checkpoint 10 verified; sheet: [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md)) |
-| 11 | Lifecycle reconciliation and Agent recovery | `implemented_unverified` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
-| 12 | Durable multi-prompt sessions | `not_started` (sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
+| 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
+| 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `not_started` (sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
 | 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
@@ -45,29 +42,78 @@ Session v2 mini-RFC in
 
 The session extension was adopted from the team's Relay Sessions plan. Its repository-local contract authority is [`overview-sessions.md`](overview-sessions.md). Phase 9 was formerly Phase 5; its task IDs moved from P5-xx to P9-xx.
 
-**Checkpoint 10 is complete.** **Phase 11 is implemented but not yet gated.**
-`P11-01` through `P11-11` are all done, with 528 tests green on host Node
-(503 server, 25 web app + session). The stale-path classification below is the
-`P11-01` deliverable and the contract the reconciler implements.
+**Checkpoints 10, 11, and 12 are complete.** `P12-01` through `P12-16` are all
+done. The stale-path classification below remains the `P11-01` deliverable and
+the contract the reconciler implements.
 
-**Resume here.** Run the disposable Docker Compose `npm run check` from
-[`README.md`](README.md) on this branch. If it passes, mark Checkpoint 11 passed
-and set `P12-01` as the next action; if it fails, record the failure here before
-changing any code.
+**Resume here.** Start `P13-01`: record the Phase 13 mini-RFC for bounded
+parallel waves while preserving the Phase 12 lifecycle, transcript, and delta
+contracts unchanged.
 
-### Blocker: the Compose gate has not been run
+### Checkpoint 11 final verification
 
-The environment that implemented Phase 11 had Node 22 but **no container
-engine** - no `docker` binary and no `/var/run/docker.sock`. Every verification
-below therefore ran through host npm, which
-[`README.md`](README.md) rule 5 explicitly forbids as evidence. Nothing here may
-be read as Checkpoint 11 evidence until the Compose command has been run on this
-branch. This is recorded, not worked around, per the runbook's instruction to
-record the exact blocker.
+The disposable Docker Compose gate passed on merged `main` commit `3b11bef`:
+**28 server files / 503 tests**, **3 web files / 37 tests**, both typechecks and
+both production builds (540 tests total). The user then completed the required
+manual Compose-deployment restart check: a session was interrupted mid-attempt,
+the server was restarted, the UI showed the run settled, and the participating
+Agents were usable afterwards. This closes Checkpoint 11.
 
 Docker Compose is available as `docker compose`. Baseline validation used
 `LAUNCHPAD_ENV_FILE=/dev/null` so the disposable verification service did not
 load repository-local secrets or runtime state.
+
+## Phase 12 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P12-01 | `complete` | Added durable `awaiting_input` and the pure `await_input` workflow decision across server, repository, workflow, web polling, and status rendering. Idle sessions have no active turn or loop. |
+| P12-02 | `complete` | Added the strict, trimmed, 1..4,000 character `user_message` artifact with user provenance. Exhaustive artifact maps were widened; Agent output that forges a user message is rejected. |
+| P12-03 | `complete` | User and Agent transcript artifacts receive one atomic, per-run `transcriptSequence`. Legacy artifacts without it sort first by timestamp, with direct regression coverage. |
+| P12-04 | `complete` | `lastUserArtifactId` and `endedByUser` are additive optional run fields, so old JSON stores load without migration. |
+| P12-05 | `complete` | `appendUserMessage` performs admission, idempotency, sequence allocation, artifact/event append, pointer/status/version changes, and first-wave start evidence in one store mutation. Event details never contain message content. |
+| P12-06 | `complete` | `resumeRun` drives the existing loop and handles `await_input`. Loop epochs fence late runtime completions and the narrow idle-loop cleanup race, so a resumed wave cannot be stranded or touched by an earlier owner. |
+| P12-07 | `complete` | Stop now cancels only the current session wave and returns to `awaiting_input`; End is a separate idle-only terminal action with `endedByUser: true`. The UI labels the control `Stop wave` and explains both consequences. |
+| P12-08 | `complete` | Restart leaves idle sessions byte-for-byte resumable; an interrupted active session wave is settled and returned to `awaiting_input`. Verified handoffs retain their Phase 11 terminal restart behavior. |
+| P12-09 | `complete` | Authenticated `POST /api/coordination-runs/:id/messages` validates the strict body and returns 202. `clientMessageId` makes a duplicate last send a no-op; conflicts, terminal runs, unknown ids, body limits, and auth are covered. |
+| P12-10 | `complete` | Optional inclusive `sinceSequence` detail reads return the full current run, linked deltas, and an explicit next cursor with leases stripped. Full reads retain their prior shape. Live cursor 25 returned events 25..35 and cursor 36. |
+| P12-11 | `complete` | Context interleaves `User:` and Agent lines in transcript order, treats the newest user message as the current request, preserves it in full through recency degradation, and retains all leakage and stable-digest guarantees. |
+| P12-12 | `complete` | The session workspace is now create-and-chat: distinct user/Agent transcript rows, an idle composer, working indicator, and separate Stop wave/End controls. This explicitly supersedes P8-05's two-step create/start interaction for sessions; verified handoffs remain read-only. |
+| P12-13 | `complete` | One 1.5-second cursor chain incrementally merges records, stops on idle/terminal state, restarts on send, and cleans up on switch/unmount without overlapping or accumulating requests. |
+| P12-14 | `complete` | Durable three-prompt, duplicate-send, running-conflict, prompt-versus-commit, total-order, gapless-event, and monotonic-version tests are green. |
+| P12-15 | `complete` | Lifecycle tests cover idle restart, mid-wave restart, stop then send, late-result fencing, idle End immutability, and running End rejection. |
+| P12-16 | `complete` | Web tests cover disabled-while-working, semantic user/Agent distinction, delta append, Stop then send, End disablement, bounded scrolling, labels, keyboard behavior, single-chain cleanup, switch, and unmount. |
+
+### Checkpoint 12 verification evidence
+
+- The exact disposable Docker Compose gate from the phase sheet passed: **28
+  server files / 517 tests**, **3 web files / 43 tests**, both workspace
+  typechecks, and both production builds (**560 tests total**).
+- The Phase 12 API/repository/context durability set ran three consecutive
+  times: **124 tests per pass, three passes, zero failures**.
+- Live Compose run `4de8b8fd-451a-4133-a0ff-9111928ff5a0`, "Phase 12 live
+  verification", used one participant set of three ready Agents for three real
+  prompts. All **9 turns / 9 attempts succeeded on attempt 1**. The resulting
+  transcript has **12 artifacts** (3 user + 9 Agent), sequences exactly 1..12,
+  **2,095 content characters**, and no fork.
+- Prompt sizes were **144**, **166**, and **156** characters. Wave latencies,
+  measured from `user.message_appended` to `run.awaiting_input`, were **7.183s**,
+  **6.231s**, and **5.589s**.
+- The server restarted while wave 1 was idle (`01:12:10Z` to `01:12:11Z`). The
+  same run reloaded as `awaiting_input`, version 12, with its four transcript
+  artifacts and sequences 1..4 unchanged; waves 2 and 3 then continued that run.
+- Before End, events were gapless 1..35. The live delta read at cursor 25
+  returned linked records for wave 3 and cursor 36. End appended event 36,
+  produced `completed`, `endedByUser: true`, version 35, and a later prompt was
+  rejected with `409 INVALID_STATE`.
+- The production-built web surface was served by the same Compose deployment,
+  and its full 43-test UI suite is green. A visual automation pass could not be
+  performed: the available in-app browser was isolated from localhost and no
+  Chrome/Safari/Firefox app was exposed to desktop control. This is a tooling
+  limitation, not missing lifecycle evidence; no visual result is claimed.
+- `npm ci` reports the unchanged dependency audit finding: **1 moderate and 5
+  high vulnerabilities**. Phase 12 changed no dependency versions; remediation
+  remains release-hardening work.
 
 ## Phase 11 stale-path classification (P11-01 deliverable)
 
@@ -114,16 +160,9 @@ rather than left to spin. A committed turn resets that budget.
 
 ### Phase 11 verification evidence
 
-**These ran on host Node 22, not through Docker Compose.** Per `README.md` rule 5
-they are a development signal only and are **not** Checkpoint 11 evidence. See
-the blocker above.
-
-- `npm run typecheck` (both workspaces): clean.
-- `npm run test -w @launchpad/server`: **28 files / 503 tests passed**, up from
-  485 at Checkpoint 10 (+18).
-- `npm run test -w @launchpad/web`: **3 files / 37 tests passed**, up from 31
-  (+6).
-- `npm run build`: both production builds succeeded.
+- The final disposable Docker Compose gate on merged `main` passed both
+  typechecks, **28 server files / 503 tests**, **3 web files / 37 tests**, and
+  both production builds (540 tests total).
 - Race and reconciliation suites (`lifecycle-reconciliation.test.ts` +
   `repository.test.ts`, 72 tests) run **ten consecutive times: ten passes, zero
   failures**, as the phase sheet requires before they may be called stable.
@@ -134,16 +173,6 @@ the blocker above.
 - No test was deleted to make a change pass. Three tests were **updated** because
   the P11-05 decision deliberately changed the contract they asserted; each is
   justified in `ASSUMPTIONS_AND_DECISIONS.md` and now proves the new rule.
-
-### Phase 11 checks still outstanding
-
-Both are required by the phase sheet and neither could run here:
-
-1. The disposable Docker Compose `npm run check` (no container engine available).
-2. The manual Compose-deployment check: start a session, kill the server
-   mid-attempt, restart it, and confirm **from the UI alone** that the run is
-   settled and its Agents are usable. `P11-10`'s restart test covers the same
-   transition at the service level, but not the UI evidence the sheet asks for.
 
 ## Phase 10 task ledger
 
@@ -581,12 +610,42 @@ no task was promoted on a host-only or focused run.
 
 ### Phase 9
 
-- Not started (renumbered from the original Phase 5; task IDs are now `P9-xx`). Instruction sheet is [`phases/09-release.md`](phases/09-release.md). `P9-01` is next: product documentation set for both workflows, README integration, Agent/demo templates, rehearsal/fallback, clean release verification, security inspection, and submission commit.
+- Superseded by Phase 15. The retained historical sheet is
+  [`phases/09-release.md`](phases/09-release.md); its release work is not the
+  current next action.
+
+### Phase 10
+
+- Complete and merged to `main`. The Session v2 surface, widened limits,
+  free-chat-only creation, product rename, and ten-participant rehearsal passed
+  Checkpoint 10. See [`phases/10-session-v2-surface.md`](phases/10-session-v2-surface.md).
+
+### Phase 11
+
+- Complete and merged to `main` at `3b11bef`. Reconciliation, attempt-scoped
+  reservations, Agent recovery, restart settlement, the 540-test Compose gate,
+  and the user's manual restart check passed. See
+  [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md).
+
+### Phase 12
+
+- Complete on `phase-12`. Durable user messages, resumable waves, Stop versus
+  End, restart-safe idle sessions, delta polling, the chat UI, 560-test Compose
+  gate, repeated race suites, and the three-prompt live checkpoint passed. See
+  [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md).
+
+### Phase 13
+
+- Not started. `P13-01` is next: freeze the bounded-parallel-wave mini-RFC
+  without changing the Phase 12 lifecycle or transcript contracts.
 
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 01:11-01:13 UTC | `phase-12` working tree | Checkpoint 12 live Compose rehearsal | **Passed:** one three-Agent run accepted three real prompts, survived an idle server restart, continued the same transcript, produced 12 ordered artifacts and 35 pre-End gapless events, then ended explicitly and rejected a later send. Prompt sizes 144/166/156 characters; wave latencies 7.183/6.231/5.589s. Visual automation was unavailable and is not claimed. |
+| 2026-08-31 01:08 UTC | `phase-12` working tree | **Checkpoint 12 gate** — final scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 517 tests, 3 web files / 43 tests, both typechecks, and both production builds (560 tests total). The focused 124-test durability set then passed three consecutive runs. |
+| 2026-08-31 | `3b11bef` | Checkpoint 11 final gate and manual restart check | **Passed:** 28 server files / 503 tests, 3 web files / 37 tests, both typechecks/builds (540 total), followed by the user's successful mid-attempt restart and Agent recovery check. |
 | 2026-08-30 13:16 UTC | `e93ffb5` | Pre-merge Checkpoint 8 Docker Compose rerun | **Passed (exit 0):** the exact pushed Phase 8 commit again passed 27 server files / 474 tests, 2 web files / 27 tests, both typechecks, and both builds (501 tests total). `main` and `origin/main` were identical before the non-fast-forward merge. |
 | 2026-08-30 12:13 UTC | `phase-8` working tree | **Checkpoint 8 gate** — final scoped Docker Compose build and `npm run check` | **Passed (exit 0):** 27 server test files / 474 tests, 2 web test files / 27 tests, both typechecks, and both production builds (501 tests total). The build used the repository Dockerfile and the check used the required clean, read-only source copy. `npm ci` still reports 1 moderate and 5 high audit findings deferred to the Phase 9 security task. **This is the completion gate for P8-01-P8-14.** |
 | 2026-08-30 12:05-12:10 UTC | `phase-8` working tree | Checkpoint 8 real Compose browser rehearsal | **Passed:** real 10-to-1 countdown (11.880s), unanimous three-turn free chat (5.321s), honest wrong-number rejection/retry/recovery (10.084s), verified handoff regression (11.335s), and a shared-session stop/cancellation flow. Desktop and mobile layout passed with no page overflow; console warnings/errors were empty. |
@@ -702,7 +761,9 @@ no task was promoted on a host-only or focused run.
 - `JsonStore` requires explicit additive migration; there is no existing hook.
 - Routes register through optional `createApp(..., coordination)`; `index.ts` composes the real repository and AgentService-backed runtime.
 - Three real rehearsals measured 12.919–59.585 seconds per turn; the 120-second default attempt timeout remains unchanged.
-- Terminal stop is frozen as idempotent `202` with explicit completed/failed/stopped route tests.
+- Verified-handoff Stop remains terminal and idempotent `202`; Phase 12 session
+  Stop cancels only the current wave and returns to `awaiting_input`, while End
+  is the explicit terminal action.
 - The detail route is the only event retrieval contract; the accidental `/events` endpoint was removed.
 - Frozen contract commit is the immutable reference `ea469b2`; the optional `relay/contracts-v1` convenience tag is absent.
 - Approved P1-01 mini-RFC adds committed turns to `WorkflowView`; selectors order by `turn.sequence`, never artifact array position or timestamps.

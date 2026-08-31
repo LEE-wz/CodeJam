@@ -30,7 +30,7 @@ const selectLatestCommittedArtifact = <T extends ArtifactType>(
   for (const artifact of view.artifacts) {
     if (artifact.runId !== view.run.id || artifact.type !== type) continue;
 
-    const turn = committedSequences.get(artifact.turnId);
+    const turn = artifact.turnId ? committedSequences.get(artifact.turnId) : undefined;
     if (!turn || turn.outputArtifactId !== artifact.id) continue;
 
     if (!latest || turn.sequence > latest.sequence) {

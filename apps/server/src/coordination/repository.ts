@@ -5,6 +5,8 @@ import type { CoordinationEventDraft, CoordinationEventFactory } from "./events.
 import type {
   BeginAttemptInput,
   BeginAttemptResult,
+  AppendUserMessageInput,
+  AppendUserMessageResult,
   Clock,
   CommitAcceptedArtifactInput,
   CommitAcceptedArtifactResult,
@@ -54,6 +56,11 @@ export const RUN_LIST_LIMIT = 50;
 
 /** Coordination run statuses that reserve their participant Agents (Section 10.4). */
 const ACTIVE_RUN_STATUSES = new Set<CoordinationRun["status"]>(["running", "stop_requested"]);
+const LIVE_ENROLMENT_STATUSES = new Set<CoordinationRun["status"]>([
+  "running",
+  "stop_requested",
+  "awaiting_input",
+]);
 
 /** Ordinary Agent Run statuses that mean the Agent is still busy. */
 const ACTIVE_AGENT_RUN_STATUSES = new Set(["queued", "running"]);
@@ -265,6 +272,168 @@ export class DurableCoordinationRepository implements CoordinationRepository {
     });
   }
 
+  async appendUserMessage(input: AppendUserMessageInput): Promise<AppendUserMessageResult> {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
+      if (!run) return { kind: "not_found" } as const;
+      if (TERMINAL_RUN_STATUSES.has(run.status)) {
+        return { kind: "terminal", run: structuredClone(run) } as const;
+      }
+      if (run.policy.workflow !== "shared_session_v1") {
+        return { kind: "conflict", run: structuredClone(run) } as const;
+      }
+      const lastUserArtifact = run.lastUserArtifactId
+        ? database.coordinationArtifacts.find(
+            (artifact) => artifact.id === run.lastUserArtifactId && artifact.type === "user_message",
+          )
+        : undefined;
+      if (
+        input.clientMessageId !== undefined &&
+        lastUserArtifact?.type === "user_message" &&
+        lastUserArtifact.clientMessageId === input.clientMessageId
+      ) {
+        return { kind: "duplicate", run: structuredClone(run) } as const;
+      }
+      if (run.status !== "created" && run.status !== "awaiting_input") {
+        return { kind: "conflict", run: structuredClone(run) } as const;
+      }
+
+      if (run.status === "created") {
+        const agentIds = run.participants.map((participant) => participant.agentId);
+        if (new Set(agentIds).size !== agentIds.length) {
+          return {
+            kind: "conflict",
+            run: structuredClone(run),
+            code: "INVALID_STATE",
+            message: "Session participants must be distinct Agents",
+          } as const;
+        }
+        for (const agentId of agentIds) {
+          const agent = database.agents.find((candidate) => candidate.id === agentId);
+          if (!agent || agent.status !== "ready") {
+            return {
+              kind: "conflict",
+              run: structuredClone(run),
+              code: "AGENT_NOT_READY",
+              message: agent
+                ? `Agent "${agent.name}" is not ready`
+                : "A participant Agent no longer exists",
+            } as const;
+          }
+        }
+        const enrolled = collectEnrolledAgentIds(database, run.id);
+        if (agentIds.some((agentId) => enrolled.has(agentId))) {
+          return {
+            kind: "conflict",
+            run: structuredClone(run),
+            code: "AGENT_RESERVED",
+            message: "A participant Agent is reserved by another coordination run",
+          } as const;
+        }
+        if (
+          database.runs.some(
+            (agentRun) =>
+              agentIds.includes(agentRun.agentId) && ACTIVE_AGENT_RUN_STATUSES.has(agentRun.status),
+          )
+        ) {
+          return {
+            kind: "conflict",
+            run: structuredClone(run),
+            code: "AGENT_RESERVED",
+            message: "A participant Agent has an ordinary run in progress",
+          } as const;
+        }
+      }
+
+      const now = this.clock.nowIso();
+      const transcriptSequence = nextTranscriptSequence(database, run.id);
+      const artifact: CoordinationArtifact = {
+        id: this.ids.artifactId(),
+        runId: run.id,
+        type: "user_message",
+        payload: { schemaVersion: 1, type: "user_message", content: input.content.trim() },
+        createdBy: { kind: "user" },
+        ...(input.clientMessageId === undefined ? {} : { clientMessageId: input.clientMessageId }),
+        transcriptSequence,
+        sizeChars: input.content.trim().length,
+        createdAt: now,
+      };
+      database.coordinationArtifacts.push(artifact);
+      const wasCreated = run.status === "created";
+      run.lastUserArtifactId = artifact.id;
+      run.status = "running";
+      run.startedAt ??= now;
+      run.updatedAt = now;
+      run.version += 1;
+      if (wasCreated) {
+        this.append(
+          database,
+          this.events.runStarted({
+            runId: run.id,
+            participantAgentIds: run.participants.map(({ agentId }) => agentId),
+          }),
+        );
+      }
+      this.append(
+        database,
+        this.events.userMessageAppended({ runId: run.id, artifactId: artifact.id, transcriptSequence }),
+      );
+      return {
+        kind: "appended",
+        run: structuredClone(run),
+        artifact: structuredClone(artifact),
+      } as const;
+    });
+  }
+
+  async awaitInput(id: CoordinationRunId): Promise<CoordinationRun | undefined> {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === id);
+      if (!run) return undefined;
+      if (run.status !== "running") return structuredClone(run);
+      delete run.activeTurnId;
+      run.status = "awaiting_input";
+      run.version += 1;
+      run.updatedAt = this.clock.nowIso();
+      this.append(database, this.events.runAwaitingInput({ runId: run.id }));
+      return structuredClone(run);
+    });
+  }
+
+  async endSession(id: CoordinationRunId): Promise<
+    | { kind: "ended"; run: CoordinationRun }
+    | { kind: "conflict"; run: CoordinationRun }
+    | { kind: "not_found" }
+  > {
+    return this.store.mutate((database) => {
+      const run = database.coordinationRuns.find((candidate) => candidate.id === id);
+      if (!run) return { kind: "not_found" } as const;
+      if (
+        run.policy.workflow !== "shared_session_v1" ||
+        (run.status !== "created" && run.status !== "awaiting_input")
+      ) {
+        return { kind: "conflict", run: structuredClone(run) } as const;
+      }
+      const now = this.clock.nowIso();
+      const latest = latestCommittedSessionArtifact(database, run.id);
+      run.status = "completed";
+      run.phase = "done";
+      run.endedByUser = true;
+      if (latest) run.finalArtifactId = latest.id;
+      run.completedAt = now;
+      run.updatedAt = now;
+      run.version += 1;
+      this.append(
+        database,
+        this.events.runCompleted({
+          runId: run.id,
+          ...(latest ? { artifactId: latest.id, artifactType: latest.type } : {}),
+        }),
+      );
+      return { kind: "ended", run: structuredClone(run) } as const;
+    });
+  }
+
   async scheduleTurn(input: ScheduleTurnInput): Promise<ScheduleTurnResult> {
     return this.store.mutate((database) => {
       const run = database.coordinationRuns.find((candidate) => candidate.id === input.runId);
@@ -423,6 +592,9 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
       const now = this.clock.nowIso();
       const artifact = structuredClone(input.artifact);
+      if (artifact.type === "session_message") {
+        artifact.transcriptSequence = nextTranscriptSequence(database, run.id);
+      }
 
       // A countdown commit carries the next durable value forward in this same
       // mutation as the artifact, attempt, turn, and event. The protocol has
@@ -573,12 +745,23 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
       const now = this.clock.nowIso();
       this.settleActiveWork(database, run, "cancelled", "STOPPED_BY_USER", "run stopped by user");
-      run.status = "stopped";
-      run.errorCode = "STOPPED_BY_USER";
-      run.stoppedAt = now;
+      if (run.policy.workflow === "shared_session_v1") {
+        run.status = "awaiting_input";
+        delete run.errorCode;
+        delete run.errorMessage;
+      } else {
+        run.status = "stopped";
+        run.errorCode = "STOPPED_BY_USER";
+        run.stoppedAt = now;
+      }
       run.version += 1;
       run.updatedAt = now;
-      this.append(database, this.events.runStopped({ runId: run.id, code: "STOPPED_BY_USER" }));
+      this.append(
+        database,
+        run.status === "awaiting_input"
+          ? this.events.runAwaitingInput({ runId: run.id })
+          : this.events.runStopped({ runId: run.id, code: "STOPPED_BY_USER" }),
+      );
       return structuredClone(run);
     });
   }
@@ -649,9 +832,10 @@ export class DurableCoordinationRepository implements CoordinationRepository {
   }
 
   /**
-   * Settle every coordination run left active by a crash or restart
-   * (Section 10.5). The run becomes terminal, which is what releases its
-   * derived Agent reservations; no background loop is resumed.
+   * Settle every coordination run left active by a crash or restart.
+   * Verified handoffs fail terminally; shared sessions return to durable idle
+   * so their committed transcript can be resumed. Either path releases every
+   * attempt-derived Agent reservation and no loop is resumed automatically.
    */
   async interruptActiveRuns(): Promise<CoordinationRunId[]> {
     return this.store.mutate((database) => {
@@ -673,20 +857,29 @@ export class DurableCoordinationRepository implements CoordinationRepository {
           "SERVER_RESTARTED",
           "server restarted while the attempt was running",
         );
-        run.status = "failed";
-        run.errorCode = "SERVER_RESTARTED";
-        run.errorMessage = "Server restarted while this run was active";
-        run.failedAt = now;
+        if (run.policy.workflow === "shared_session_v1") {
+          run.status = "awaiting_input";
+          delete run.errorCode;
+          delete run.errorMessage;
+          this.append(database, this.events.runAwaitingInput({ runId: run.id }));
+        } else {
+          run.status = "failed";
+          run.errorCode = "SERVER_RESTARTED";
+          run.errorMessage = "Server restarted while this run was active";
+          run.failedAt = now;
+        }
         run.version += 1;
         run.updatedAt = now;
-        this.append(
-          database,
-          this.events.runFailed({
-            runId: run.id,
-            code: "SERVER_RESTARTED",
-            reason: "Server restarted while this run was active",
-          }),
-        );
+        if (run.status === "failed") {
+          this.append(
+            database,
+            this.events.runFailed({
+              runId: run.id,
+              code: "SERVER_RESTARTED",
+              reason: "Server restarted while this run was active",
+            }),
+          );
+        }
         interrupted.push(run.id);
       }
       return interrupted;
@@ -948,7 +1141,7 @@ export const collectEnrolledAgentIds = (
 ): Set<AgentId> => {
   const enrolled = new Set<AgentId>();
   for (const run of database.coordinationRuns) {
-    if (run.id === excludeRunId || !ACTIVE_RUN_STATUSES.has(run.status)) {
+    if (run.id === excludeRunId || !LIVE_ENROLMENT_STATUSES.has(run.status)) {
       continue;
     }
     for (const participant of run.participants) {
@@ -987,7 +1180,7 @@ export const findEnrollingRunSummary = (
 ): CoordinationReservationAdvisory | undefined => {
   const run = database.coordinationRuns.find(
     (candidate) =>
-      ACTIVE_RUN_STATUSES.has(candidate.status) &&
+      LIVE_ENROLMENT_STATUSES.has(candidate.status) &&
       candidate.participants.some((participant) => participant.agentId === agentId),
   );
   return run ? { runId: run.id, name: run.name } : undefined;
@@ -1030,6 +1223,26 @@ const nextCountdownValue = (
   return Number.isInteger(value) && run.sharedState ? value - 1 : "invalid";
 };
 
+const nextTranscriptSequence = (database: Database, runId: CoordinationRunId): number =>
+  database.coordinationArtifacts
+    .filter((artifact) => artifact.runId === runId)
+    .reduce((maximum, artifact) => Math.max(maximum, artifact.transcriptSequence ?? 0), 0) + 1;
+
+const latestCommittedSessionArtifact = (
+  database: Database,
+  runId: CoordinationRunId,
+): Extract<CoordinationArtifact, { type: "session_message" }> | undefined =>
+  database.coordinationArtifacts
+    .filter(
+      (artifact): artifact is Extract<CoordinationArtifact, { type: "session_message" }> =>
+        artifact.runId === runId && artifact.type === "session_message",
+    )
+    .sort(
+      (left, right) =>
+        (right.transcriptSequence ?? 0) - (left.transcriptSequence ?? 0) ||
+        right.createdAt.localeCompare(left.createdAt),
+    )[0];
+
 /**
  * Deterministic detail read model: turns by sequence, attempts by their turn's
  * sequence then attempt number, artifacts by their turn's sequence, events by
@@ -1053,8 +1266,22 @@ const buildRunDetails = (database: Database, run: CoordinationRun): Coordination
   const artifacts = database.coordinationArtifacts
     .filter((artifact) => artifact.runId === run.id)
     .sort(
-      (left, right) =>
-        sequenceOf(left.turnId) - sequenceOf(right.turnId) || left.id.localeCompare(right.id),
+      (left, right) => {
+        const leftTranscript = left.transcriptSequence;
+        const rightTranscript = right.transcriptSequence;
+        if (leftTranscript !== undefined || rightTranscript !== undefined) {
+          return (
+            (leftTranscript ?? Number.MIN_SAFE_INTEGER) -
+              (rightTranscript ?? Number.MIN_SAFE_INTEGER) ||
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.id.localeCompare(right.id)
+          );
+        }
+        return (
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id)
+        );
+      },
     );
 
   const events = database.coordinationEvents

@@ -46,7 +46,7 @@ The verified handoff workflow remains a second workflow on the same engine. Noth
   - `countdown`: each message must be exactly the expected next integer (the headline acceptance demo). **[v2, Phase 10]** No longer creatable from the UI. **[v2, Phase 14]** Removed from the engine; stored countdown runs remain readable.
   - `free_chat`: any bounded, non-empty message; the run completes when every participant's latest message carries `done: true`, or at `maxTurns`, or on user stop (general task collaboration). **[v2, Phase 10]** The only creatable protocol. **[v2, Phase 12]** Completion becomes an explicit user action; `done` stays advisory and ends the wave rather than the session.
 - `run.sharedState.nextExpectedNumber` as the durable shared state for countdown runs.
-- A transcript-building context template that includes all committed session messages in order.
+- A transcript-building context template that includes all committed session messages in order. **[v2, Phase 12]** User messages share the same durable total order and are interleaved with Agent messages.
 - The web form mode, transcript view, and session timeline labels.
 
 **Non-goals (explicit cut unless the team approves otherwise):**
@@ -201,13 +201,13 @@ A wrong or malformed number follows the existing attempt algorithm unchanged: re
 - **Validation:** the same parsing order as 6.1 steps 1 to 5 (size, trim, one outer fence, one parse, strict schema with content 1..500). There is no cross-field numeric rule.
 - **Shared state:** free-chat runs have no `nextExpectedNumber`; `run.sharedState` stays absent.
 - **Prompt:** `[YOUR TASK]` instructs the Agent to contribute the next message toward the shared objective based on the transcript. The output contract is the same `session_message` shape. No expected value exists to state, so the countdown prompt rule has no free-chat equivalent.
-- **Completion:** the workflow completes when **every participant's most recent committed message carries `done: true`** (unanimous consent across one full round), or when all allowed turns are committed (`maxTurns`), or on user stop -- whichever comes first. **[v2, Phase 12]** These conditions end the current *wave* and return the session to `awaiting_input`, where it accepts another user prompt. A session becomes terminal only on explicit user end, user stop, failure, or the hard `maxTurns` ceiling. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*, only whether the participants have all said they are finished. On completion, the run's `finalArtifactId` points at the last committed session message.
-- **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the shared objective met; an Agent never ends a run. The completion rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. With no signals at all, behaviour is exactly the frozen `maxTurns` rule, so the addition is strictly additive. Unanimity needs at least one message from every participant, so a run cannot complete before `participantCount` committed turns. `done` is rejected on a countdown message, where the numeric validator is the sole authority.
+- **Completion:** the original workflow completed when **every participant's most recent committed message carried `done: true`** (unanimous consent across one full round), when all allowed turns were committed (`maxTurns`), or on user stop. **[v2, Phase 12]** Unanimous `done` now ends only the current *wave* and returns the session to `awaiting_input`, where it accepts another user prompt. Stop likewise cancels only the active wave. The session becomes terminal only on explicit user End, failure, or the hard `maxTurns` ceiling. End sets `finalArtifactId` to the last committed session message when one exists. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*.
+- **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the current user request addressed; an Agent never ends a session. The wave rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. Unanimity needs at least one current-wave message from every participant, so a wave cannot end before `participantCount` committed turns. `done` is rejected on a countdown message, where the numeric validator is the sole authority.
 - **Retry and failure:** the attempt algorithm is identical (malformed or timed-out output retries once, then the run fails).
 
 ## 7. API changes
 
-The create body becomes a union on `workflow`. `workflow` is optional and defaults to `"verified_handoff_v1"`, so existing clients keep working. All routes and statuses otherwise unchanged.
+The create body becomes a union on `workflow`. `workflow` is optional and defaults to `"verified_handoff_v1"`, so existing clients keep working. **[v2, Phase 12]** Session conversations add `awaiting_input`, user-message and End routes, and optional delta reads; verified-handoff routes remain unchanged.
 
 ```json
 {
@@ -244,13 +244,29 @@ Free-chat variant:
 
 For countdown runs, `run.sharedState` is part of the public read model and the UI renders it. Leases and internal capability fields remain hidden, as today.
 
+Phase 12 free-chat conversation routes:
+
+- `POST /api/coordination-runs/:id/messages` accepts a trimmed 1..4,000 character
+  `content` and optional `clientMessageId`, atomically appends a user artifact,
+  and starts or resumes one wave. A duplicate latest `clientMessageId` is a
+  no-op; a send while Agents are working conflicts.
+- `POST /api/coordination-runs/:id/stop` cancels the active wave and returns the
+  session to `awaiting_input`; `POST /api/coordination-runs/:id/end` is valid
+  only while idle and permanently completes the session.
+- `GET /api/coordination-runs/:id?sinceSequence=<n>` returns the full current run
+  plus records linked to events at or after the inclusive cursor and an explicit
+  next `cursor`. Omitting the query preserves the original full-detail shape.
+
 ## 8. Repository rules
 
 - Every session commit runs in exactly one `JsonStore.mutate()` with the unchanged lease and version checks (`overview.md` Section 10.3).
 - `expectedArtifactTypeForTurn` gains a `session_turn` case returning `"session_message"`.
 - No new database collections. `sharedState` is an optional run field, so the database shape stays version 2.
 - Reservation is already derived from participants of non-terminal runs (`overview.md` Section 10.4); session runs inherit it with no change. **[v2, Phase 11]** Reservation narrows to participants with a *running attempt* in a non-terminal run, so an idle session does not hold its Agents.
-- Restart interruption (`overview.md` Section 10.5) settles active session runs exactly like verified runs.
+- Restart interruption (`overview.md` Section 10.5) still fails active verified
+  runs. **[v2, Phase 12]** It settles an active session wave and returns that
+  session to `awaiting_input`; an already idle session is untouched and
+  resumable after restart.
 
 ## 9. Test matrix (new tests only)
 

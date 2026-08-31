@@ -143,6 +143,12 @@ const allDrafts = (): CoordinationEventDraft[] => [
     code: "RUN_ABANDONED",
     reason: "orchestration loop exited without settling the run",
   }),
+  events.userMessageAppended({
+    runId: RUN_ID,
+    artifactId: ARTIFACT_ID,
+    transcriptSequence: 1,
+  }),
+  events.runAwaitingInput({ runId: RUN_ID }),
 ];
 
 const FROZEN_EVENT_TYPES: CoordinationEventType[] = [
@@ -164,6 +170,8 @@ const FROZEN_EVENT_TYPES: CoordinationEventType[] = [
   "run.failed",
   "run.interrupted",
   "run.reconciled",
+  "user.message_appended",
+  "run.awaiting_input",
 ];
 
 describe("coordination event factories", () => {
@@ -192,7 +200,24 @@ describe("coordination event factories", () => {
       "run.failed: Run failed: MAX_TURNS_EXCEEDED.",
       "run.interrupted: Run interrupted by a server restart.",
       "run.reconciled: Run reconciled after an orchestration exit.",
+      "user.message_appended: User message appended.",
+      "run.awaiting_input: Session is awaiting user input.",
     ]);
+  });
+
+  it("records user-message provenance without recording prompt content", () => {
+    const draft = events.userMessageAppended({
+      runId: RUN_ID,
+      artifactId: ARTIFACT_ID,
+      transcriptSequence: 4,
+    });
+    expect(draft).toMatchObject({
+      type: "user.message_appended",
+      actor: { type: "user" },
+      artifactId: ARTIFACT_ID,
+      details: { transcriptSequence: 4 },
+    });
+    expect(JSON.stringify(draft)).not.toContain("prompt content");
   });
 
   it("uses the product spelling for the Finaliser label but the stored enum in details", () => {

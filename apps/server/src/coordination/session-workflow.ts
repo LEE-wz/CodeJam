@@ -9,6 +9,7 @@ import { SESSION_LIMITS } from "./types.js";
 export type { SharedSessionWorkflow } from "./contracts.js";
 
 type SessionArtifact = Extract<CoordinationArtifact, { type: "session_message" }>;
+type UserArtifact = Extract<CoordinationArtifact, { type: "user_message" }>;
 
 const invalidState = (message: string): WorkflowDecision => ({
   kind: "fail",
@@ -22,6 +23,7 @@ const isPositiveInteger = (value: number): boolean =>
 interface ValidSessionView {
   participants: CoordinationParticipant[];
   committedArtifacts: SessionArtifact[];
+  transcriptArtifacts: Array<SessionArtifact | UserArtifact>;
 }
 
 const validateSessionView = (
@@ -31,8 +33,11 @@ const validateSessionView = (
   if (run.policy.workflow !== "shared_session_v1") {
     return invalidState("Shared session workflow requires a shared-session run");
   }
-  if (run.status !== "running" || run.phase !== "sessioning") {
-    return invalidState("Session decisions require a running session run");
+  if (
+    (run.status !== "running" && run.status !== "awaiting_input") ||
+    run.phase !== "sessioning"
+  ) {
+    return invalidState("Session decisions require a live session run");
   }
   if (run.activeTurnId) {
     return invalidState("Session workflow cannot schedule while a turn is active");
@@ -61,7 +66,7 @@ const validateSessionView = (
 
   const turns = view.turns.filter(({ runId }) => runId === run.id);
   const artifacts = view.artifacts.filter(({ runId }) => runId === run.id);
-  if (artifacts.some(({ type }) => type !== "session_message")) {
+  if (artifacts.some(({ type }) => type !== "session_message" && type !== "user_message")) {
     return invalidState("Session run contains a non-session artifact");
   }
 
@@ -75,7 +80,7 @@ const validateSessionView = (
       turn.sequence >= run.nextTurnSequence ||
       turn.kind !== "session_turn" ||
       turn.role !== "participant" ||
-      turn.status !== "committed"
+      !["committed", "cancelled", "failed"].includes(turn.status)
     ) {
       return invalidState("Session run contains an invalid turn");
     }
@@ -85,18 +90,19 @@ const validateSessionView = (
 
   const artifactIds = new Set<string>();
   const artifactsById = new Map<string, SessionArtifact>();
-  for (const artifact of artifacts as SessionArtifact[]) {
+  for (const artifact of artifacts) {
     if (artifactIds.has(artifact.id)) {
       return invalidState("Session run has duplicate artifact identity");
     }
     artifactIds.add(artifact.id);
-    artifactsById.set(artifact.id, artifact);
+    if (artifact.type === "session_message") artifactsById.set(artifact.id, artifact);
   }
 
   const committedTurns = [...turns].sort((left, right) => left.sequence - right.sequence);
   const committedArtifacts: SessionArtifact[] = [];
-  for (const [index, turn] of committedTurns.entries()) {
-    const expectedParticipant = participants[index % participants.length];
+  for (const turn of committedTurns) {
+    if (turn.status !== "committed") continue;
+    const expectedParticipant = participants[committedArtifacts.length % participants.length];
     const artifact = turn.outputArtifactId
       ? artifactsById.get(turn.outputArtifactId)
       : undefined;
@@ -112,11 +118,20 @@ const validateSessionView = (
     }
     committedArtifacts.push(artifact);
   }
-  if (committedArtifacts.length !== artifacts.length) {
+  const userArtifacts = artifacts.filter(
+    (artifact): artifact is UserArtifact => artifact.type === "user_message",
+  );
+  if (committedArtifacts.length + userArtifacts.length !== artifacts.length) {
     return invalidState("Session run contains an uncommitted artifact");
   }
 
-  return { participants, committedArtifacts };
+  const transcriptArtifacts = [...committedArtifacts, ...userArtifacts].sort((left, right) => {
+    const leftSequence = left.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+    const rightSequence = right.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+    return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);
+  });
+
+  return { participants, committedArtifacts, transcriptArtifacts };
 };
 
 const validateCountdownState = (
@@ -160,7 +175,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
     if ("kind" in validated) return validated;
 
     const { run } = view;
-    const { participants, committedArtifacts } = validated;
+    const { participants, committedArtifacts, transcriptArtifacts } = validated;
     const lastArtifactId = finalArtifactId(committedArtifacts);
 
     if (run.policy.sessionProtocol === "countdown") {
@@ -183,19 +198,35 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
         return invalidState("Free-chat session must not carry countdown state");
       }
 
+      if (committedArtifacts.length >= run.policy.maxTurns) {
+        return {
+          kind: "fail",
+          code: "MAX_TURNS_EXCEEDED",
+          message: "Session reached its hard turn limit",
+        };
+      }
+
+      const activeUser = run.lastUserArtifactId
+        ? transcriptArtifacts.find(
+            (artifact): artifact is UserArtifact =>
+              artifact.type === "user_message" && artifact.id === run.lastUserArtifactId,
+          )
+        : undefined;
+      const activeSequence = activeUser?.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+      const currentWave = committedArtifacts.filter(
+        (artifact) => (artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER) > activeSequence,
+      );
       const latestByParticipant = new Map<string, SessionArtifact>();
-      for (const artifact of committedArtifacts) {
+      for (const artifact of currentWave) {
         latestByParticipant.set(artifact.createdByAgentId, artifact);
       }
       const unanimous =
-        committedArtifacts.length >= participants.length &&
+        currentWave.length >= participants.length &&
         participants.every(
           ({ agentId }) => latestByParticipant.get(agentId)?.payload.done === true,
         );
-      if (unanimous || run.nextTurnSequence > run.policy.maxTurns) {
-        return lastArtifactId
-          ? { kind: "complete", finalArtifactId: lastArtifactId }
-          : invalidState("Completed session has no final artifact");
+      if (unanimous) {
+        return { kind: "await_input" };
       }
     }
 
@@ -209,7 +240,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
       turnKind: "session_turn",
       phase: "sessioning",
       revision: 0,
-      inputArtifactIds: committedArtifacts.map(({ id }) => id),
+      inputArtifactIds: transcriptArtifacts.map(({ id }) => id),
       expectedArtifactType: "session_message",
     };
   }

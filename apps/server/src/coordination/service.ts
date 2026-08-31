@@ -17,6 +17,7 @@ import { CoordinationError } from "./errors.js";
 import { ARTIFACT_SCHEMA_LIMITS, SECTION_KEY_PATTERN } from "./schemas.js";
 import {
   DEFAULT_COORDINATION_POLICY,
+  type AppendUserMessageRequest,
   type CoordinationAttempt,
   type CoordinationErrorCode,
   type CoordinationRun,
@@ -170,6 +171,7 @@ export class CoordinationWorkflowDispatchV1 implements CoordinationWorkflowDispa
  */
 export class CoordinationService implements CoordinationServiceContract {
   private readonly activeLoops = new Map<CoordinationRunId, Promise<void>>();
+  private readonly loopEpochs = new Map<CoordinationRunId, number>();
   private readonly workflowDispatch: CoordinationWorkflowDispatch;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -575,7 +577,65 @@ export class CoordinationService implements CoordinationServiceContract {
       { runId: id, status: stopped.status, code: stopped.errorCode ?? "STOPPED_BY_USER" },
       "Coordination run stopped",
     );
+    // Runtime cancellation is cooperative and a late completion may remain
+    // pending. Retire this loop immediately: durable lease fencing already
+    // settled its attempt, and the epoch prevents it from touching a later wave.
+    this.retireLoop(id);
     return stopped;
+  }
+
+  async resumeRun(
+    id: CoordinationRunId,
+    input: AppendUserMessageRequest,
+  ): Promise<CoordinationRun> {
+    const result = await this.dependencies.repository.appendUserMessage({ runId: id, ...input });
+    if (result.kind === "not_found") {
+      throw new CoordinationError(404, "NOT_FOUND", "Session not found");
+    }
+    if (result.kind === "terminal") {
+      throw new CoordinationError(409, "INVALID_STATE", "This session has ended");
+    }
+    if (result.kind === "conflict") {
+      throw new CoordinationError(
+        409,
+        result.code ?? "INVALID_STATE",
+        result.message ?? "Agents are already working",
+      );
+    }
+    if (result.kind === "duplicate") {
+      return result.run;
+    }
+    // `awaitInput` is durable before the previous loop's promise reaches its
+    // `finally`. A prompt arriving in that narrow window must replace that
+    // exiting owner instead of observing it and leaving the resumed run idle.
+    if (this.activeLoops.has(id)) {
+      this.retireLoop(id);
+    }
+    this.startLoop(id);
+    return result.run;
+  }
+
+  async endRun(id: CoordinationRunId): Promise<CoordinationRun> {
+    const details = await this.dependencies.repository.getRunDetails(id);
+    if (!details) {
+      throw new CoordinationError(404, "NOT_FOUND", "Session not found");
+    }
+    if (details.run.status === "running" || details.run.status === "stop_requested") {
+      throw new CoordinationError(409, "INVALID_STATE", "Stop the current wave before ending the session");
+    }
+    const result = await this.dependencies.repository.endSession(id);
+    if (result.kind === "not_found") {
+      throw new CoordinationError(404, "NOT_FOUND", "Session not found");
+    }
+    if (result.kind === "conflict") {
+      throw new CoordinationError(409, "INVALID_STATE", "Only an idle session can be ended");
+    }
+    // An idle loop may still be unwinding after its durable `awaiting_input`
+    // transition. Ending the session fences that stale owner immediately.
+    if (this.activeLoops.has(id)) {
+      this.retireLoop(id);
+    }
+    return result.run;
   }
 
   /**
@@ -593,7 +653,10 @@ export class CoordinationService implements CoordinationServiceContract {
     if (this.activeLoops.has(runId)) {
       return;
     }
-    const loop = this.runLoop(runId).catch(async (error: unknown) => {
+    const epoch = (this.loopEpochs.get(runId) ?? 0) + 1;
+    this.loopEpochs.set(runId, epoch);
+    const loop = this.runLoop(runId, epoch).catch(async (error: unknown) => {
+      if (!this.ownsLoop(runId, epoch)) return;
       this.dependencies.logger?.error({ runId }, "Coordination run loop failed");
       const failure =
         error instanceof CoordinationError
@@ -619,9 +682,19 @@ export class CoordinationService implements CoordinationServiceContract {
       .catch(() => undefined);
   }
 
-  private async runLoop(runId: CoordinationRunId): Promise<void> {
+  private retireLoop(runId: CoordinationRunId): void {
+    this.loopEpochs.set(runId, (this.loopEpochs.get(runId) ?? 0) + 1);
+    this.activeLoops.delete(runId);
+  }
+
+  private ownsLoop(runId: CoordinationRunId, epoch: number): boolean {
+    return this.loopEpochs.get(runId) === epoch;
+  }
+
+  private async runLoop(runId: CoordinationRunId, epoch: number): Promise<void> {
     let reconciliations = 0;
     while (true) {
+      if (!this.ownsLoop(runId, epoch)) return;
       const details = await this.dependencies.repository.getRunDetails(runId);
       if (!details || details.run.status !== "running") {
         return;
@@ -637,6 +710,10 @@ export class CoordinationService implements CoordinationServiceContract {
           runId,
           finalArtifactId: decision.finalArtifactId,
         });
+        return;
+      }
+      if (decision.kind === "await_input") {
+        await this.dependencies.repository.awaitInput(runId);
         return;
       }
       if (decision.kind === "fail") {
@@ -673,7 +750,12 @@ export class CoordinationService implements CoordinationServiceContract {
         status: decision.turnKind,
       }, "Coordination turn scheduled");
 
-      const outcome = await this.executeTurnWithRetries(scheduled.run, scheduled.turn);
+      const outcome = await this.executeTurnWithRetries(
+        scheduled.run,
+        scheduled.turn,
+        () => this.ownsLoop(runId, epoch),
+      );
+      if (!this.ownsLoop(runId, epoch)) return;
       if (outcome === "committed") {
         // Progress resets the reconciliation budget: the bound exists to catch
         // a run that cannot advance, not one that occasionally loses a lease.
@@ -780,6 +862,7 @@ export class CoordinationService implements CoordinationServiceContract {
   private async executeTurnWithRetries(
     scheduledRun: CoordinationRun,
     scheduledTurn: CoordinationTurn,
+    ownsLoop: () => boolean,
   ): Promise<TurnExecutionOutcome> {
     let validationErrors: string[] = [];
     let lastErrorCode: CoordinationErrorCode = "AGENT_EXECUTION_FAILED";
@@ -877,6 +960,9 @@ export class CoordinationService implements CoordinationServiceContract {
         outcome = await runtimeStart.handle.completion;
       } catch {
         outcome = { kind: "failed" as const, message: "Agent execution failed" };
+      }
+      if (!ownsLoop()) {
+        return "settled";
       }
       if (outcome.kind === "succeeded") {
         const validation = this.dependencies.artifactProtocol.validate({

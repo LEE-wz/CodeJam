@@ -1592,7 +1592,7 @@ describe("durable shared-session commits and races", () => {
     })).toEqual({ kind: "stale" });
 
     const details = await harness.repository.getRunDetails("run-session");
-    expect(details?.run).toMatchObject({ status: "stopped", sharedState: { nextExpectedNumber: 2 } });
+    expect(details?.run).toMatchObject({ status: "awaiting_input", sharedState: { nextExpectedNumber: 2 } });
     expect(details?.artifacts).toEqual([]);
     expect(details?.events.map((event) => event.sequence)).toEqual(
       details?.events.map((_event, index) => index + 1),
@@ -1613,8 +1613,8 @@ describe("durable shared-session commits and races", () => {
     const results = await Promise.all([commit(), commit()]);
     expect(results.map((result) => result.kind).sort()).toEqual(["committed", "stale"]);
 
-    // Schedule the next session turn, then prove restart settlement uses the
-    // same terminal path and derived-reservation release as verified runs.
+    // Schedule the next session turn, then prove restart settlement makes the
+    // durable session idle and releases every derived reservation.
     const details = await harness.repository.getRunDetails("run-session");
     if (!details) throw new Error("expected session details");
     const next = await harness.repository.scheduleTurn({
@@ -1632,7 +1632,180 @@ describe("durable shared-session commits and races", () => {
     expect(next.kind).toBe("scheduled");
     expect(await harness.repository.interruptActiveRuns()).toEqual(["run-session"]);
     expect((await harness.repository.getRunDetails("run-session"))?.run)
-      .toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
+      .toMatchObject({ status: "awaiting_input" });
     expect(await harness.repository.listReservedAgentIds()).toEqual([]);
+  });
+});
+
+describe("durable user-message appends", () => {
+  const freeChatRun = (): CoordinationRun => sessionRunRecord({
+    name: "Durable conversation",
+    objective: "Answer several user prompts.",
+    policy: {
+      ...DEFAULT_COORDINATION_POLICY,
+      workflow: "shared_session_v1",
+      maxRevisions: 0,
+      maxTurns: 20,
+      sessionProtocol: "free_chat",
+    },
+    sharedState: undefined,
+  });
+
+  it("atomically starts a created session, appends once, and preserves admission checks", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: freeChatRun() });
+    const first = await harness.repository.appendUserMessage({
+      runId: "run-session",
+      content: "  First prompt  ",
+      clientMessageId: "client-1",
+    });
+    expect(first).toMatchObject({
+      kind: "appended",
+      run: { status: "running", lastUserArtifactId: expect.any(String), version: 2 },
+      artifact: {
+        type: "user_message",
+        transcriptSequence: 1,
+        payload: { content: "First prompt" },
+      },
+    });
+    expect(await eventTypes(harness, "run-session")).toEqual([
+      "run.created",
+      "run.started",
+      "user.message_appended",
+    ]);
+    expect(await harness.repository.appendUserMessage({
+      runId: "run-session",
+      content: "First prompt",
+      clientMessageId: "client-1",
+    })).toMatchObject({ kind: "duplicate" });
+    expect((await harness.repository.getRunDetails("run-session"))?.artifacts).toHaveLength(1);
+
+    const unavailable = await createHarness();
+    await unavailable.repository.createRun({ run: freeChatRun() });
+    await unavailable.store.mutate((database) => {
+      const participant = database.agents.find(({ id }) => id === PARTICIPANT_ONE.id);
+      if (participant) participant.status = "stopped";
+    });
+    expect(await unavailable.repository.appendUserMessage({
+      runId: "run-session",
+      content: "Cannot start",
+    })).toMatchObject({ kind: "conflict", code: "AGENT_NOT_READY" });
+    expect((await unavailable.repository.getRunDetails("run-session"))?.artifacts).toEqual([]);
+  });
+
+  it("resolves a prompt-versus-commit race without forking transcript order", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: freeChatRun() });
+    const sent = await harness.repository.appendUserMessage({
+      runId: "run-session",
+      content: "First prompt",
+      clientMessageId: "client-1",
+    });
+    if (sent.kind !== "appended") throw new Error("expected first prompt to append");
+    const scheduled = await harness.repository.scheduleTurn({
+      runId: "run-session",
+      expectedRunVersion: sent.run.version,
+      turn: sessionTurnRecord({ inputArtifactIds: [sent.artifact.id] }),
+      nextPhase: "sessioning",
+      nextRevision: 0,
+    });
+    if (scheduled.kind !== "scheduled") throw new Error("expected turn to schedule");
+    const begun = await harness.repository.beginAttempt({
+      runId: "run-session",
+      turnId: scheduled.turn.id,
+      attempt: sessionAttemptRecord(),
+    });
+    if (begun.kind !== "started") throw new Error("expected attempt to start");
+
+    const [commit, racingPrompt] = await Promise.all([
+      harness.repository.commitAcceptedArtifact({
+        runId: "run-session",
+        turnId: scheduled.turn.id,
+        attemptId: "attempt-session-1",
+        leaseToken: "lease-session-0001",
+        artifact: sessionArtifact("ready", {
+          payload: freeChatPayload("Ready", true),
+        }),
+      }),
+      harness.repository.appendUserMessage({
+        runId: "run-session",
+        content: "Second prompt",
+        clientMessageId: "client-2",
+      }),
+    ]);
+    expect(commit.kind).toBe("committed");
+    expect(racingPrompt.kind).toBe("conflict");
+    await harness.repository.awaitInput("run-session");
+    expect(await harness.repository.appendUserMessage({
+      runId: "run-session",
+      content: "Second prompt",
+      clientMessageId: "client-2",
+    })).toMatchObject({ kind: "appended", artifact: { transcriptSequence: 3 } });
+
+    const details = await harness.repository.getRunDetails("run-session");
+    expect(details?.artifacts.map(({ type, transcriptSequence }) => `${transcriptSequence}:${type}`))
+      .toEqual(["1:user_message", "2:session_message", "3:user_message"]);
+    expect(details?.events.map(({ sequence }) => sequence)).toEqual(
+      details?.events.map((_event, index) => index + 1),
+    );
+  });
+
+  it("sorts pre-Phase-12 artifacts first by timestamp before sequenced transcript entries", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: freeChatRun() });
+    await harness.store.mutate((database) => {
+      database.coordinationArtifacts.push(
+        sessionArtifact("older", {
+          id: "old-b",
+          createdAt: "2026-08-20T00:00:00.000Z",
+          payload: freeChatPayload("Older"),
+        }),
+        sessionArtifact("newer", {
+          id: "old-a",
+          createdAt: "2026-08-21T00:00:00.000Z",
+          payload: freeChatPayload("Newer"),
+        }),
+        sessionArtifact("sequenced", {
+          id: "new-sequenced",
+          transcriptSequence: 1,
+          createdAt: "2026-08-19T00:00:00.000Z",
+          payload: freeChatPayload("Sequenced"),
+        }),
+      );
+    });
+    expect((await harness.repository.getRunDetails("run-session"))?.artifacts.map(({ id }) => id))
+      .toEqual(["old-b", "old-a", "new-sequenced"]);
+  });
+
+  it("settles a restart mid-wave and leaves the same session resumable", async () => {
+    const harness = await createHarness();
+    await harness.repository.createRun({ run: freeChatRun() });
+    const sent = await harness.repository.appendUserMessage({
+      runId: "run-session",
+      content: "Prompt before restart",
+    });
+    if (sent.kind !== "appended") throw new Error("expected prompt to append");
+    const scheduled = await harness.repository.scheduleTurn({
+      runId: "run-session",
+      expectedRunVersion: sent.run.version,
+      turn: sessionTurnRecord({ inputArtifactIds: [sent.artifact.id] }),
+      nextPhase: "sessioning",
+      nextRevision: 0,
+    });
+    if (scheduled.kind !== "scheduled") throw new Error("expected turn to schedule");
+    expect((await harness.repository.beginAttempt({
+      runId: "run-session",
+      turnId: scheduled.turn.id,
+      attempt: sessionAttemptRecord(),
+    })).kind).toBe("started");
+
+    expect(await harness.repository.interruptActiveRuns()).toEqual(["run-session"]);
+    expect((await harness.repository.getRunDetails("run-session"))?.run.status)
+      .toBe("awaiting_input");
+    expect(await harness.repository.listReservedAgentIds()).toEqual([]);
+    expect(await harness.repository.appendUserMessage({
+      runId: "run-session",
+      content: "Prompt after restart",
+    })).toMatchObject({ kind: "appended", artifact: { transcriptSequence: 2 } });
   });
 });
