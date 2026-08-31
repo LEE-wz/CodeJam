@@ -246,12 +246,14 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
     const remaining = participants.filter(({ agentId }) => !answered.has(agentId));
     // A pre-v2 countdown run may have no user artifact. Preserve its original
     // deterministic round robin until Phase 14 removes that protocol.
-    const next = activeUser
+    const next = run.policy.sessionParallel && activeUser
       ? remaining
       : [participants[committedArtifacts.length % participants.length]].flatMap((participant) =>
           participant ? [participant] : [],
         );
-    if (next.length === 0) return { kind: "await_input" };
+    if (run.policy.sessionParallel && activeUser && next.length === 0) {
+      return { kind: "await_input" };
+    }
 
     const turn = (participant: CoordinationParticipant) => ({
       role: "participant" as const,
