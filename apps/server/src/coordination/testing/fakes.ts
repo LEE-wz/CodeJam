@@ -22,6 +22,8 @@ import type {
   RuntimeStartResult,
   ScheduleTurnInput,
   ScheduleTurnResult,
+  ScheduleTurnsInput,
+  ScheduleTurnsResult,
   StartRunCommitResult,
   VerifiedHandoffWorkflow,
   WorkflowDecision,
@@ -115,6 +117,10 @@ export class FakeCoordinationRepository implements CoordinationRepository {
 
   async scheduleTurn(_input: ScheduleTurnInput): Promise<ScheduleTurnResult> {
     return notImplemented("FakeCoordinationRepository.scheduleTurn");
+  }
+
+  async scheduleTurns(_input: ScheduleTurnsInput): Promise<ScheduleTurnsResult> {
+    return notImplemented("FakeCoordinationRepository.scheduleTurns");
   }
 
   async beginAttempt(_input: BeginAttemptInput): Promise<BeginAttemptResult> {
@@ -226,11 +232,13 @@ const isRuntimeOutcome = (
 export class ScriptedCoordinationRuntime implements CoordinationRuntime {
   readonly starts: RuntimeExecutionInput[] = [];
   readonly cancelledAttemptIds: string[] = [];
+  peakConcurrency = 0;
 
   private readonly steps: ScriptedRuntimeStep[];
   private readonly pending = new Map<string, (outcome: RuntimeOutcome) => void>();
   private readonly startWaiters: Array<{ count: number; resolve: () => void }> = [];
   private nextAgentRun = 1;
+  private activeCount = 0;
 
   constructor(steps: Array<ScriptedRuntimeStep | RuntimeOutcome> = []) {
     this.steps = steps.map((step) =>
@@ -253,12 +261,17 @@ export class ScriptedCoordinationRuntime implements CoordinationRuntime {
     const agentRunId = `agent-run-${String(this.nextAgentRun).padStart(4, "0")}`;
     this.nextAgentRun += 1;
 
-    const completion =
+    const rawCompletion =
       step.kind === "outcome"
         ? Promise.resolve(step.outcome)
         : new Promise<RuntimeOutcome>((resolve) => {
             this.pending.set(input.attemptId, resolve);
           });
+    this.activeCount += 1;
+    this.peakConcurrency = Math.max(this.peakConcurrency, this.activeCount);
+    const completion = rawCompletion.finally(() => {
+      this.activeCount -= 1;
+    });
 
     return { kind: "started", handle: { agentRunId, completion } };
   }
@@ -285,6 +298,10 @@ export class ScriptedCoordinationRuntime implements CoordinationRuntime {
 
   pendingAttemptIds(): string[] {
     return [...this.pending.keys()];
+  }
+
+  activeAttemptCount(): number {
+    return this.activeCount;
   }
 
   /** Resolves once `count` attempts have been started. */
