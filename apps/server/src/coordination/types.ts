@@ -29,7 +29,14 @@ export type CoordinationTurnKind =
   | "proposal_revision"
   | "proposal_review"
   | "finalization"
-  | "session_turn";
+  | "session_turn"
+  /**
+   * The coordinator turn scheduled once per user message (P14-01). It produces
+   * a `session_plan` artifact naming who answers, in what order, and with what
+   * instruction. The backend still owns every scheduling decision; this turn
+   * only proposes one.
+   */
+  | "session_plan";
 
 export type CoordinationTurnStatus =
   | "scheduled"
@@ -52,6 +59,7 @@ export type ArtifactType =
   | "review"
   | "final"
   | "session_message"
+  | "session_plan"
   | "user_message";
 export type ReviewDecision = "approve" | "reject";
 
@@ -64,12 +72,30 @@ export type ReviewDecision = "approve" | "reject";
 export type CoordinationWorkflowKind = "verified_handoff_v1" | "shared_session_v1";
 
 /**
- * Which rules a shared session turn is validated against. `countdown` requires
- * each message to be the exact next integer; `free_chat` accepts any bounded
- * non-empty message and never judges its substance (overview-sessions.md
- * Sections 6.1 and 6.5).
+ * Which rules a shared session turn is validated against. `free_chat` accepts
+ * any bounded non-empty message and never judges its substance
+ * (overview-sessions.md Sections 6.1 and 6.5).
+ *
+ * The `countdown` member was deleted in Phase 14 (P14-07): ordered output is
+ * now produced by coordinator planning plus transcript visibility rather than
+ * by an engine-side numeric validator. Stored countdown runs keep their
+ * persisted `"countdown"` value and stay readable; no engine path accepts one.
  */
-export type SessionProtocol = "countdown" | "free_chat";
+export type SessionProtocol = "free_chat";
+
+/**
+ * How a session decides who answers each user message (P14-05).
+ *
+ * `coordinator` schedules one `session_plan` turn per user message and executes
+ * the validated plan. `round_robin` restores the deterministic Phase 13
+ * behaviour with no planning turn, and is the demo-safe fallback when a model
+ * plans badly. The workflow reads this from durable policy only: no Agent
+ * output can change it.
+ */
+export type SessionPlanningPolicy = "coordinator" | "round_robin";
+
+/** Whether a plan's assignments run as one fan-out wave or strictly in order. */
+export type SessionPlanMode = "parallel" | "sequential";
 
 export type CoordinationErrorCode =
   | "VALIDATION_FAILED"
@@ -114,15 +140,15 @@ export interface CoordinationPolicy {
    * Shared-session runs only. Absent on verified-handoff runs.
    */
   sessionProtocol?: SessionProtocol;
-  /**
-   * Countdown sessions only: the first number the participants must publish.
-   * Absent on free-chat and verified-handoff runs.
-   */
-  sessionStartValue?: number;
   /** Enables deterministic fan-out for the active user message. */
   sessionParallel?: boolean;
   /** Shared-session only; enforced by the wave supervisor. */
   maxParallelTurns?: number;
+  /**
+   * Shared-session only. Absent on verified-handoff runs and on stored session
+   * runs created before Phase 14, which are read as `round_robin`.
+   */
+  sessionPlanning?: SessionPlanningPolicy;
 }
 
 export const DEFAULT_COORDINATION_POLICY: CoordinationPolicy = {
@@ -141,15 +167,16 @@ export interface RequiredSection {
 }
 
 /**
- * Durable state a shared session run carries between turns. Countdown runs hold
- * the next integer the workflow will accept; the repository decrements it in the
- * same atomic mutation that commits the message. Free-chat runs have no shared
- * state and omit this object entirely (overview-sessions.md Section 6.5).
+ * A session run carries no protocol shared state. `CoordinationSharedState`
+ * and `run.sharedState` existed only for the countdown protocol and were
+ * deleted with it (P14-07).
+ *
+ * Deletion applies to the engine, not to the ledger. A stored pre-Phase-14 run
+ * still carries `sharedState` and `policy.sessionStartValue` in its JSON: the
+ * repository normalises runs by spread, so unknown fields survive a read and
+ * are returned unchanged through the API for display. No engine path writes,
+ * reads, or validates them any more.
  */
-export interface CoordinationSharedState {
-  nextExpectedNumber: number;
-}
-
 export interface CoordinationRun {
   id: CoordinationRunId;
   name: string;
@@ -170,8 +197,6 @@ export interface CoordinationRun {
   lastUserArtifactId?: CoordinationArtifactId;
   /** Present only when an explicit End session action completed the run. */
   endedByUser?: boolean;
-  /** Countdown sessions only. Absent on free-chat and verified-handoff runs. */
-  sharedState?: CoordinationSharedState;
   version: number;
   errorCode?: CoordinationErrorCode;
   errorMessage?: string;
@@ -281,11 +306,43 @@ export interface UserMessagePayload {
   content: string;
 }
 
+/**
+ * One participant's share of a planned round: which Agent answers, where it
+ * falls in the order, and what it is being asked to do.
+ *
+ * `position` is 1-based and, across a whole plan, forms a contiguous run from 1
+ * to the assignment count. In `sequential` mode it is the execution order; in
+ * `parallel` mode it only orders the assignments for display, because every
+ * assignment is scheduled in one wave.
+ */
+export interface SessionPlanAssignment {
+  agentId: AgentId;
+  position: number;
+  instruction: string;
+}
+
+/**
+ * A coordinator's proposal for one round (P14-01).
+ *
+ * The Agent proposes; the backend disposes. The middleware validates this
+ * payload structurally -- participants, distinct ids, contiguous positions,
+ * bounded instructions -- and never judges whether the plan is a *good* plan.
+ * Scheduling, leases, limits, cancellation, and completion stay backend-owned,
+ * and no field here can change policy, participants, limits, or another run.
+ */
+export interface SessionPlanPayload {
+  schemaVersion: 1;
+  type: "session_plan";
+  mode: SessionPlanMode;
+  assignments: SessionPlanAssignment[];
+}
+
 export type ArtifactPayload =
   | ProposalPayload
   | ReviewPayload
   | FinalPayload
   | SessionMessagePayload
+  | SessionPlanPayload
   | UserMessagePayload;
 
 export interface CoordinationArtifactBase {
@@ -321,6 +378,10 @@ export type CoordinationArtifact =
   | (CoordinationArtifactBase & {
       type: "session_message";
       payload: SessionMessagePayload;
+    })
+  | (CoordinationArtifactBase & {
+      type: "session_plan";
+      payload: SessionPlanPayload;
     })
   | UserMessageArtifact;
 
@@ -422,9 +483,9 @@ export interface CreateSessionRunRequest {
   policy?:
     | {
         sessionProtocol?: SessionProtocol | undefined;
-        sessionStartValue?: number | undefined;
         sessionParallel?: boolean | undefined;
         maxParallelTurns?: number | undefined;
+        sessionPlanning?: SessionPlanningPolicy | undefined;
         maxTurns?: number | undefined;
         perAttemptTimeoutMs?: number | undefined;
       }
@@ -442,7 +503,7 @@ export type CreateRunRequest = CreateCoordinationRunRequest | CreateSessionRunRe
  * explicitly; `defaultSessionTurns` is what a session gets when it does not, so
  * a runaway wave costs a bounded number of turns rather than the ceiling.
  *
- * The countdown values remain until P14-07 deletes the protocol.
+ * The countdown start-value bounds were deleted with the protocol (P14-07).
  */
 /**
  * Context budget for shared-session runs (P10-05). Ten participants holding a
@@ -455,15 +516,14 @@ export const SESSION_CONTEXT_MAX_CHARS = 40_000;
 export const SESSION_LIMITS = {
   minParticipants: 2,
   maxParticipants: 10,
-  minStartValue: 2,
-  maxStartValue: 12,
-  defaultStartValue: 10,
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
   defaultSessionTurns: 200,
   maxParallelTurns: 10,
   messageMinChars: 1,
   messageMaxChars: 500,
+  /** Per-assignment instruction bound for a `session_plan` artifact (P14-01). */
+  planInstructionMaxChars: 500,
 } as const;
 
 export interface ListCoordinationRunsResponse {

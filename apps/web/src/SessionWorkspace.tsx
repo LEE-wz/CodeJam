@@ -10,6 +10,7 @@ import type {
   CoordinationRunStatus,
   CoordinationTurn,
   CreateSessionRunRequest,
+  SessionPlanningPolicy,
 } from "./coordination-types";
 import { SESSION_LIMITS } from "./coordination-types";
 import type { Agent } from "./types";
@@ -37,6 +38,7 @@ interface FormState {
   objective: string;
   sessionAgentIds: string[];
   maxTurns: string;
+  sessionPlanning: SessionPlanningPolicy;
   perAttemptTimeoutSeconds: string;
 }
 
@@ -47,6 +49,7 @@ const initialForm = (agents: Agent[]): FormState => {
     objective: "",
     sessionAgentIds: ready.slice(0, 3).map(({ id }) => id),
     maxTurns: String(SESSION_LIMITS.defaultSessionTurns),
+    sessionPlanning: "coordinator",
     perAttemptTimeoutSeconds: "120",
   };
 };
@@ -227,6 +230,42 @@ function latestDoneByParticipant(details: CoordinationRunDetails): Map<string, b
   return latest;
 }
 
+/**
+ * The plan governing a round, rendered as evidence rather than as a chat
+ * message (P14-01). It is immutable, attributed, and part of the ledger, so it
+ * belongs on screen; it is not something a participant said, so it does not sit
+ * in the message stream.
+ */
+function SessionPlanCard({ details }: { details: CoordinationRunDetails }) {
+  const plans = details.artifacts.filter(
+    (artifact): artifact is Extract<CoordinationArtifact, { type: "session_plan" }> =>
+      artifact.type === "session_plan",
+  );
+  const plan = plans.at(-1);
+  if (!plan) return null;
+  return (
+    <section className="session-plan" aria-label="Round plan">
+      <div className="session-section-heading">
+        <div>
+          <span className="eyebrow">Planned by {participantName(details.run, plan.createdByAgentId)}</span>
+          <h3>Round plan</h3>
+        </div>
+        <span className="evidence-count">{plan.payload.mode}</span>
+      </div>
+      <ol className="session-plan-assignments">
+        {[...plan.payload.assignments]
+          .sort((left, right) => left.position - right.position)
+          .map((assignment) => (
+            <li key={`${assignment.agentId}-${assignment.position}`}>
+              <strong>{participantName(details.run, assignment.agentId)}</strong>
+              <span>{assignment.instruction}</span>
+            </li>
+          ))}
+      </ol>
+    </section>
+  );
+}
+
 function SessionTranscript({ details }: { details: CoordinationRunDetails }) {
   const messages = details.artifacts
     .filter(
@@ -405,6 +444,7 @@ function CreationForm({
       agents: form.sessionAgentIds,
       policy: {
         sessionProtocol: "free_chat",
+        sessionPlanning: form.sessionPlanning,
         maxTurns: Number(form.maxTurns),
         perAttemptTimeoutMs: Number(form.perAttemptTimeoutSeconds) * 1_000,
       },
@@ -447,6 +487,22 @@ function CreationForm({
         <div className="session-policy-grid">
           <label>Maximum turns<input ref={policyRef} type="number" min={SESSION_LIMITS.minSessionTurns} max={SESSION_LIMITS.maxSessionTurns} value={form.maxTurns} onChange={(event) => setForm({ ...form, maxTurns: event.target.value })} /></label>
           <label>Attempt timeout (seconds)<input type="number" min="10" max="180" value={form.perAttemptTimeoutSeconds} onChange={(event) => setForm({ ...form, perAttemptTimeoutSeconds: event.target.value })} /></label>
+          <label>
+            Planning
+            <select
+              value={form.sessionPlanning}
+              onChange={(event) =>
+                setForm({ ...form, sessionPlanning: event.target.value as SessionPlanningPolicy })
+              }
+            >
+              <option value="coordinator">Coordinator plans each round</option>
+              <option value="round_robin">Round robin (no planning turn)</option>
+            </select>
+            <small>
+              A coordinator plan lets the first participant decide who answers, in what
+              order, and with what instruction. Round robin is the deterministic fallback.
+            </small>
+          </label>
         </div>
         {errors.policy && <p className="field-error" role="alert">{errors.policy}</p>}
       </details>
@@ -691,6 +747,7 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
               {session && (
                 <section className="session-state" aria-label="Session state">
                   <div><span>Protocol</span><strong>{selectedRun.policy.sessionProtocol === "countdown" ? "Countdown" : "Free chat"}</strong></div>
+                  <div><span>Planning</span><strong>{selectedRun.policy.sessionPlanning === "coordinator" ? "Coordinator" : "Round robin"}</strong></div>
                   {selectedRun.policy.sessionProtocol === "countdown" && (
                     <div className="expected-number"><span>{selectedRun.status === "completed" ? "Countdown state" : "Next expected number"}</span><strong>{selectedRun.status === "completed" ? "Complete" : selectedRun.sharedState?.nextExpectedNumber ?? "Unavailable"}</strong></div>
                   )}
@@ -702,6 +759,7 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
               {session && (
                 <section className="evidence-section transcript-section">
                   <div className="session-section-heading"><div><span className="eyebrow">Shared conversation</span><h3>Transcript</h3></div><span className="evidence-count">{details.artifacts.filter(({ type }) => type === "session_message" || type === "user_message").length} messages</span></div>
+                  <SessionPlanCard details={details} />
                   <SessionTranscript details={details} />
                   <form className="session-composer" onSubmit={send}>
                     <label htmlFor="session-message">Message the session</label>

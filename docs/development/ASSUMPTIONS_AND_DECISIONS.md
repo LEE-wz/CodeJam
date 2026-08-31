@@ -662,3 +662,42 @@ repository, session workflow, service, route validation, compatible fixtures,
 and their tests. It does not alter `workflow.ts`, verified-handoff decisions,
 or the meaning of a lease. Repository races prove atomic scheduling and
 independent settlement; supervisor tests prove batching, stop, and restart.
+
+## Mini-RFC: Phase 14 coordinator planning (approved, P14-03)
+
+**Coordinator identity (open question 3, D3).** Resolved by the user on
+2026-08-31: **the first participant doubles as coordinator.** The session
+roster stays exactly what the user selected, so no eleventh Agent has to be
+created, configured, and kept ready for a demo, and no direct model call is
+introduced outside the Agent runtime. Every plan therefore remains attributable
+to a real participant Agent and is committed evidence like any other artifact,
+which is what keeps the ledger complete.
+
+**Consequence.** `run.participants[0]` authors the `session_plan` turn for each
+user message and then answers its own assignment if the plan gives it one. The
+selection is positional and derived from durable state alone, so it is stable
+across restarts and cannot be influenced by Agent output. A session whose first
+participant is unreliable can be repaired by reordering the roster at create
+time, or by switching the run to `sessionPlanning: "round_robin"`.
+
+**Rejected alternatives.** A dedicated coordinator Agent costs a roster slot
+and extra demo setup for no evidence gain. A direct model call with no Agent
+attached would produce a plan artifact with no author, breaking the
+"immutable, attributed" invariant that makes the ledger auditable.
+
+**Exactly one plan per user message.** The workflow derives planning state from
+committed artifacts: a plan exists for `run.lastUserArtifactId` when a committed
+`session_plan` artifact carries a higher `transcriptSequence` than that user
+message. A retry therefore never schedules a second plan, and a restart between
+the plan commit and the first assignment re-derives the same remaining work.
+
+**Plan artifacts join the transcript order.** A `session_plan` artifact is
+allocated a `transcriptSequence` on commit exactly like a session message, so
+the round it governs is unambiguous and the ledger renders in one total order.
+It is not rendered as a chat message: the transcript block skips it and the
+participant's own assignment is delivered through the task section instead.
+
+**Acceptance demo change (P14-08).** Ordered output is now proved by Agent
+coordination — a sequential plan plus transcript visibility — rather than by an
+engine-side numeric validator. The countdown protocol is deleted from the
+engine in this phase; stored countdown runs keep their fields and stay readable.

@@ -11,6 +11,7 @@ import {
   proposalPayloadSchema,
   reviewPayloadSchema,
   sessionMessagePayloadSchema,
+  sessionPlanPayloadSchema,
   COORDINATION_ARTIFACT_SCHEMA_VERSION,
 } from "./schemas.js";
 import type {
@@ -23,11 +24,12 @@ import type {
   CoordinationTurnKind,
   ProposalPayload,
   ReviewPayload,
+  SessionPlanPayload,
 } from "./types.js";
 
 type VerifiedArtifactPayload = Exclude<
   ArtifactPayload,
-  { type: "session_message" | "user_message" }
+  { type: "session_message" | "session_plan" | "user_message" }
 >;
 
 export type {
@@ -48,6 +50,7 @@ export const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND: Readonly<
   proposal_review: "review",
   finalization: "final",
   session_turn: "session_message",
+  session_plan: "session_plan",
 };
 
 /**
@@ -92,7 +95,7 @@ const stripOuterFence = (trimmed: string): string => {
 };
 
 const parsePayload = (
-  type: Exclude<ArtifactType, "session_message" | "user_message">,
+  type: Exclude<ArtifactType, "session_message" | "session_plan" | "user_message">,
   value: unknown,
 ): { ok: true; payload: VerifiedArtifactPayload } | { ok: false; error: z.ZodError } => {
   const result =
@@ -259,7 +262,7 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
 
     // 5. Expected artifact type and schema version, then the bounded schema.
     const expectedType = EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
-    if (expectedType === "session_message") {
+    if (expectedType === "session_message" || expectedType === "session_plan") {
       return invalidAt(
         "type",
         "unexpected_artifact_type",
@@ -330,6 +333,65 @@ export class VerifiedHandoffArtifactProtocol implements ArtifactProtocol {
   }
 }
 
+/**
+ * Step 6 of the frozen parsing order (overview Section 11.4) for a plan: purely
+ * structural rules, applied only after the bounded schema has passed (P14-02).
+ *
+ * The middleware judges no substance. It never asks whether the plan is a
+ * *good* plan -- whether the right Agent got the right job, or whether the
+ * instructions make sense -- only whether it is a *well-formed, executable*
+ * one. Everything checked here is a fact about this run's roster and the
+ * assignment array's own shape.
+ *
+ * No message echoes an Agent-supplied value. A rejected plan's ids and
+ * instructions are exactly the untrusted text this validator exists to refuse,
+ * so retry feedback names the rule that failed and nothing else.
+ */
+const planStructureErrors = (
+  run: CoordinationRun,
+  payload: SessionPlanPayload,
+): ArtifactValidationError[] => {
+  const errors: ArtifactValidationError[] = [];
+  const participantIds = new Set(run.participants.map(({ agentId }) => agentId));
+  const { assignments } = payload;
+
+  if (assignments.length > participantIds.size) {
+    errors.push({
+      path: "assignments",
+      code: "too_many_assignments",
+      message: `A plan may contain at most ${participantIds.size} assignments, one per participant`,
+    });
+  }
+
+  if (assignments.some(({ agentId }) => !participantIds.has(agentId))) {
+    errors.push({
+      path: "assignments",
+      code: "unknown_participant",
+      message: "Every assignment agentId must be a participant of this session",
+    });
+  }
+
+  const assignedIds = new Set(assignments.map(({ agentId }) => agentId));
+  if (assignedIds.size !== assignments.length) {
+    errors.push({
+      path: "assignments",
+      code: "duplicate_participant",
+      message: "Each participant may appear at most once in a plan",
+    });
+  }
+
+  const positions = [...assignments].map(({ position }) => position).sort((a, b) => a - b);
+  if (positions.some((position, index) => position !== index + 1)) {
+    errors.push({
+      path: "assignments",
+      code: "non_contiguous_positions",
+      message: "Assignment positions must be contiguous from 1",
+    });
+  }
+
+  return errors;
+};
+
 export class SharedSessionArtifactProtocol implements ArtifactProtocol {
   constructor(private readonly dependencies: ArtifactProtocolDependencies) {}
 
@@ -364,14 +426,18 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
     }
 
     const candidate = parsed as Record<string, unknown>;
-    if (
-      turn.kind !== "session_turn" ||
-      candidate["type"] !== EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND.session_turn
-    ) {
+    // The backend, not the Agent, decides which artifact type this turn owes.
+    // A plan offered for a message turn and a message offered for a plan turn
+    // are the same mistake and are refused by the same comparison.
+    const expected =
+      turn.kind === "session_turn" || turn.kind === "session_plan"
+        ? EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind]
+        : undefined;
+    if (expected === undefined || candidate["type"] !== expected) {
       return invalidAt(
         "type",
         "unexpected_artifact_type",
-        'This turn must produce an artifact of type "session_message"',
+        `This turn must produce an artifact of type "${expected ?? "session_message"}"`,
       );
     }
     if (candidate["schemaVersion"] !== COORDINATION_ARTIFACT_SCHEMA_VERSION) {
@@ -380,6 +446,38 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
         "unsupported_schema_version",
         `Artifact schema version must be ${COORDINATION_ARTIFACT_SCHEMA_VERSION}`,
       );
+    }
+    if (run.policy.workflow !== "shared_session_v1") {
+      return invalidAt("output", "invalid_workflow", "Session output requires a shared-session run");
+    }
+
+    if (expected === "session_plan") {
+      const planResult = sessionPlanPayloadSchema.safeParse(candidate);
+      if (!planResult.success) {
+        return invalid(planResult.error.issues.map((issue) => ({
+          path: formatPath(issue.path),
+          code: issue.code,
+          message: issue.message,
+        })));
+      }
+      const structureErrors = planStructureErrors(run, planResult.data);
+      if (structureErrors.length > 0) {
+        return invalid(structureErrors);
+      }
+      return {
+        ok: true,
+        artifact: {
+          id: this.dependencies.ids.artifactId(),
+          runId: run.id,
+          turnId: turn.id,
+          createdByRole: turn.role,
+          createdByAgentId: turn.agentId,
+          sizeChars: rawOutput.length,
+          createdAt: this.dependencies.clock.nowIso(),
+          type: "session_plan",
+          payload: planResult.data,
+        },
+      };
     }
 
     const schemaResult = sessionMessagePayloadSchema.safeParse(candidate);
@@ -391,32 +489,9 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
       })));
     }
     const payload = schemaResult.data;
-    if (run.policy.workflow !== "shared_session_v1") {
-      return invalidAt("output", "invalid_workflow", "Session output requires a shared-session run");
-    }
-    if (run.policy.sessionProtocol === "countdown") {
-      if (payload.done !== undefined) {
-        return invalidAt(
-          "done",
-          "countdown_done_not_allowed",
-          "done is not allowed on countdown messages",
-        );
-      }
-      const expected = run.sharedState?.nextExpectedNumber;
-      const received = Number(payload.content);
-      if (
-        typeof expected !== "number" ||
-        !Number.isInteger(expected) ||
-        !Number.isInteger(received) ||
-        received !== expected
-      ) {
-        return invalidAt(
-          "content",
-          "unexpected_countdown_number",
-          `Expected the next number ${String(expected)}, received ${payload.content}`,
-        );
-      }
-    } else if (run.policy.sessionProtocol !== "free_chat") {
+    // Free chat is the only session protocol (P14-07). The middleware bounds
+    // and shapes a message; it never judges its substance.
+    if (run.policy.sessionProtocol !== "free_chat") {
       return invalidAt("output", "invalid_session_protocol", "Session protocol is invalid");
     }
 

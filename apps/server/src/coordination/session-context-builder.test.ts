@@ -16,7 +16,7 @@ import {
 import type { CoordinationArtifact, CoordinationRun, CoordinationTurn } from "./types.js";
 import { DEFAULT_COORDINATION_POLICY } from "./types.js";
 
-const sessionRun = (protocol: "countdown" | "free_chat", contextMaxChars = 12_000): CoordinationRun => ({
+const sessionRun = (contextMaxChars = 12_000): CoordinationRun => ({
   id: "run-session-context",
   name: "Session context",
   objective: "Continue the shared task from the committed transcript.",
@@ -29,16 +29,14 @@ const sessionRun = (protocol: "countdown" | "free_chat", contextMaxChars = 12_00
   policy: {
     ...DEFAULT_COORDINATION_POLICY,
     workflow: "shared_session_v1",
-    sessionProtocol: protocol,
-    maxTurns: protocol === "countdown" ? 10 : 6,
+    sessionProtocol: "free_chat",
+    maxTurns: 6,
     contextMaxChars,
-    ...(protocol === "countdown" ? { sessionStartValue: 10 } : {}),
   },
   status: "running",
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 4,
-  ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 9 } } : {}),
   version: 1,
   createdAt: FIXED_NOW,
   updatedAt: FIXED_NOW,
@@ -90,12 +88,11 @@ const turn = (inputArtifactIds: string[]): CoordinationTurn => ({
 });
 
 const build = (
-  protocol: "countdown" | "free_chat",
   artifacts: CoordinationArtifact[],
   inputArtifactIds = artifacts.map(({ id }) => id),
   contextMaxChars = 12_000,
 ) => new RoleScopedContextBuilder().build({
-  run: sessionRun(protocol, contextMaxChars),
+  run: sessionRun(contextMaxChars),
   turn: turn(inputArtifactIds),
   artifacts,
   retryValidationErrors: [],
@@ -108,9 +105,7 @@ describe("session context builder", () => {
       message(1, "Second contribution", PARTICIPANT_TWO),
       message(2, "Third contribution", PARTICIPANT_THREE),
     ];
-    const envelope = build(
-      "free_chat",
-      [artifacts[2]!, artifacts[0]!, artifacts[1]!],
+    const envelope = build([artifacts[2]!, artifacts[0]!, artifacts[1]!],
       artifacts.map(({ id }) => id),
     );
     const first = envelope.prompt.indexOf("Relay One: First contribution");
@@ -125,7 +120,7 @@ describe("session context builder", () => {
     const user = userMessage(0, "Please compare the options", 2);
     const first = { ...message(0, "Initial comparison", PARTICIPANT_ONE), transcriptSequence: 1 };
     const second = { ...message(1, "Revised comparison", PARTICIPANT_TWO), transcriptSequence: 3 };
-    const envelope = build("free_chat", [second, user, first], [second.id, user.id, first.id]);
+    const envelope = build([second, user, first], [second.id, user.id, first.id]);
     const firstIndex = envelope.prompt.indexOf("Relay One: Initial comparison");
     const userIndex = envelope.prompt.indexOf("User: Please compare the options");
     const secondIndex = envelope.prompt.indexOf("Relay Two: Revised comparison");
@@ -134,21 +129,18 @@ describe("session context builder", () => {
     expect(userIndex).toBeLessThan(secondIndex);
   });
 
-  it("uses protocol-specific instructions and exposes done only for free chat", () => {
-    const countdown = build("countdown", [message(0, "10")]);
-    expect(countdown.prompt).toContain("exactly one lower than the last number");
-    expect(countdown.prompt).not.toContain('"done"');
-
-    const freeChat = build("free_chat", []);
+  it("uses the free-chat instruction and exposes the done signal", () => {
+    const freeChat = build([]);
     expect(freeChat.prompt).toContain("contribute the next message toward the shared objective");
     expect(freeChat.prompt).toContain('"done":<optional boolean>');
   });
 
-  it("never reveals countdown shared state or states the expected number", () => {
-    const envelope = build("countdown", [message(0, "10")]);
+  it("never states an expected answer in a session prompt", () => {
+    // The ordered-output property must come from the plan and the transcript
+    // (P14-06); the engine never tells a participant what to say.
+    const envelope = build([message(0, "10")]);
     expect(envelope.prompt).not.toContain("nextExpectedNumber");
-    expect(envelope.prompt).not.toContain("expected number 9");
-    expect(envelope.prompt).not.toContain("Expected the next number 9");
+    expect(envelope.prompt).not.toContain("expected number");
   });
 
   it("contains no hidden free-chat state, capabilities, events, or unrelated artifacts", () => {
@@ -161,7 +153,7 @@ describe("session context builder", () => {
       ...message(1, "UNRELATED-THREAD-CONTENT"),
       runId: "another-run",
     };
-    const envelope = build("free_chat", [visible, unrelated], [visible.id, unrelated.id]);
+    const envelope = build([visible, unrelated], [visible.id, unrelated.id]);
     for (const secret of [
       "SECRET-LEASE",
       "SECRET-AUTH",
@@ -180,7 +172,7 @@ describe("session context builder", () => {
       message(1, `MIDDLE-${"b".repeat(500)}`),
       message(2, `NEWEST-${"c".repeat(500)}`),
     ];
-    const envelope = build("free_chat", artifacts, undefined, 2_150);
+    const envelope = build(artifacts, undefined, 2_150);
 
     expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
     expect(envelope.prompt).not.toContain("OLDEST-");
@@ -193,7 +185,7 @@ describe("session context builder", () => {
 
   it("keeps the whole transcript when it fits, with no marker of either kind", () => {
     const artifacts = [message(0, "First"), message(1, "Second"), message(2, "Third")];
-    const envelope = build("free_chat", artifacts);
+    const envelope = build(artifacts);
 
     for (const content of ["First", "Second", "Third"]) {
       expect(envelope.prompt).toContain(content);
@@ -208,7 +200,7 @@ describe("session context builder", () => {
       message(0, `OLDEST-${"a".repeat(2_000)}`),
       message(1, `NEWEST-${"c".repeat(2_000)}`),
     ];
-    const envelope = build("free_chat", artifacts, undefined, 1_600);
+    const envelope = build(artifacts, undefined, 1_600);
 
     expect(envelope.prompt).toContain(SESSION_OMISSION_MARKER);
     expect(envelope.prompt).toContain(CONTEXT_TRUNCATION_MARKER);
@@ -220,9 +212,7 @@ describe("session context builder", () => {
     const artifacts = Array.from({ length: 40 }, (_unused, index) =>
       message(index, `MESSAGE-${index}`),
     );
-    const envelope = build(
-      "free_chat",
-      artifacts,
+    const envelope = build(artifacts,
       artifacts.map(({ id }) => id),
       1_400,
     );
@@ -247,9 +237,7 @@ describe("session context builder", () => {
         transcriptSequence: 26 + index,
       })),
     ];
-    const envelope = build(
-      "free_chat",
-      [...artifacts].reverse(),
+    const envelope = build([...artifacts].reverse(),
       artifacts.map(({ id }) => id),
       6_000,
     );
@@ -260,8 +248,8 @@ describe("session context builder", () => {
 
   it("produces the same prompt and digest for identical input", () => {
     const artifacts = [message(0, "One"), message(1, "Two")];
-    const first = build("free_chat", artifacts);
-    const second = build("free_chat", artifacts);
+    const first = build(artifacts);
+    const second = build(artifacts);
     expect(second.prompt).toBe(first.prompt);
     expect(second.promptDigest).toBe(first.promptDigest);
     expect(first.promptDigest).toBe(digestPrompt(first.prompt));

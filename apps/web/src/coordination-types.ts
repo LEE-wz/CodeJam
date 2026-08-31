@@ -19,7 +19,8 @@ export type CoordinationTurnKind =
   | "proposal_revision"
   | "proposal_review"
   | "finalization"
-  | "session_turn";
+  | "session_turn"
+  | "session_plan";
 export type CoordinationTurnStatus =
   | "scheduled"
   | "running"
@@ -35,7 +36,28 @@ export type CoordinationAttemptStatus =
   | "cancelled"
   | "stale_ignored";
 export type CoordinationWorkflowKind = "verified_handoff_v1" | "shared_session_v1";
+/**
+ * `countdown` was deleted from the engine in Phase 14 (P14-07) but is retained
+ * here: stored pre-Phase-14 runs still carry it, and the legacy render path
+ * from P10-07 still displays them read-only. Nothing creatable uses it.
+ */
 export type SessionProtocol = "countdown" | "free_chat";
+
+/** How a session decides who answers each user message (P14-05). */
+export type SessionPlanningPolicy = "coordinator" | "round_robin";
+
+export interface SessionPlanAssignment {
+  agentId: string;
+  position: number;
+  instruction: string;
+}
+
+export interface SessionPlanPayload {
+  schemaVersion: 1;
+  type: "session_plan";
+  mode: "parallel" | "sequential";
+  assignments: SessionPlanAssignment[];
+}
 export type CoordinationEventType =
   | "run.created" | "run.started" | "turn.scheduled" | "attempt.started"
   | "attempt.invalid_output" | "attempt.timed_out" | "attempt.failed"
@@ -67,9 +89,12 @@ export interface CoordinationPolicy {
   contextMaxChars: number;
   outputMaxChars: number;
   sessionProtocol?: SessionProtocol;
+  /** Legacy: stored pre-Phase-14 countdown runs only (P14-07). */
   sessionStartValue?: number;
   sessionParallel?: boolean;
   maxParallelTurns?: number;
+  /** Absent on stored sessions created before Phase 14; read as round robin. */
+  sessionPlanning?: SessionPlanningPolicy;
 }
 
 export interface CoordinationParticipant {
@@ -204,6 +229,7 @@ export type CoordinationArtifact =
   | (CoordinationArtifactBase & { type: "review"; payload: ReviewPayload })
   | (CoordinationArtifactBase & { type: "final"; payload: FinalPayload })
   | (CoordinationArtifactBase & { type: "session_message"; payload: SessionMessagePayload })
+  | (CoordinationArtifactBase & { type: "session_plan"; payload: SessionPlanPayload })
   | UserMessageArtifact;
 
 export interface CoordinationEvent {
@@ -241,8 +267,8 @@ export interface CreateSessionRunRequest {
   objective: string;
   agents: string[];
   policy?: {
-    sessionProtocol?: SessionProtocol;
-    sessionStartValue?: number;
+    sessionProtocol?: "free_chat";
+    sessionPlanning?: SessionPlanningPolicy;
     maxTurns?: number;
     perAttemptTimeoutMs?: number;
   };

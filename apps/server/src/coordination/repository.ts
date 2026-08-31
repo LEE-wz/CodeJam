@@ -634,18 +634,13 @@ export class DurableCoordinationRepository implements CoordinationRepository {
 
       const now = this.clock.nowIso();
       const artifact = structuredClone(input.artifact);
-      if (artifact.type === "session_message") {
+      // A plan joins the same total order as the messages it governs (P14-03),
+      // so the round it belongs to is unambiguous and the ledger renders in one
+      // sequence. It is evidence, not a line of the conversation.
+      if (artifact.type === "session_message" || artifact.type === "session_plan") {
         artifact.transcriptSequence = nextTranscriptSequence(database, run.id);
       }
 
-      // A countdown commit carries the next durable value forward in this same
-      // mutation as the artifact, attempt, turn, and event. The protocol has
-      // already checked the exact expected value; this defensive check keeps a
-      // malformed direct repository call from corrupting shared state.
-      const nextExpectedNumber = nextCountdownValue(run, artifact);
-      if (nextExpectedNumber === "invalid") {
-        return { kind: "stale" } as const;
-      }
       database.coordinationArtifacts.push(artifact);
 
       attempt.status = "succeeded";
@@ -666,9 +661,6 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       }
       if (artifact.type === "review") {
         run.latestReviewArtifactId = artifact.id;
-      }
-      if (typeof nextExpectedNumber === "number" && run.sharedState) {
-        run.sharedState.nextExpectedNumber = nextExpectedNumber;
       }
       run.version += 1;
       run.updatedAt = now;
@@ -1272,31 +1264,12 @@ const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND = {
   proposal_review: "review",
   finalization: "final",
   session_turn: "session_message",
+  session_plan: "session_plan",
 } as const satisfies Readonly<Record<CoordinationTurn["kind"], ArtifactType>>;
 
 const expectedArtifactTypeForTurn = (turn: CoordinationTurn): ArtifactType =>
   EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
 
-/**
- * Returns the state update that belongs in a successful countdown commit.
- * `undefined` means this is not a countdown session; `invalid` is never
- * persisted and leaves the active lease untouched for ordinary validation.
- */
-const nextCountdownValue = (
-  run: CoordinationRun,
-  artifact: CoordinationArtifact,
-): number | undefined | "invalid" => {
-  if (
-    artifact.type !== "session_message" ||
-    run.policy.workflow !== "shared_session_v1" ||
-    run.policy.sessionProtocol !== "countdown"
-  ) {
-    return undefined;
-  }
-
-  const value = Number(artifact.payload.content);
-  return Number.isInteger(value) && run.sharedState ? value - 1 : "invalid";
-};
 
 const nextTranscriptSequence = (database: Database, runId: CoordinationRunId): number =>
   database.coordinationArtifacts

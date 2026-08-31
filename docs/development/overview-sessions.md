@@ -18,19 +18,21 @@ frozen text still governs the code. Phase 9 is superseded by Phase 15.
 
 The problem statement's multi-agent coordination example requires: several Agents counting down from 10 to 1 in a shared conversation, one number per turn, in turn order, with a visible history of which Agent produced each number, and timeout/retry/stop rules. The verified handoff pipeline cannot demonstrate this because its Agents exchange typed review documents, not a shared conversation.
 
-**[v2, Phase 14]** The countdown *demo* remains; the countdown *protocol* does not.
-Ordered output is proved by a validated plan that assigns each participant a
-position, executed sequentially, with no numeric validator in the engine. That is
-a stronger claim: the ordering emerges from coordination the Agents performed,
-not from a rule the middleware hard-coded for one demo.
+**[v2, Phase 14 — shipped]** The countdown *demo* remains; the countdown
+*protocol* does not. Ordered output is produced by a validated `session_plan`
+that assigns each participant a position, executed sequentially, with no numeric
+validator anywhere in the engine. That is a stronger claim than the original: the
+ordering emerges from coordination the Agents performed and from what each one
+can read in the transcript, not from a rule the middleware hard-coded for one
+demo.
 
 The minimum coordination layer and how Relay Sessions meets it:
 
 | Minimum requirement | Relay Sessions feature |
 |---|---|
 | Shared session all Agents can read and write | The session is the committed message log. Every turn's prompt contains the full transcript. Agents write by publishing a validated message. |
-| Turn-selection or routing rule | Round-robin over an ordered participant list: next Agent = `participants[committedSessionTurns % N]`. |
-| Shared state preventing duplicate or skipped turns | `run.sharedState.nextExpectedNumber` plus a validator that accepts only the exact expected integer. Duplicate and stale prevention reuses the existing lease and version machinery unchanged. **[v2, Phase 14]** The countdown shared state is removed; duplicate and skipped turns are prevented by the committed-turn ledger, the lease, and the version check alone, which is what already prevented them for free chat. |
+| Turn-selection or routing rule | **[v2, Phase 14 — shipped]** A coordinator turn proposes a plan naming who answers, in what order, and with what instruction; the backend validates it structurally and executes it sequentially or as one parallel wave. Round-robin over the ordered participant list (`participants[committedSessionTurns % N]`) remains as the `round_robin` policy and the demo-safe fallback. |
+| Shared state preventing duplicate or skipped turns | **[v2, Phase 14 — shipped]** `run.sharedState` and its `nextExpectedNumber` are removed with the countdown protocol. Duplicate and skipped turns are prevented by the committed-turn ledger, the lease, and the version check alone, which is what already prevented them for free chat. A round's membership is derived from the committed plan and the committed messages that followed it, so a retry or a restart re-derives exactly the same remaining work. |
 | Visible event history showing who produced each number | The existing event ledger and evidence timeline, plus a chat-like transcript view in the web app. |
 | Timeout, retry, stop | The existing runtime gateway, reservation system, stop flow, and late-result fencing. Reused 100%. |
 
@@ -41,11 +43,11 @@ The verified handoff workflow remains a second workflow on the same engine. Noth
 **Build:**
 
 - A `shared_session_v1` workflow with 2 to 6 distinct pre-created Agents as ordered participants. **[v2, Phase 10]** The range becomes 2 to 10.
-- Round-robin turn selection owned by backend code. **[v2, Phase 14]** Round-robin remains the deterministic fallback (`sessionPlanning: "round_robin"`); the default becomes execution of a validated `session_plan`.
+- Round-robin turn selection owned by backend code. **[v2, Phase 14 — shipped]** Round-robin remains the deterministic fallback (`sessionPlanning: "round_robin"`); the default (`"coordinator"`) is execution of a validated `session_plan`.
 - Two session protocols on the same engine:
-  - `countdown`: each message must be exactly the expected next integer (the headline acceptance demo). **[v2, Phase 10]** No longer creatable from the UI. **[v2, Phase 14]** Removed from the engine; stored countdown runs remain readable.
+  - `countdown`: each message must be exactly the expected next integer (the original headline acceptance demo). **[v2, Phase 10]** No longer creatable from the UI. **[v2, Phase 14 — shipped]** Deleted from the engine. `SessionProtocol` is now the single member `"free_chat"`. Stored countdown runs keep their persisted fields and remain readable and renderable; no engine path schedules one.
   - `free_chat`: any bounded, non-empty message; the run completes when every participant's latest message carries `done: true`, or at `maxTurns`, or on user stop (general task collaboration). **[v2, Phase 10]** The only creatable protocol. **[v2, Phase 12]** Completion becomes an explicit user action; `done` stays advisory and ends the wave rather than the session.
-- `run.sharedState.nextExpectedNumber` as the durable shared state for countdown runs.
+- ~~`run.sharedState.nextExpectedNumber` as the durable shared state for countdown runs.~~ **[v2, Phase 14 — shipped]** Removed with the protocol.
 - A transcript-building context template that includes all committed session messages in order. **[v2, Phase 12]** User messages share the same durable total order and are interleaved with Agent messages.
 - The web form mode, transcript view, and session timeline labels.
 
@@ -165,9 +167,80 @@ present.
 - The `revision` field stays 0 for session runs.
 - On any session completion, the run's `finalArtifactId` points at the last committed session message. For countdown that is the message with value `1`; for free chat it is the closing message of the unanimous round, or the message that consumed `maxTurns`.
 
-## 6. Countdown protocol
+## 6. Session protocols
 
-### 6.1 Validation order (reuses overview.md Section 11.4)
+**[v2, Phase 14 — shipped]** The countdown protocol was deleted from the engine.
+Free chat is the only session protocol, and ordered demos are produced by
+coordinator planning (Section 6.1) rather than by an engine-side numeric rule.
+Sections 6.2 to 6.4 below record the deleted design for historical reference;
+they describe no code that still exists.
+
+### 6.1 Coordinator planning and the plan protocol
+
+After each user message, a session whose `policy.sessionPlanning` is
+`"coordinator"` (the default) schedules exactly one `session_plan` turn before
+any `session_turn` for that message. **The coordinator is the first participant**
+(recorded decision D3): the roster stays exactly what the user selected, and
+every plan is attributable to a real Agent.
+
+The plan payload is:
+
+```jsonc
+{ "schemaVersion": 1, "type": "session_plan",
+  "mode": "parallel" | "sequential",
+  "assignments": [ { "agentId": "<participant id>", "position": 1, "instruction": "<= 500 chars" } ] }
+```
+
+**Validation order** reuses overview.md Section 11.4 exactly: reject above
+`outputMaxChars`; trim; strip at most one outer JSON fence; `JSON.parse` once;
+expected artifact type for the turn kind; schema version; the strict bounded
+schema; then the protocol rule. The protocol rule is **purely structural**:
+
+- every `agentId` is a participant of this run;
+- agent ids are distinct;
+- `position` values are integers forming a contiguous run from 1 to the
+  assignment count;
+- the assignment count is between 1 and the participant count;
+- `instruction` is non-empty and bounded;
+- `mode` is one of the two literals.
+
+A rejection produces `INVALID_AGENT_OUTPUT` with a retry-safe message naming the
+structural problem (for example `Assignment positions must be contiguous from 1`)
+and **never quotes the rejected output**, because that output is precisely the
+untrusted text the validator exists to refuse. Rejections are retried through the
+existing per-turn retry path.
+
+The middleware judges no substance. It never asks whether the plan is a *good*
+plan, only whether it is a *well-formed, executable* one.
+
+**Execution.** `mode: "sequential"` schedules assignments strictly in `position`
+order, one turn at a time, so each contributor sees its predecessors' committed
+messages in the transcript. That visibility — not any engine rule about content —
+is what makes an ordered answer come out in order. `mode: "parallel"` schedules
+every outstanding assignment as one wave, bounded by `maxParallelTurns`
+(Phase 13). Either way the round ends when every assignment has committed, and
+the workflow returns `await_input`.
+
+**Derivation, not stored state.** A plan belongs to the current round when its
+`transcriptSequence` is higher than the active user message's. Nothing is stored
+on the run, so a retry never schedules a second plan and a restart between the
+plan commit and the first assignment re-derives the same remaining work.
+
+**Prompts.** The coordinator's prompt carries the roster with participant names
+and ids, the recent transcript, the new user message, and the plan output
+contract. A `session_turn` under an active plan additionally renders *its own*
+assignment instruction and position — never another participant's. As before,
+**no prompt ever states an expected answer.**
+
+**Fallback.** `policy.sessionPlanning: "round_robin"` schedules no planning turn
+and restores the deterministic Phase 13 behaviour. It is validated in the routes
+and the service, exposed in the create form, and read only from durable policy:
+no Agent output can change it. Stored sessions created before Phase 14 carry no
+`sessionPlanning` field and are read as `round_robin`.
+
+## 6A. Countdown protocol (deleted in Phase 14 — historical)
+
+### 6A.1 Validation order (reuses overview.md Section 11.4)
 
 1. Reject output above `outputMaxChars`.
 2. Trim whitespace.
@@ -177,32 +250,25 @@ present.
 6. Cross-field rule: `content` must parse as an integer equal to `run.sharedState.nextExpectedNumber`. Otherwise fail with `INVALID_AGENT_OUTPUT` and a retry-safe message: `Expected the next number <N>, received <X>`.
 7. Backend constructs provenance; Agent-supplied IDs are ignored, as today.
 
-### 6.2 Commit rule
+### 6A.2 Commit rule
 
-On accepting a session message with value `n`, the repository atomically sets `run.sharedState.nextExpectedNumber = n - 1` in the same store mutation that settles the turn and attempt, stores the immutable artifact, updates pointers, increments the version, and appends events. When `n === 1`, the next workflow decision completes the run. The versioned run plus the committed artifact list is the shared state; there is no separate state table.
+On accepting a session message with value `n`, the repository atomically set `run.sharedState.nextExpectedNumber = n - 1` in the same store mutation that settled the turn and attempt. When `n === 1`, the next workflow decision completed the run.
 
-### 6.3 Prompt rules (the honest demo boundary)
+### 6A.3 Prompt rules (the honest demo boundary)
 
-The session turn prompt contains the existing four-section envelope adapted for the session role:
+The prompt never stated the expected number; the Agent derived it from the transcript and the validator was the sole authority. **That property is preserved by Section 6.1**: ordering now comes from the plan and the transcript, and the engine still never states an expected answer.
 
-- The `[RELAY SYSTEM CONTRACT]` header.
-- `[COMMITTED INPUT ARTIFACTS]` rendered as the chronological transcript, each line `<AgentName>: <content>`, bounded by `contextMaxChars` using the existing deterministic truncation ladder (oldest entries truncated first, with the existing marker).
-- `[YOUR TASK]`: continue the countdown by publishing the next number, exactly one lower than the last number in the transcript, as the Agent's only message.
-- `[OUTPUT CONTRACT]` for `session_message`.
+### 6A.4 Retry and failure
 
-**The prompt must never state the expected number.** The Agent reads the shared transcript and derives it. The validator, not the prompt, is the authority. This is what makes the live wrong-number failure demo possible and keeps the middleware responsible for correctness.
-
-### 6.4 Retry and failure
-
-A wrong or malformed number follows the existing attempt algorithm unchanged: retry once on the same Agent with the validation errors, then fail the run with `MAX_ATTEMPTS_EXCEEDED`. Turn reassignment to another participant is explicit non-goal scope.
+A wrong or malformed number retried once on the same Agent, then failed the run with `MAX_ATTEMPTS_EXCEEDED`. Plan rejections follow the identical path.
 
 ### 6.5 Free-chat protocol
 
-- **Validation:** the same parsing order as 6.1 steps 1 to 5 (size, trim, one outer fence, one parse, strict schema with content 1..500). There is no cross-field numeric rule.
-- **Shared state:** free-chat runs have no `nextExpectedNumber`; `run.sharedState` stays absent.
-- **Prompt:** `[YOUR TASK]` instructs the Agent to contribute the next message toward the shared objective based on the transcript. The output contract is the same `session_message` shape. No expected value exists to state, so the countdown prompt rule has no free-chat equivalent.
+- **Validation:** the same parsing order as Section 6.1 (size, trim, one outer fence, one parse, expected type, schema version, strict schema with content 1..500). There is no cross-field numeric rule. **[v2, Phase 14 — shipped]** This is now the only message protocol.
+- **Shared state:** none. `run.sharedState` and `CoordinationSharedState` were deleted in Phase 14; stored pre-Phase-14 records keep the field and are returned unchanged for display.
+- **Prompt:** `[YOUR TASK]` instructs the Agent to contribute the next message toward the shared objective based on the transcript. **[v2, Phase 14 — shipped]** Under an active plan it also carries that participant's own assignment instruction and position (Section 6.1). The output contract is the same `session_message` shape. No expected value is ever stated.
 - **Completion:** the original workflow completed when **every participant's most recent committed message carried `done: true`** (unanimous consent across one full round), when all allowed turns were committed (`maxTurns`), or on user stop. **[v2, Phase 12]** Unanimous `done` now ends only the current *wave* and returns the session to `awaiting_input`, where it accepts another user prompt. Stop likewise cancels only the active wave. The session becomes terminal only on explicit user End, failure, or the hard `maxTurns` ceiling. End sets `finalArtifactId` to the last committed session message when one exists. The middleware coordinates turns and guarantees mechanics; it never judges message *substance*.
-- **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the current user request addressed; an Agent never ends a session. The wave rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. Unanimity needs at least one current-wave message from every participant, so a wave cannot end before `participantCount` committed turns. `done` is rejected on a countdown message, where the numeric validator is the sole authority.
+- **The `done` signal:** `SessionMessagePayload.done` is an optional boolean, free-chat only. It is advisory. An Agent may declare that it considers the current user request addressed; an Agent never ends a session. The wave rule is evaluated by backend code over committed artifacts, so Section 5.1's trust boundary is unchanged and one participant cannot truncate the collaboration. A later message from the same participant that omits the flag clears that participant's own signal. Unanimity needs at least one current-wave message from every participant, so a wave cannot end before `participantCount` committed turns. **[v2, Phase 14 — shipped]** The rule that rejected `done` on a countdown message went with the protocol; `done` is now valid on any session message.
 - **Retry and failure:** the attempt algorithm is identical (malformed or timed-out output retries once, then the run fails).
 
 ## 7. API changes

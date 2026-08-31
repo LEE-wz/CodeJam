@@ -18,7 +18,6 @@ import {
   PARTICIPANT_ONE,
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
-  countdownPayload,
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 import { DEFAULT_COORDINATION_POLICY } from "./types.js";
@@ -120,8 +119,8 @@ const proposalArtifact = (overrides: Partial<CoordinationArtifact> = {}): Coordi
 
 const sessionRunRecord = (overrides: Partial<CoordinationRun> = {}): CoordinationRun => ({
   id: "run-session",
-  name: "Countdown session",
-  objective: "Count down from 2 to 1 together.",
+  name: "Session",
+  objective: "Work through the shared objective together.",
   requiredSections: [],
   participants: [PARTICIPANT_ONE, PARTICIPANT_TWO, PARTICIPANT_THREE].map((agent) => ({
     role: "participant" as const,
@@ -133,15 +132,14 @@ const sessionRunRecord = (overrides: Partial<CoordinationRun> = {}): Coordinatio
     workflow: "shared_session_v1",
     maxRevisions: 0,
     maxTurns: 2,
-    sessionProtocol: "countdown",
-    sessionStartValue: 2,
+    sessionProtocol: "free_chat",
+    sessionPlanning: "round_robin",
   },
   status: "created",
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
   activeTurnIds: [],
-  sharedState: { nextExpectedNumber: 2 },
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
@@ -191,7 +189,7 @@ const sessionArtifact = (
     sizeChars: content.length,
     createdAt: "2026-08-29T00:00:00.000Z",
     type: "session_message",
-    payload: countdownPayload(Number(content)),
+    payload: { schemaVersion: 1, type: "session_message", content },
     ...overrides,
   }) as CoordinationArtifact;
 
@@ -205,8 +203,8 @@ const freeChatSessionRunRecord = (
     maxRevisions: 0,
     maxTurns: 12,
     sessionProtocol: "free_chat",
+    sessionPlanning: "round_robin",
   },
-  sharedState: undefined,
   ...overrides,
 });
 
@@ -1739,7 +1737,7 @@ describe("event ledger integrity", () => {
 // -------------------------------------- P7 shared-session durability gate
 
 describe("durable shared-session commits and races", () => {
-  it("commits a countdown message and decrements shared state in the same durable mutation", async () => {
+  it("commits a session message, its attempt, turn, and event in one durable mutation", async () => {
     const harness = await createHarness();
     await sessionWithRunningAttempt(harness);
 
@@ -1751,17 +1749,13 @@ describe("durable shared-session commits and races", () => {
       artifact: sessionArtifact("2"),
       outputDigest: "sha256:session-output",
     });
-    expect(result).toMatchObject({
-      kind: "committed",
-      run: { sharedState: { nextExpectedNumber: 1 } },
-    });
+    expect(result).toMatchObject({ kind: "committed" });
 
     const reloaded = new JsonStore((harness.store as unknown as { filePath: string }).filePath);
     await reloaded.initialize();
     const persistedRun = reloaded.snapshot().coordinationRuns.find(
       (run) => run.id === "run-session",
     );
-    expect(persistedRun).toMatchObject({ sharedState: { nextExpectedNumber: 1 } });
     expect(persistedRun?.activeTurnIds).toEqual([]);
     expect(reloaded.snapshot().coordinationArtifacts).toHaveLength(1);
     expect(reloaded.snapshot().coordinationEvents.map((event) => event.type)).toEqual([
@@ -1773,7 +1767,7 @@ describe("durable shared-session commits and races", () => {
     ]);
   });
 
-  it("persists a free-chat message without creating or changing countdown state", async () => {
+  it("persists a free-chat message and allocates its transcript sequence", async () => {
     const harness = await createHarness();
     await harness.repository.createRun({
       run: sessionRunRecord({
@@ -1784,7 +1778,6 @@ describe("durable shared-session commits and races", () => {
           maxTurns: 3,
           sessionProtocol: "free_chat",
         },
-        sharedState: undefined,
       }),
     });
     const started = await harness.repository.startRun("run-session");
@@ -1811,7 +1804,7 @@ describe("durable shared-session commits and races", () => {
         payload: freeChatPayload("Ready to close the checklist.", true),
       }),
     });
-    expect(committed).toMatchObject({ kind: "committed", run: { sharedState: undefined } });
+    expect(committed).toMatchObject({ kind: "committed" });
   });
 
   it("fences a superseded session attempt and a stop-racing result without mutating the transcript", async () => {
@@ -1854,7 +1847,7 @@ describe("durable shared-session commits and races", () => {
     })).toEqual({ kind: "stale" });
 
     const details = await harness.repository.getRunDetails("run-session");
-    expect(details?.run).toMatchObject({ status: "awaiting_input", sharedState: { nextExpectedNumber: 2 } });
+    expect(details?.run).toMatchObject({ status: "awaiting_input" });
     expect(details?.artifacts).toEqual([]);
     expect(details?.events.map((event) => event.sequence)).toEqual(
       details?.events.map((_event, index) => index + 1),
@@ -1909,8 +1902,8 @@ describe("durable user-message appends", () => {
       maxRevisions: 0,
       maxTurns: 20,
       sessionProtocol: "free_chat",
+      sessionPlanning: "round_robin",
     },
-    sharedState: undefined,
   });
 
   it("atomically starts a created session, appends once, and preserves admission checks", async () => {

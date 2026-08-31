@@ -44,13 +44,14 @@ import {
   VALID_PROPOSAL_OUTPUT,
 } from "./testing/fixtures.js";
 import {
-  CREATE_COUNTDOWN_REQUEST,
   CREATE_FREE_CHAT_REQUEST,
+  VALID_FREE_CHAT_OUTPUT,
+  EMPTY_CONTENT_OUTPUT,
+  UNANIMOUS_DONE_ROUND,
   PARTICIPANT_ONE,
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
   SESSION_PARTICIPANTS,
-  countdownPayload,
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 import { VerifiedHandoffWorkflowV1 } from "./workflow.js";
@@ -245,11 +246,19 @@ const createRun = async (app: FastifyInstance, overrides: Record<string, unknown
     payload: { ...CREATE_BODY, ...overrides },
   });
 
-const SESSION_COUNTDOWN_BODY = {
-  ...CREATE_COUNTDOWN_REQUEST,
-  // Keep the durable API test short while still exercising the shared-state
-  // transition through both a first and final countdown message.
-  policy: { sessionProtocol: "countdown", sessionStartValue: 2, maxTurns: 2 },
+/**
+ * The base session body for the durable API tests. Pinned to `round_robin`
+ * because these tests assert the deterministic turn order and the evidence
+ * ledger, not coordinator planning (P14-05); the planned path has its own
+ * suite in `session-plan-workflow.test.ts`.
+ */
+const SESSION_BODY = {
+  ...CREATE_FREE_CHAT_REQUEST,
+  policy: {
+    sessionProtocol: "free_chat" as const,
+    sessionPlanning: "round_robin" as const,
+    maxTurns: 6,
+  },
 };
 
 const createSessionRun = async (
@@ -260,7 +269,7 @@ const createSessionRun = async (
     method: "POST",
     url: "/api/coordination-runs",
     headers,
-    payload: { ...SESSION_COUNTDOWN_BODY, ...overrides },
+    payload: { ...SESSION_BODY, ...overrides },
   });
 
 // --------------------------------------------------------- P2-16 API surface
@@ -825,11 +834,10 @@ describe("evidence timeline through the real stack", () => {
 // -------------------------------- P7 durable session API and evidence gate
 
 describe("durable shared-session API", () => {
-  it("creates, starts, and exposes a countdown with durable shared state", async () => {
-    const { app } = await createStack([
-      succeeds(JSON.stringify(countdownPayload(2))),
-      succeeds(JSON.stringify(countdownPayload(1))),
-    ]);
+  it("creates, starts, and exposes a durable session transcript", async () => {
+    const { app } = await createStack(
+      UNANIMOUS_DONE_ROUND.map((payload) => succeeds(JSON.stringify(payload))),
+    );
     const created = await createSessionRun(app);
     expect(created.statusCode).toBe(201);
     const runId = (created.json() as { run: { id: string } }).run.id;
@@ -842,41 +850,30 @@ describe("durable shared-session API", () => {
     expect(started.statusCode).toBe(202);
 
     const details = (await settleHttp(app, runId)) as unknown as {
-      run: {
-        status: string;
-        phase: string;
-        sharedState?: { nextExpectedNumber: number };
-        finalArtifactId?: string;
-      };
+      run: { status: string; phase: string; finalArtifactId?: string };
       turns: Array<{ sequence: number; role: string; kind: string; status: string }>;
       attempts: Array<{ status: string; leaseToken?: string }>;
       artifacts: Array<{ id: string; type: string; payload: { content: string } }>;
       events: Array<{ sequence: number; type: string; details: Record<string, unknown> }>;
     };
 
-    expect(details.run).toMatchObject({
-      status: "completed",
-      phase: "done",
-      sharedState: { nextExpectedNumber: 0 },
-    });
+    expect(details.run).toMatchObject({ status: "awaiting_input", phase: "sessioning" });
     expect(details.turns.map((turn) => `${turn.sequence}:${turn.role}:${turn.kind}:${turn.status}`))
       .toEqual([
         "1:participant:session_turn:committed",
         "2:participant:session_turn:committed",
+        "3:participant:session_turn:committed",
       ]);
-    expect(details.artifacts.map(({ type, payload }) => `${type}:${payload.content}`)).toEqual([
-      "session_message:2",
-      "session_message:1",
+    expect(details.artifacts.map(({ type }) => type)).toEqual([
+      "session_message",
+      "session_message",
+      "session_message",
     ]);
-    expect(details.run.finalArtifactId).toBe(details.artifacts.at(-1)?.id);
     expect(details.attempts.every((attempt) => !("leaseToken" in attempt))).toBe(true);
     expect(details.events.map((event) => event.sequence)).toEqual(
       details.events.map((_event, index) => index + 1),
     );
-    expect(details.events.at(-1)).toMatchObject({
-      type: "run.completed",
-      details: { artifactType: "session_message" },
-    });
+    expect(details.events.at(-1)).toMatchObject({ type: "run.awaiting_input" });
   });
 
   it.each([
@@ -885,12 +882,8 @@ describe("durable shared-session API", () => {
     ["a verified-only requiredSections field", { requiredSections: [] }],
     ["a verified-only maxRevisions field", { policy: { maxRevisions: 1 } }],
     ["an unknown session protocol", { policy: { sessionProtocol: "other" } }],
-    ["a countdown start below range", { policy: { sessionStartValue: 1 } }],
-    ["a countdown ceiling below its start", { policy: { sessionStartValue: 4, maxTurns: 3 } }],
-    [
-      "a free-chat start value",
-      { policy: { sessionProtocol: "free_chat", sessionStartValue: 3, maxTurns: 3 } },
-    ],
+    ["a removed countdown start value", { policy: { sessionStartValue: 4 } }],
+    ["an unknown planning policy", { policy: { sessionPlanning: "auction" } }],
     ["a free-chat ceiling below range", { policy: { sessionProtocol: "free_chat", maxTurns: 2 } }],
   ])("rejects %s with a 400", async (_label, overrides) => {
     const { app } = await createStack();
@@ -912,7 +905,7 @@ describe("durable shared-session API", () => {
   it("keeps session start readiness and derived reservations atomic", async () => {
     const { app, runtime, store } = await createStack([deferred()]);
     const first = (await createSessionRun(app)).json() as { run: { id: string } };
-    const second = (await createSessionRun(app, { name: "Second countdown" })).json() as {
+    const second = (await createSessionRun(app, { name: "Second session" })).json() as {
       run: { id: string };
     };
 
@@ -957,7 +950,7 @@ describe("durable shared-session API", () => {
     if (attemptId) {
       runtime.resolveAttempt(attemptId, {
         kind: "succeeded",
-        rawOutput: JSON.stringify(countdownPayload(2)),
+        rawOutput: VALID_FREE_CHAT_OUTPUT,
       });
     }
     await settleHttp(app, first.run.id);
@@ -980,22 +973,21 @@ describe("durable shared-session API", () => {
 });
 
 describe("durable shared-session evidence timelines", () => {
-  it("records a wrong-number retry without advancing shared state prematurely", async () => {
+  it("records an invalid-output retry in the durable evidence ledger", async () => {
     const { app } = await createStack([
-      succeeds(JSON.stringify(countdownPayload(1))),
-      succeeds(JSON.stringify(countdownPayload(2))),
-      succeeds(JSON.stringify(countdownPayload(1))),
+      succeeds(EMPTY_CONTENT_OUTPUT),
+      ...UNANIMOUS_DONE_ROUND.map((payload) => succeeds(JSON.stringify(payload))),
     ]);
     const created = await createSessionRun(app);
     const runId = (created.json() as { run: { id: string } }).run.id;
     await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
 
     const details = (await settleHttp(app, runId)) as unknown as {
-      run: { status: string; sharedState?: { nextExpectedNumber: number } };
+      run: { status: string };
       attempts: Array<{ number: number; status: string }>;
       events: Array<{ type: string }>;
     };
-    expect(details.run).toMatchObject({ status: "completed", sharedState: { nextExpectedNumber: 0 } });
+    expect(details.run).toMatchObject({ status: "awaiting_input" });
     expect(details.attempts.slice(0, 2).map(({ number, status }) => `${number}:${status}`)).toEqual([
       "1:invalid_output",
       "2:succeeded",
@@ -1011,7 +1003,7 @@ describe("durable shared-session evidence timelines", () => {
           succeeds(JSON.stringify(freeChatPayload("Second idea."))),
           succeeds(JSON.stringify(freeChatPayload("Third idea."))),
         ],
-        body: { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 3 } },
+        body: { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 3, sessionPlanning: "round_robin" } },
       },
       {
         steps: [
@@ -1019,7 +1011,7 @@ describe("durable shared-session evidence timelines", () => {
           succeeds(JSON.stringify(freeChatPayload("I agree.", true))),
           succeeds(JSON.stringify(freeChatPayload("Complete.", true))),
         ],
-        body: { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 6 } },
+        body: { ...CREATE_FREE_CHAT_REQUEST, policy: { sessionProtocol: "free_chat", maxTurns: 6, sessionPlanning: "round_robin" } },
       },
     ];
 
@@ -1040,13 +1032,12 @@ describe("durable shared-session evidence timelines", () => {
         payload: { content: "Give me a concise answer", clientMessageId: `message-${runId}` },
       });
       const details = (await settleHttp(app, runId)) as unknown as {
-        run: { status: string; sharedState?: unknown; finalArtifactId?: string };
+        run: { status: string; finalArtifactId?: string };
         artifacts: Array<{ id: string; type: string }>;
         events: Array<{ sequence: number; type: string; details: Record<string, unknown> }>;
       };
       const hardCap = scenario.body.policy.maxTurns === 3;
       expect(details.run).toMatchObject({ status: hardCap ? "failed" : "awaiting_input" });
-      expect(details.run.sharedState).toBeUndefined();
       expect(details.run.finalArtifactId).toBeUndefined();
       expect(details.events.map((event) => event.sequence)).toEqual(
         details.events.map((_event, index) => index + 1),
@@ -1072,19 +1063,16 @@ describe("durable shared-session evidence timelines", () => {
     if (attemptId) {
       runtime.resolveAttempt(attemptId, {
         kind: "succeeded",
-        rawOutput: JSON.stringify(countdownPayload(2)),
+        rawOutput: VALID_FREE_CHAT_OUTPUT,
       });
     }
 
     const details = (await settleHttp(app, runId)) as unknown as {
-      run: { status: string; errorCode?: string; sharedState?: { nextExpectedNumber: number } };
+      run: { status: string; errorCode?: string };
       artifacts: unknown[];
       events: Array<{ sequence: number; type: string }>;
     };
-    expect(details.run).toMatchObject({
-      status: "awaiting_input",
-      sharedState: { nextExpectedNumber: 2 },
-    });
+    expect(details.run).toMatchObject({ status: "awaiting_input" });
     expect(details.artifacts).toEqual([]);
     expect(details.events.map((event) => event.type)).toEqual([
       "run.created",
@@ -1126,7 +1114,7 @@ describe("durable shared-session evidence timelines", () => {
     if (lateAttempt) {
       runtime.resolveAttempt(lateAttempt, {
         kind: "succeeded",
-        rawOutput: JSON.stringify(countdownPayload(2)),
+        rawOutput: VALID_FREE_CHAT_OUTPUT,
       });
     }
     await new Promise((resolve) => setImmediate(resolve));
@@ -1147,7 +1135,7 @@ describe("durable multi-prompt session API", () => {
     const { app, store } = await createStack(steps);
     const created = await createSessionRun(app, {
       name: "Three prompt session",
-      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+      policy: { sessionProtocol: "free_chat", maxTurns: 20, sessionPlanning: "round_robin" },
     });
     const runId = (created.json() as { run: { id: string; version: number } }).run.id;
     const versions: number[] = [];
@@ -1204,7 +1192,7 @@ describe("durable multi-prompt session API", () => {
   it("defuses duplicate sends and conflicts while a wave is running", async () => {
     const { app, runtime } = await createStack([deferred()]);
     const created = await createSessionRun(app, {
-      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+      policy: { sessionProtocol: "free_chat", maxTurns: 20, sessionPlanning: "round_robin" },
     });
     const runId = (created.json() as { run: { id: string } }).run.id;
     const first = await app.inject({
@@ -1245,7 +1233,7 @@ describe("durable multi-prompt session API", () => {
   it("separates stop from end and keeps an ended session immutable", async () => {
     const { app, runtime } = await createStack([deferred()]);
     const created = await createSessionRun(app, {
-      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+      policy: { sessionProtocol: "free_chat", maxTurns: 20, sessionPlanning: "round_robin" },
     });
     const runId = (created.json() as { run: { id: string } }).run.id;
     await app.inject({
@@ -1294,7 +1282,7 @@ describe("durable multi-prompt session API", () => {
       ),
     ]);
     const created = await createSessionRun(app, {
-      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+      policy: { sessionProtocol: "free_chat", maxTurns: 20, sessionPlanning: "round_robin" },
     });
     const runId = (created.json() as { run: { id: string } }).run.id;
     await app.inject({
@@ -1354,7 +1342,7 @@ describe("durable multi-prompt session API", () => {
       ),
     );
     const created = await createSessionRun(app, {
-      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+      policy: { sessionProtocol: "free_chat", maxTurns: 20, sessionPlanning: "round_robin" },
     });
     const runId = (created.json() as { run: { id: string } }).run.id;
     await app.inject({
@@ -1408,7 +1396,7 @@ describe("durable multi-prompt session API", () => {
       payload: { content: "Hello" },
     })).statusCode).toBe(404);
     const created = await createSessionRun(app, {
-      policy: { sessionProtocol: "free_chat", maxTurns: 20 },
+      policy: { sessionProtocol: "free_chat", maxTurns: 20, sessionPlanning: "round_robin" },
     });
     const runId = (created.json() as { run: { id: string } }).run.id;
     for (const payload of [

@@ -333,41 +333,26 @@ export class CoordinationService implements CoordinationServiceContract {
       throw new CoordinationError(404, "NOT_FOUND", "Selected Agent was not found");
     }
 
-    const protocol = input.policy?.sessionProtocol ?? "countdown";
-    if (protocol !== "countdown" && protocol !== "free_chat") {
+    // Free chat is the only session protocol (P14-07).
+    const protocol = input.policy?.sessionProtocol ?? "free_chat";
+    if (protocol !== "free_chat") {
       throw new CoordinationError(400, "VALIDATION_FAILED", "Session protocol is invalid");
     }
-    if (protocol === "free_chat" && input.policy?.sessionStartValue !== undefined) {
-      throw new CoordinationError(
-        400,
-        "VALIDATION_FAILED",
-        "Free-chat sessions do not accept a start value",
-      );
-    }
-    const startValue =
-      protocol === "countdown"
-        ? (input.policy?.sessionStartValue ?? SESSION_LIMITS.defaultStartValue)
-        : undefined;
-    const maxTurns =
-      input.policy?.maxTurns ??
-      (protocol === "countdown"
-        ? (startValue ?? SESSION_LIMITS.defaultStartValue)
-        : SESSION_LIMITS.defaultSessionTurns);
+    const maxTurns = input.policy?.maxTurns ?? SESSION_LIMITS.defaultSessionTurns;
     const maxParallelTurns =
       input.policy?.maxParallelTurns ?? Math.min(agentIds.length, 4);
+    // Coordinator planning is the Phase 14 default; `round_robin` is the
+    // deterministic fallback that restores Phase 13 behaviour with no planning
+    // turn, for when a model plans badly during a demo.
+    const sessionPlanning = input.policy?.sessionPlanning ?? "coordinator";
+    if (sessionPlanning !== "coordinator" && sessionPlanning !== "round_robin") {
+      throw new CoordinationError(400, "VALIDATION_FAILED", "Session planning policy is invalid");
+    }
 
     if (
-      (protocol === "countdown" &&
-        (!Number.isInteger(startValue) ||
-          startValue! < SESSION_LIMITS.minStartValue ||
-          startValue! > SESSION_LIMITS.maxStartValue ||
-          !Number.isInteger(maxTurns) ||
-          maxTurns < startValue! ||
-          maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
-      (protocol === "free_chat" &&
-        (!Number.isInteger(maxTurns) ||
-          maxTurns < SESSION_LIMITS.minSessionTurns ||
-          maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
+      !Number.isInteger(maxTurns) ||
+      maxTurns < SESSION_LIMITS.minSessionTurns ||
+      maxTurns > SESSION_LIMITS.maxSessionTurns ||
       !Number.isInteger(maxParallelTurns) ||
       maxParallelTurns < 1 ||
       maxParallelTurns > SESSION_LIMITS.maxParallelTurns ||
@@ -391,7 +376,7 @@ export class CoordinationService implements CoordinationServiceContract {
       sessionProtocol: protocol,
       sessionParallel: input.policy?.sessionParallel ?? false,
       maxParallelTurns,
-      ...(startValue !== undefined ? { sessionStartValue: startValue } : {}),
+      sessionPlanning,
       ...(input.policy?.perAttemptTimeoutMs !== undefined
         ? { perAttemptTimeoutMs: input.policy.perAttemptTimeoutMs }
         : {}),
@@ -419,7 +404,6 @@ export class CoordinationService implements CoordinationServiceContract {
       revision: 0,
       nextTurnSequence: 1,
       activeTurnIds: [],
-      ...(startValue !== undefined ? { sharedState: { nextExpectedNumber: startValue } } : {}),
       version: 1,
       createdAt: timestamp,
       updatedAt: timestamp,

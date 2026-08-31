@@ -5,6 +5,7 @@ import type {
   ReviewIssue,
   ReviewPayload,
   SessionMessagePayload,
+  SessionPlanPayload,
   UserMessagePayload,
 } from "./types.js";
 import { SESSION_LIMITS } from "./types.js";
@@ -97,6 +98,39 @@ export const sessionMessagePayloadSchema: z.ZodType<SessionMessagePayload> = z
   .transform(({ done, ...message }): SessionMessagePayload =>
     done === undefined ? message : { ...message, done },
   );
+
+/**
+ * The bounded plan schema (P14-01). It enforces only what a schema can: strict
+ * keys, literal `type`/`schemaVersion`, the two mode literals, a non-empty
+ * bounded instruction, and an assignment count within the widest possible
+ * participant range. The rules that need the run -- participant membership,
+ * distinct ids, contiguous positions, count against *this* run's roster -- are
+ * structural protocol rules and live in the artifact protocol, because a schema
+ * has no access to the run.
+ */
+export const sessionPlanPayloadSchema: z.ZodType<SessionPlanPayload> = z
+  .object({
+    schemaVersion: z.literal(COORDINATION_ARTIFACT_SCHEMA_VERSION),
+    type: z.literal("session_plan"),
+    mode: z.enum(["parallel", "sequential"]),
+    assignments: z
+      .array(
+        z
+          .object({
+            agentId: z.string().trim().min(1).max(128),
+            position: z.number().int().min(1).max(SESSION_LIMITS.maxParticipants),
+            instruction: z
+              .string()
+              .trim()
+              .min(1)
+              .max(SESSION_LIMITS.planInstructionMaxChars),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(SESSION_LIMITS.maxParticipants),
+  })
+  .strict();
 
 export const userMessagePayloadSchema: z.ZodType<UserMessagePayload> = z
   .object({

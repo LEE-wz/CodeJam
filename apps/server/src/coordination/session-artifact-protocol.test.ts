@@ -7,23 +7,19 @@ import {
 } from "./artifact-protocol.js";
 import { DeterministicIdGenerator, FIXED_NOW, FixedClock } from "./testing/controls.js";
 import {
-  COUNTDOWN_WITH_DONE_OUTPUT,
   EMPTY_CONTENT_OUTPUT,
-  FENCED_COUNTDOWN_OUTPUT,
+  FENCED_MESSAGE_OUTPUT,
   FORGED_PROVENANCE_OUTPUT,
-  NON_INTEGER_OUTPUT,
   OVERSIZE_CONTENT_OUTPUT,
   PARTICIPANT_ONE,
-  PROSE_COUNTDOWN_OUTPUT,
+  PROSE_MESSAGE_OUTPUT,
   SESSION_PARTICIPANTS,
-  VALID_COUNTDOWN_OUTPUT,
   VALID_FREE_CHAT_OUTPUT,
-  WRONG_NUMBER_OUTPUT,
 } from "./testing/session-fixtures.js";
 import type { CoordinationAttempt, CoordinationRun, CoordinationTurn } from "./types.js";
 import { DEFAULT_COORDINATION_POLICY, SESSION_LIMITS } from "./types.js";
 
-const runFor = (protocol: "countdown" | "free_chat"): CoordinationRun => ({
+const runFor = (): CoordinationRun => ({
   id: "run-session",
   name: "Session",
   objective: "Work together",
@@ -36,16 +32,14 @@ const runFor = (protocol: "countdown" | "free_chat"): CoordinationRun => ({
   policy: {
     ...DEFAULT_COORDINATION_POLICY,
     workflow: "shared_session_v1",
-    sessionProtocol: protocol,
-    maxTurns: protocol === "countdown" ? 10 : 6,
-    ...(protocol === "countdown" ? { sessionStartValue: 10 } : {}),
+    sessionProtocol: "free_chat",
+    maxTurns: 6,
   },
   status: "running",
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
   activeTurnIds: [],
-  ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 10 } } : {}),
   version: 1,
   createdAt: FIXED_NOW,
   updatedAt: FIXED_NOW,
@@ -83,10 +77,9 @@ const protocol = new SharedSessionArtifactProtocol({
 
 const validate = (
   rawOutput: string,
-  sessionProtocol: "countdown" | "free_chat" = "countdown",
   runOverrides: Partial<CoordinationRun> = {},
 ): ArtifactValidationResult => protocol.validate({
-  run: { ...runFor(sessionProtocol), ...runOverrides },
+  run: { ...runFor(), ...runOverrides },
   turn,
   attempt,
   rawOutput,
@@ -103,48 +96,41 @@ const accepted = (result: ArtifactValidationResult) => {
 };
 
 describe("SharedSessionArtifactProtocol", () => {
-  it("accepts the exact countdown number and constructs authoritative provenance", () => {
-    expect(accepted(validate(VALID_COUNTDOWN_OUTPUT))).toEqual({
+  it("accepts a bounded message and constructs authoritative provenance", () => {
+    expect(accepted(validate(VALID_FREE_CHAT_OUTPUT))).toEqual({
       id: "artifact-0001",
       runId: "run-session",
       turnId: "turn-session",
       createdByRole: "participant",
       createdByAgentId: PARTICIPANT_ONE.id,
-      sizeChars: VALID_COUNTDOWN_OUTPUT.length,
+      sizeChars: VALID_FREE_CHAT_OUTPUT.length,
       createdAt: FIXED_NOW,
       type: "session_message",
-      payload: { schemaVersion: 1, type: "session_message", content: "10" },
+      payload: {
+        schemaVersion: 1,
+        type: "session_message",
+        content: "Start with seller verification before any listing goes live.",
+      },
     });
   });
 
-  it.each([
-    [WRONG_NUMBER_OUTPUT, "Expected the next number 10, received 6"],
-    [NON_INTEGER_OUTPUT, "Expected the next number 10, received nine"],
-  ])("rejects a wrong or non-integer countdown message", (output, message) => {
-    expect(rejected(validate(output)).errors[0]?.message).toBe(message);
-  });
-
-  it("rejects done on countdown but accepts done in free chat", () => {
-    expect(rejected(validate(COUNTDOWN_WITH_DONE_OUTPUT)).errors[0]).toMatchObject({
-      path: "done",
-      message: "done is not allowed on countdown messages",
-    });
+  it("accepts the advisory done signal", () => {
     const done = JSON.stringify({
       schemaVersion: 1,
       type: "session_message",
       content: "We are finished.",
       done: true,
     });
-    expect(accepted(validate(done, "free_chat")).payload).toMatchObject({ done: true });
+    expect(accepted(validate(done)).payload).toMatchObject({ done: true });
   });
 
   it("accepts bounded free text without judging its substance", () => {
-    expect(accepted(validate(VALID_FREE_CHAT_OUTPUT, "free_chat")).type).toBe("session_message");
+    expect(accepted(validate(VALID_FREE_CHAT_OUTPUT)).type).toBe("session_message");
   });
 
   it("accepts one outer JSON fence and rejects surrounding prose", () => {
-    expect(accepted(validate(FENCED_COUNTDOWN_OUTPUT)).type).toBe("session_message");
-    expect(rejected(validate(PROSE_COUNTDOWN_OUTPUT)).errors[0]?.code).toBe("invalid_json");
+    expect(accepted(validate(FENCED_MESSAGE_OUTPUT)).type).toBe("session_message");
+    expect(rejected(validate(PROSE_MESSAGE_OUTPUT)).errors[0]?.code).toBe("invalid_json");
   });
 
   it.each([EMPTY_CONTENT_OUTPUT, OVERSIZE_CONTENT_OUTPUT])(
@@ -166,8 +152,8 @@ describe("SharedSessionArtifactProtocol", () => {
 
   it("applies outputMaxChars before JSON parsing", () => {
     const output = "x".repeat(20);
-    const result = rejected(validate(output, "free_chat", {
-      policy: { ...runFor("free_chat").policy, outputMaxChars: output.length - 1 },
+    const result = rejected(validate(output, {
+      policy: { ...runFor().policy, outputMaxChars: output.length - 1 },
     }));
     expect(result.code).toBe("OUTPUT_TOO_LARGE");
   });
@@ -178,8 +164,8 @@ describe("SharedSessionArtifactProtocol", () => {
       type: "session_message",
       content: "x".repeat(length),
     });
-    expect(validate(output(SESSION_LIMITS.messageMaxChars), "free_chat").ok).toBe(true);
-    expect(validate(output(SESSION_LIMITS.messageMaxChars + 1), "free_chat").ok).toBe(false);
+    expect(validate(output(SESSION_LIMITS.messageMaxChars)).ok).toBe(true);
+    expect(validate(output(SESSION_LIMITS.messageMaxChars + 1)).ok).toBe(false);
   });
 
   it("dispatches by durable workflow and keeps verified session provenance unreachable", () => {
@@ -188,9 +174,9 @@ describe("SharedSessionArtifactProtocol", () => {
       ids: new DeterministicIdGenerator(),
     });
     const dispatch = new CoordinationArtifactProtocolDispatchV1(verified, protocol);
-    expect(dispatch.validate({ run: runFor("countdown"), turn, attempt, rawOutput: VALID_COUNTDOWN_OUTPUT }).ok)
+    expect(dispatch.validate({ run: runFor(), turn, attempt, rawOutput: VALID_FREE_CHAT_OUTPUT }).ok)
       .toBe(true);
-    expect(verified.validate({ run: runFor("countdown"), turn, attempt, rawOutput: VALID_COUNTDOWN_OUTPUT }).ok)
+    expect(verified.validate({ run: runFor(), turn, attempt, rawOutput: VALID_FREE_CHAT_OUTPUT }).ok)
       .toBe(false);
   });
 });

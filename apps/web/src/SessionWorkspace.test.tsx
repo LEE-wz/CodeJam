@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "./types";
@@ -133,6 +133,8 @@ describe("SessionWorkspace", () => {
       agents: ["agent-planner", "agent-finalizer", "agent-critic"],
       policy: {
         sessionProtocol: "free_chat",
+        // P14-05: coordinator planning is the create-form default.
+        sessionPlanning: "coordinator",
         maxTurns: SESSION_LIMITS.defaultSessionTurns,
         perAttemptTimeoutMs: 120_000,
       },
@@ -492,5 +494,102 @@ describe("SessionWorkspace", () => {
     expect(style.maxHeight).toBe("34rem");
     expect(style.overflowY).toBe("auto");
     expect(transcript.children).toHaveLength(80);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * P14-08: the planning control and the plan as rendered evidence.
+ * ------------------------------------------------------------------ */
+
+describe("SessionWorkspace coordinator planning", () => {
+  it("offers a planning choice and sends round robin when it is selected", async () => {
+    const user = userEvent.setup();
+    const fixture = UI_SESSION_FIXTURES.freeChatPartial;
+    const created = { ...fixture, run: { ...fixture.run, id: "created-session", status: "created" as const } };
+    mockedApi.list.mockResolvedValueOnce({ runs: [] }).mockResolvedValue({ runs: [created.run] });
+    mockedApi.create.mockResolvedValue({ run: created.run });
+    mockedApi.detail.mockResolvedValue(created);
+
+    render(<SessionWorkspace agents={agents} />);
+    await user.click(await screen.findByRole("button", { name: "Create session" }));
+    await user.type(screen.getByLabelText("Objective"), "Agree a launch checklist.");
+
+    // The deterministic fallback is reachable from the form (P14-05).
+    await user.selectOptions(screen.getByLabelText(/Planning/), "round_robin");
+    await user.click(screen.getByRole("button", { name: "Create session" }));
+
+    await waitFor(() => expect(mockedApi.create).toHaveBeenCalledOnce());
+    expect(mockedApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policy: expect.objectContaining({ sessionPlanning: "round_robin" }),
+      }),
+    );
+  });
+
+  it("renders a committed plan as attributed evidence, not as a chat message", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const [first, second] = base.run.participants;
+    const planned = {
+      ...base,
+      run: {
+        ...base.run,
+        policy: { ...base.run.policy, sessionPlanning: "coordinator" as const },
+      },
+      artifacts: [
+        ...base.artifacts,
+        {
+          id: "artifact-plan-1",
+          runId: base.run.id,
+          turnId: base.turns[0]!.id,
+          type: "session_plan" as const,
+          payload: {
+            schemaVersion: 1 as const,
+            type: "session_plan" as const,
+            mode: "sequential" as const,
+            assignments: [
+              { agentId: second!.agentId, position: 2, instruction: "Add the mitigation." },
+              { agentId: first!.agentId, position: 1, instruction: "Open with the headline risk." },
+            ],
+          },
+          createdByRole: "participant" as const,
+          createdByAgentId: first!.agentId,
+          sizeChars: 180,
+          createdAt: base.run.createdAt,
+          transcriptSequence: 2,
+        },
+      ],
+    };
+    mockedApi.list.mockResolvedValue({ runs: [planned.run] });
+    mockedApi.detail.mockResolvedValue(planned);
+
+    render(<SessionWorkspace agents={agents} />);
+
+    const plan = await screen.findByRole("region", { name: "Round plan" });
+    expect(plan.textContent).toContain("Planned by");
+    expect(plan.textContent).toContain(first!.agentNameSnapshot);
+    expect(plan.textContent).toContain("sequential");
+
+    // Rendered in position order, not in the order the Agent listed them.
+    const entries = within(plan).getAllByRole("listitem").map((item) => item.textContent ?? "");
+    expect(entries[0]).toContain("Open with the headline risk.");
+    expect(entries[1]).toContain("Add the mitigation.");
+
+    // A plan is evidence, not a line of the conversation.
+    const transcript = screen.getByRole("list", { name: "Session transcript" });
+    expect(transcript.textContent).not.toContain("Open with the headline risk.");
+  });
+
+  it("shows the planning policy on the session state panel", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const planned = {
+      ...base,
+      run: { ...base.run, policy: { ...base.run.policy, sessionPlanning: "coordinator" as const } },
+    };
+    mockedApi.list.mockResolvedValue({ runs: [planned.run] });
+    mockedApi.detail.mockResolvedValue(planned);
+
+    render(<SessionWorkspace agents={agents} />);
+    const state = await screen.findByRole("region", { name: "Session state" });
+    expect(state.textContent).toContain("Coordinator");
   });
 });

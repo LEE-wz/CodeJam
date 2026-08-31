@@ -54,53 +54,21 @@ const verifiedCreateRunBody = z
 
 const sessionPolicySchema = z
   .object({
-    sessionProtocol: z.enum(["countdown", "free_chat"]).optional(),
-    sessionStartValue: z
-      .number()
-      .int()
-      .min(SESSION_LIMITS.minStartValue)
-      .max(SESSION_LIMITS.maxStartValue)
-      .optional(),
+    // Free chat is the only session protocol (P14-07). The field is still
+    // accepted so existing clients that send it keep working unchanged.
+    sessionProtocol: z.literal("free_chat").optional(),
     sessionParallel: z.boolean().optional(),
     maxParallelTurns: z.number().int().min(1).max(SESSION_LIMITS.maxParallelTurns).optional(),
-    // Countdown permits a two-turn 2 -> 1 run; free chat is tightened below.
-    maxTurns: z.number().int().min(2).max(SESSION_LIMITS.maxSessionTurns).optional(),
+    sessionPlanning: z.enum(["coordinator", "round_robin"]).optional(),
+    maxTurns: z
+      .number()
+      .int()
+      .min(SESSION_LIMITS.minSessionTurns)
+      .max(SESSION_LIMITS.maxSessionTurns)
+      .optional(),
     perAttemptTimeoutMs: z.number().int().min(10_000).max(180_000).optional(),
   })
-  .strict()
-  .superRefine((policy, context) => {
-    const protocol = policy.sessionProtocol ?? "countdown";
-    if (protocol === "free_chat") {
-      if (policy.sessionStartValue !== undefined) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["sessionStartValue"],
-          message: "Free-chat sessions do not accept a start value",
-        });
-      }
-      if (
-        policy.maxTurns !== undefined &&
-        policy.maxTurns < SESSION_LIMITS.minSessionTurns
-      ) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["maxTurns"],
-          message: "Free-chat sessions require at least three turns",
-        });
-      }
-      return;
-    }
-
-    const startValue = policy.sessionStartValue ?? SESSION_LIMITS.defaultStartValue;
-    const maxTurns = policy.maxTurns ?? startValue;
-    if (maxTurns < startValue) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["maxTurns"],
-        message: "Countdown maxTurns must be at least the session start value",
-      });
-    }
-  });
+  .strict();
 
 const sessionCreateRunBody = z
   .object({

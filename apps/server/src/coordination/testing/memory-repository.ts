@@ -277,20 +277,10 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     }
 
     const artifact = structuredClone(input.artifact);
-    if (artifact.type === "session_message") {
+    // Mirrors the durable repository: a plan joins the same total order as the
+    // messages it governs (P14-03), so the round it belongs to is unambiguous.
+    if (artifact.type === "session_message" || artifact.type === "session_plan") {
       artifact.transcriptSequence = this.nextTranscriptSequence(run.id);
-    }
-    let nextExpectedNumber: number | undefined;
-    if (
-      artifact.type === "session_message" &&
-      run.policy.workflow === "shared_session_v1" &&
-      run.policy.sessionProtocol === "countdown"
-    ) {
-      const value = Number(artifact.payload.content);
-      if (!Number.isInteger(value) || !run.sharedState) {
-        return { kind: "stale" };
-      }
-      nextExpectedNumber = value - 1;
     }
     this.artifacts.push(artifact);
     attempt.status = "succeeded";
@@ -302,9 +292,6 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     run.activeTurnIds = activeTurnIdsFor(run).filter((id) => id !== turn.id);
     if (artifact.type === "proposal") run.latestProposalArtifactId = artifact.id;
     if (artifact.type === "review") run.latestReviewArtifactId = artifact.id;
-    if (nextExpectedNumber !== undefined && run.sharedState) {
-      run.sharedState.nextExpectedNumber = nextExpectedNumber;
-    }
     run.version += 1;
     run.updatedAt = this.clock.nowIso();
     return {

@@ -1,14 +1,16 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (Checkpoint 13 complete: live six- and ten-participant waves passed)
+**Last audit:** 2026-08-31 (Phase 14 implemented on `phase-14`; Checkpoint 14 **not** closed)
 **Audited checkpoint:** Checkpoint 13 on `main` at `7985ca3`
-**Implementation branch:** `phase-13-parallel-waves` (merged to `main` at `7985ca3`)
+**Implementation branch:** `phase-14` (branched from `main` at `7985ca3`, not merged)
 **Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
 **Current phase:** Phase 14 - Coordinator Planning
-**Current gate:** Checkpoint 13 complete; `P14-01` is the next action.
+**Current gate:** `P14-01` through `P14-10` are implemented and green on the local
+runner. `P14-11` (the live ten-Agent rehearsal) is **not done**, so Checkpoint 14
+is **not** closed and Phase 14 stays `in_progress`.
 **Overall state:** Phases 0-8 and 10-13 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 14-15 `not_started`
+Phase 14 `in_progress`; Phase 15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -33,7 +35,7 @@ they name a past checkpoint.
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `complete` (Checkpoint 13 verified; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
-| 14 | Coordinator planning and countdown removal | `not_started` (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
+| 14 | Coordinator planning and countdown removal | `in_progress` - `P14-01`..`P14-10` complete, `P14-11` outstanding (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
@@ -47,13 +49,20 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Phase 13 is complete (Checkpoint 13 verified below). `P14-01` is
-the next action: add the `session_plan` turn kind, artifact type, strict bounded
-schema, and the exhaustive-map entries, per
-[`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md). Create a
-`phase-14` task branch from `main` first, and record the coordinator-identity
-decision (open question 3 in `session-v2-plan.md`) in
-`ASSUMPTIONS_AND_DECISIONS.md` before `P14-03` can start.
+**Resume here.** Phase 14 code is implemented on the `phase-14` branch and both
+workspaces typecheck, test, and build. Three things stand between it and
+Checkpoint 14, in order:
+
+1. **`P14-11` - the live rehearsal.** Not attempted. It needs ten real Agents, a
+   configured provider endpoint, and a Compose browser deployment. Run the
+   ordered prompt, the fan-out prompt, and a third prompt in the same session at
+   least three times, and record the **range**, the committed plan artifacts, and
+   at least one genuine plan rejection with its recovery.
+2. **Run the canonical Docker Compose gate.** The disposable-Compose `npm run
+   check` from the phase sheet was **not** run: the Docker daemon was unreachable
+   in the working environment. Everything below was measured on the host runner
+   instead, against a drifted dependency tree (see the caveat).
+3. Only then update this file to `complete` and set `P15-01` as the next action.
 
 ### Checkpoint 11 final verification
 
@@ -119,6 +128,85 @@ load repository-local secrets or runtime state.
 - `npm ci` reports the unchanged dependency audit finding: **1 moderate and 5
   high vulnerabilities**. Phase 12 changed no dependency versions; remediation
   remains release-hardening work.
+
+## Phase 14 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P14-01 | `complete` | `session_plan` added to `CoordinationTurnKind` and `ArtifactType`, with `SessionPlanPayload`/`SessionPlanAssignment`, the strict bounded `sessionPlanPayloadSchema`, and `SESSION_LIMITS.planInstructionMaxChars`. Adding the union member compile-failed four exhaustive `Record<CoordinationTurnKind, ...>` maps (`EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND`, `TURN_KIND_LABELS`, the repository copy, and the verified-handoff `expectedOutput`), exactly as P7-02 discipline intends; `ROLE_VISIBILITY`, `capPayload`, `OUTPUT_SHAPES`, and `OUTPUT_LIMITS` were widened alongside. |
+| P14-02 | `complete` | The structural validator runs after the frozen parsing order: participant membership, distinct ids, contiguous positions from 1, count within the roster, bounded non-empty instruction, literal mode. Rejections are `INVALID_AGENT_OUTPUT` and **echo no Agent-supplied value** - a forged agent id is refused without being quoted back. 22 tests in `session-plan-protocol.test.ts`. |
+| P14-03 | `complete` | `SharedSessionWorkflowV1` schedules exactly one `session_plan` turn per user message, assigned to `participants[0]` per the recorded D3 decision. Planning state is derived from committed artifacts (a plan whose `transcriptSequence` exceeds the active user message's), never stored, so a retry cannot duplicate it and a restart re-derives it. Plans are allocated a `transcriptSequence` on commit in both the durable and in-memory repositories. |
+| P14-04 | `complete` | `sequential` schedules assignments strictly in `position` order, one turn at a time; `parallel` emits one `schedule_wave`, still bounded by `maxParallelTurns`. The round returns `await_input` when every assignment has committed - including a partial plan that assigns fewer participants than the roster. |
+| P14-05 | `complete` | `policy.sessionPlanning: "coordinator" \| "round_robin"` defaults to `"coordinator"`, is validated in the route schema and the service, and is exposed as a create-form control. `round_robin` schedules no plan turn; stored pre-Phase-14 sessions carry no field and are read as `round_robin`. |
+| P14-06 | `complete` | A `session_turn` under an active plan renders **only its own** assignment instruction and its position in the round; the plan artifact is excluded from the transcript block so it is not read as a chat message. The `session_plan` prompt carries `Role: coordinator`, the roster with names and ids, the transcript, and the plan output contract. No prompt states an expected answer. |
+| P14-07 | `complete` | Countdown deleted from the engine: `SessionProtocol` is now the single member `"free_chat"`; `sessionStartValue`, `CoordinationSharedState`, `run.sharedState`, `nextCountdownValue`, the workflow branch, the protocol branch, the context-builder instruction, the route/service validation, and the `SESSION_LIMITS` start-value bounds are gone. **Stored history is untouched**: `normaliseRun` spreads a `structuredClone`, so legacy fields survive a read and are returned through the API. Two fixture tests assert it (see below). |
+| P14-08 | `complete` | Web: the planning control is on the create form, the committed plan renders as an attributed "Round plan" evidence card ordered by position (not as a transcript message), and the session-state panel shows the policy. The P10-07 legacy render path for stored countdown runs is retained deliberately. `overview-sessions.md` Sections 1, 2, 6.1 and 6.5 now describe planned ordering; the deleted countdown design is retained as historical Section 6A. The acceptance-demo change is recorded in `ASSUMPTIONS_AND_DECISIONS.md`. |
+| P14-09 | `complete` | 22 plan-validation tests: valid sequential/parallel, partial plans, out-of-array-order positions, non-participant id, duplicate ids, position 0, gapped positions, duplicated positions, over-roster count, zero assignments, oversized and empty instruction, unknown mode, prose-wrapped, unknown root and nested fields, bad schema version, plan-for-message-turn, message-for-plan-turn, non-session run. One test drives a real rejection through `RoleScopedContextBuilder` and proves the retry prompt names the rule and carries neither the rejected plan nor the lease. |
+| P14-10 | `complete` | 24 workflow tests across pure decisions and the real service: exactly one plan per user message, no duplicate after a rejection, sequential order by `position`, one parallel wave, `await_input` on completion, `round_robin` schedules no plan, legacy runs read as round robin, restart mid-round re-derives the same work, stop settles the whole planned round back to `awaiting_input`, two prompts plan separately, per-participant instruction isolation, coordinator roster prompt, and a live retry that commits exactly one plan. |
+| P14-11 | `not_started` | **Blocked in this environment.** Requires ten real Agents, a configured provider endpoint, and a Compose browser deployment. No live evidence is claimed. |
+
+### Phase 14 verification evidence
+
+- **Server: 571 tests across 30 files - 570 pass.** The single failure is
+  **pre-existing on `main`** and unrelated to Phase 14: `artifact-protocol.test.ts`
+  "neither stores nor acts on a `__proto__` key in Agent output". It was
+  reproduced on a clean stash of `main` before any Phase 14 code was written.
+  Cause: the installed `zod` is **4.5.4** while `package-lock.json` pins **4.4.3**,
+  and the newer zod reports a JSON-parsed `__proto__` own-property as an
+  unrecognised key under `.strict()` instead of ignoring it. This will bite the
+  project the next time the lockfile is refreshed; see "Known blockers and risks".
+- **Web: 47 tests across 3 files - all pass** (44 pre-existing plus 3 new
+  planning tests).
+- Both workspace typechecks pass; both production builds succeed
+  (`apps/web/dist` 232.42 kB JS, `apps/server/dist/index.js`).
+- Net diff: **25 files changed, 1,292 insertions, 814 deletions**, plus two new
+  test files.
+
+### Phase 14 environment caveats - read before trusting the numbers above
+
+- **The canonical Docker Compose gate was not run.** The Docker CLI is installed
+  (29.7.2 / Compose v5.4.0) but the daemon was not reachable, and starting it is
+  a host action outside this environment. Every number above comes from the host
+  runner.
+- **The host dependency tree is drifted from the lockfile.** 36 packages differ
+  from `package-lock.json`, including `zod` (4.4.3 to 4.5.4) and `fastify`
+  (5.10.0 to 5.12.1). `npm ci` could not be run to correct it: a Semgrep Guardian
+  hook in the working environment blocks `npm` and `npx` invocations pending an
+  authentication this session could not perform. A missing
+  `@rollup/rollup-darwin-arm64` binary (the known npm optional-dependency bug)
+  was repaired with a no-save install, which left `package.json` and
+  `package-lock.json` untouched.
+- **Consequence:** Checkpoint 14 cannot be claimed from this run. Re-run the
+  phase sheet's disposable-Compose gate on a host with a working daemon, confirm
+  the `__proto__` test passes under the locked `zod` 4.4.3, then perform `P14-11`.
+
+### Phase 14 recorded test changes
+
+No test was deleted to make a change pass. Three categories of change occurred,
+each a consequence of a deliberate contract change:
+
+1. **Pinned, not weakened.** `CREATE_FREE_CHAT_REQUEST` and the durable
+   wave/multi-prompt suites now pass `sessionPlanning: "round_robin"`
+   explicitly. Those tests assert round-robin and parallel-wave mechanics, which
+   is exactly what `round_robin` continues to name; P14-05 changed only the
+   *default*. The behaviour each test proves is unchanged.
+2. **Retargeted, not dropped.** Tests that used countdown payloads as a vehicle
+   for *generic* session-message behaviour - fences, prose, empty and oversize
+   content, forged provenance, retry-on-invalid, timeout retry, stop fencing -
+   were retargeted at free chat so the coverage survives the protocol deletion.
+   `EMPTY_CONTENT_OUTPUT`, `OVERSIZE_CONTENT_OUTPUT`, `FORGED_PROVENANCE_OUTPUT`,
+   `FENCED_MESSAGE_OUTPUT`, and `PROSE_MESSAGE_OUTPUT` are the retargeted
+   fixtures.
+3. **Deleted with the protocol.** Only assertions about countdown *semantics*
+   were removed: exact-next-integer validation, `done`-rejected-on-countdown,
+   shared-state decrement, countdown completion at 1, countdown turn-ceiling,
+   and the countdown start-value policy table.
+
+Two new fixture tests replace them and discharge the P14-07 compatibility
+requirement: a stored `LEGACY_COUNTDOWN_RUN` still loads and reads back with its
+`sharedState`, `sessionProtocol: "countdown"`, and `sessionStartValue` intact,
+and a stored live countdown run is refused by the workflow with `INVALID_STATE`
+rather than being scheduled.
 
 ## Phase 13 task ledger
 
@@ -805,6 +893,7 @@ no task was promoted on a host-only or focused run.
 |---|---|---|
 | Shared ChatGPT context inaccessible in this environment | Possible decisions outside `overview.md` were not audited. | Copy any missing decisions into `ASSUMPTIONS_AND_DECISIONS.md`; overview remains current authority. |
 | Code ahead of gates | Merged code can create false confidence about completion. | Retain `implemented_unverified` until required phase evidence passes. |
+| `zod` 4.5.4 breaks a passing security test | The `__proto__` regression test in `artifact-protocol.test.ts` fails on any tree resolving `zod` above the locked 4.4.3, because `.strict()` now rejects a JSON-parsed `__proto__` own property as an unrecognised key. `apps/server/package.json` declares `"zod": "^4.1.13"`, so a lockfile refresh will pick this up. The *product* behaviour is arguably fine - the payload is refused rather than accepted - but the test asserts acceptance, so decide deliberately: pin `zod`, or update the test to assert rejection. Found 2026-08-31 during Phase 14; pre-existing on `main`. | Decide before the Phase 15 release review. |
 | Dependency audit reports 6 findings | Later security/release review must assess 1 moderate and 5 high findings without blindly applying breaking upgrades. | Review in the appropriate dependency/security task before release. |
 | ~~Detail response exposes lease tokens~~ | Resolved by a public attempt read model that omits the internal capability. | Closed 2026-08-30; API and live smoke assert absence. |
 | ~~Current Agent cancellation is keyed by Agent ID~~ | Resolved by `cancelRun(agentRunId)` plus an active-run ownership guard; the provider's Agent-keyed primitive is invoked only while that exact run still owns the Agent. | Closed 2026-08-30; stale-run regression passes. |

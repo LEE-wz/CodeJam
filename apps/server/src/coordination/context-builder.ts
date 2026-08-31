@@ -14,7 +14,9 @@ import type {
   CoordinationRun,
   CoordinationTurn,
   CoordinationTurnKind,
+  SessionPlanPayload,
 } from "./types.js";
+import { SESSION_LIMITS } from "./types.js";
 
 export type {
   ContextBuilder,
@@ -120,8 +122,19 @@ const capPayload = (payload: ArtifactPayload, cap: number): unknown => {
   if (payload.type === "final") {
     return { ...payload, content: capText(payload.content, cap) };
   }
-  // Session messages are explicit here so future artifact members cannot fall
-  // through into transcript handling by coincidence.
+  if (payload.type === "session_plan") {
+    // Agent ids, positions, and the mode are the executable part of a plan and
+    // are never shortened; only the free-text instruction degrades.
+    return {
+      ...payload,
+      assignments: payload.assignments.map((assignment) => ({
+        ...assignment,
+        instruction: capText(assignment.instruction, cap),
+      })),
+    };
+  }
+  // Session and user messages are explicit here so future artifact members
+  // cannot fall through into transcript handling by coincidence.
   return { ...payload, content: capText(payload.content, cap) };
 };
 
@@ -131,7 +144,7 @@ const capPayload = (payload: ArtifactPayload, cap: number): unknown => {
  * role by asking.
  */
 const VERIFIED_TASK_INSTRUCTIONS: Readonly<
-  Record<Exclude<CoordinationTurnKind, "session_turn">, string>
+  Record<Exclude<CoordinationTurnKind, "session_turn" | "session_plan">, string>
 > = {
   initial_proposal:
     "Produce one proposal that covers each required section key exactly once. Use the required section keys verbatim.",
@@ -143,11 +156,47 @@ const VERIFIED_TASK_INSTRUCTIONS: Readonly<
     "Turn the approved proposal into one polished final response. Do not add workflow decisions, approvals, or commitments that the approved material does not support.",
 };
 
+/**
+ * The coordinator's instruction (P14-06). It describes the decision to be made
+ * and the trust boundary that constrains it: the plan is a proposal, and the
+ * backend validates and executes it. No expected answer to the user's request
+ * is ever stated here -- ordered output must emerge from sequential scheduling
+ * plus transcript visibility, never from the engine dictating content.
+ */
+const PLAN_TASK_INSTRUCTION = [
+  "Plan how the participants above should answer the most recent User message.",
+  "Choose the mode, choose which participants contribute, order them, and give each one a specific instruction.",
+  "Use sequential mode when a contribution must build on the one before it, and parallel mode when the contributions are independent.",
+  "You may assign fewer participants than the roster holds. The backend validates and executes this plan; it is not executed as written unless it is well formed.",
+].join(" ");
+
 const taskInstruction = (run: CoordinationRun, turn: CoordinationTurn): string => {
+  if (turn.kind === "session_plan") return PLAN_TASK_INSTRUCTION;
   if (turn.kind !== "session_turn") return VERIFIED_TASK_INSTRUCTIONS[turn.kind];
-  return run.policy.sessionProtocol === "free_chat"
-    ? "Respond to the most recent User message and contribute the next message toward the shared objective based on the transcript. Set done to true only when you consider the current user request fully addressed; the backend decides when the wave ends."
-    : "Continue the countdown by publishing the next number exactly one lower than the last number in the transcript. If the transcript is empty, derive the starting number from the objective.";
+  return "Respond to the most recent User message and contribute the next message toward the shared objective based on the transcript. Set done to true only when you consider the current user request fully addressed; the backend decides when the wave ends.";
+};
+
+/**
+ * This participant's own line of the committed plan, rendered into its task
+ * section (P14-06).
+ *
+ * Only the assignment addressed to `agentId` is rendered, so a participant
+ * never reads another participant's instruction text. The position is included
+ * because a sequential contribution needs to know where it sits in the round;
+ * the transcript above it already shows what its predecessors actually said.
+ */
+const assignmentLines = (
+  plan: SessionPlanPayload | undefined,
+  agentId: string,
+  cap: number,
+): string[] => {
+  const assignment = plan?.assignments.find((entry) => entry.agentId === agentId);
+  if (!plan || !assignment) return [];
+  return [
+    "",
+    `Your assignment for this round (position ${assignment.position} of ${plan.assignments.length}, ${plan.mode} mode):`,
+    `  ${capText(assignment.instruction, cap)}`,
+  ];
 };
 
 const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
@@ -162,6 +211,10 @@ const OUTPUT_SHAPES: Readonly<Record<ArtifactType, string>> = {
   ].join(""),
   final: '{"schemaVersion":1,"type":"final","title":"<string>","content":"<string>"}',
   session_message: '{"schemaVersion":1,"type":"session_message","content":"<string>"}',
+  session_plan: [
+    '{"schemaVersion":1,"type":"session_plan","mode":"parallel"|"sequential",',
+    '"assignments":[{"agentId":"<participant id>","position":1,"instruction":"<string>"}]}',
+  ].join(""),
   user_message: '{"schemaVersion":1,"type":"user_message","content":"<string>"}',
 };
 
@@ -170,10 +223,27 @@ const OUTPUT_LIMITS: Readonly<Record<ArtifactType, string>> = {
   review: `0-${ARTIFACT_SCHEMA_LIMITS.reviewIssues} issues; each message <= ${ARTIFACT_SCHEMA_LIMITS.reviewIssueMessageChars} and feedback <= ${ARTIFACT_SCHEMA_LIMITS.reviewFeedbackChars} characters. A rejecting review lists at least one issue; an approving review lists none.`,
   final: `title <= ${ARTIFACT_SCHEMA_LIMITS.titleChars} and content <= ${ARTIFACT_SCHEMA_LIMITS.finalContentChars} characters.`,
   session_message: "content must be non-empty and <= 500 characters.",
+  session_plan: `Use "sequential" when later contributions depend on earlier ones, and "parallel" when they are independent. Assign at most one entry per participant, use only the participant ids listed above, number positions contiguously from 1, and keep each instruction non-empty and <= ${SESSION_LIMITS.planInstructionMaxChars} characters.`,
   user_message: "content must be non-empty and <= 4,000 characters.",
 };
 
 const buildContractSection = (run: CoordinationRun, turn: CoordinationTurn): string => {
+  if (turn.kind === "session_plan") {
+    // The coordinator is the one role that must be shown participant ids: a
+    // plan names the Agents it assigns, so the ids are the vocabulary of its
+    // output contract. This is unrelated to artifact ids, which stay withheld
+    // from every prompt so no Agent can echo one back as forged provenance.
+    const roster = run.participants
+      .map(({ agentId, agentNameSnapshot }) => `  - ${agentNameSnapshot} (${agentId})`)
+      .join("\n");
+    return [
+      SECTION.contract,
+      `Role: coordinator`,
+      `Objective: ${run.objective}`,
+      "Participants:",
+      roster,
+    ].join("\n");
+  }
   if (turn.kind === "session_turn") {
     return [SECTION.contract, `Role: ${turn.role}`, `Objective: ${run.objective}`].join("\n");
   }
@@ -201,7 +271,13 @@ const ROLE_VISIBILITY: Readonly<Record<CoordinationTurnKind, readonly ArtifactTy
   proposal_review: ["proposal"],
   proposal_revision: ["proposal", "review"],
   finalization: ["proposal", "review"],
-  session_turn: ["session_message", "user_message"],
+  // A session turn also reads the committed plan for the current round, so the
+  // builder can hand this participant *its own* assignment (P14-06). The plan
+  // is not rendered as a transcript message.
+  session_turn: ["session_message", "user_message", "session_plan"],
+  // The coordinator reads the conversation it is planning for, and nothing else.
+  // It never reads an earlier plan: each round is planned from the transcript.
+  session_plan: ["session_message", "user_message"],
 };
 
 /**
@@ -225,10 +301,10 @@ const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[
       .map((artifact) => [artifact.id, artifact] as const),
   );
 
-  if (input.turn.kind === "session_turn") {
+  if (input.turn.kind === "session_turn" || input.turn.kind === "session_plan") {
     return input.turn.inputArtifactIds.flatMap((id) => {
       const artifact = byId.get(id);
-      return artifact?.type === "session_message" || artifact?.type === "user_message"
+      return artifact && (allowed as readonly ArtifactType[]).includes(artifact.type)
         ? [artifact]
         : [];
     }).sort((left, right) => {
@@ -313,8 +389,15 @@ const buildTaskSection = (
   turn: CoordinationTurn,
   retryValidationErrors: string[],
   fieldCap: number,
+  plan: SessionPlanPayload | undefined,
 ): string => {
-  const lines = [SECTION.task, taskInstruction(run, turn)];
+  const lines = [
+    SECTION.task,
+    taskInstruction(run, turn),
+    ...(turn.kind === "session_turn"
+      ? assignmentLines(plan, turn.agentId, fieldCap)
+      : []),
+  ];
   const feedback = [...new Set(retryValidationErrors)].filter(
     (entry) => entry.trim().length > 0,
   );
@@ -334,7 +417,7 @@ const buildOutputSection = (run: CoordinationRun, expected: ArtifactType): strin
   [
     SECTION.output,
     "Return exactly one JSON object matching this schema.",
-    expected === "session_message" && run.policy.sessionProtocol === "free_chat"
+    expected === "session_message"
       ? '{"schemaVersion":1,"type":"session_message","content":"<string>","done":<optional boolean>}'
       : OUTPUT_SHAPES[expected],
     OUTPUT_LIMITS[expected],
@@ -409,14 +492,22 @@ export const digestPrompt = (prompt: string): string =>
 export class RoleScopedContextBuilder implements ContextBuilder {
   build(input: ContextBuildInput): PromptEnvelope {
     const expected = EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[input.turn.kind];
-    const visible = selectVisibleArtifacts(input);
+    const selected = selectVisibleArtifacts(input);
+    // The plan governs the round; it is not a line of the conversation. Keeping
+    // it out of `visible` leaves the transcript-window arithmetic below working
+    // on messages only, and delivers the assignment through the task section.
+    const plan = selected.findLast(
+      (artifact): artifact is Extract<CoordinationArtifact, { type: "session_plan" }> =>
+        artifact.type === "session_plan",
+    )?.payload;
+    const visible = selected.filter((artifact) => artifact.type !== "session_plan");
     const contract = buildContractSection(input.run, input.turn);
     const output = buildOutputSection(input.run, expected);
     const limit = input.run.policy.contextMaxChars;
     const newestUserIndex = visible.findLastIndex((artifact) => artifact.type === "user_message");
 
     const candidates =
-      input.turn.kind === "session_turn"
+      input.turn.kind === "session_turn" || input.turn.kind === "session_plan"
         ? sessionCandidates(
             input.run.participants.length,
             visible.length,
@@ -438,7 +529,7 @@ export class RoleScopedContextBuilder implements ContextBuilder {
           sessionTruncatedCount,
           windowStart,
         ),
-        buildTaskSection(input.run, input.turn, input.retryValidationErrors, fieldCap),
+        buildTaskSection(input.run, input.turn, input.retryValidationErrors, fieldCap, plan),
         output,
       ].join("\n\n");
 

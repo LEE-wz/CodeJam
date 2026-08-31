@@ -11,6 +11,10 @@
  */
 import type { CoordinationAgentView } from "../contracts.js";
 import type {
+  CoordinationRun,
+  SessionPlanAssignment,
+  SessionPlanMode,
+  SessionPlanPayload,
   CoordinationArtifact,
   CoordinationEventType,
   CreateSessionRunRequest,
@@ -81,8 +85,6 @@ export const SESSION_PARTICIPANTS_FOUR = [
  * Create requests.
  * ------------------------------------------------------------------ */
 
-export const SESSION_START_VALUE = SESSION_LIMITS.defaultStartValue;
-
 /**
  * Turn ceiling for the free-chat fixtures. Deliberately a fixture constant
  * rather than `SESSION_LIMITS.defaultSessionTurns`: the session default is 200
@@ -92,22 +94,8 @@ export const SESSION_START_VALUE = SESSION_LIMITS.defaultStartValue;
  */
 export const FREE_CHAT_FIXTURE_TURNS = 6;
 
-export const COUNTDOWN_OBJECTIVE = "Count down from 10 to 1 together, one number per turn.";
-
 export const FREE_CHAT_OBJECTIVE =
   "Agree a three-point launch checklist for the student marketplace.";
-
-export const CREATE_COUNTDOWN_REQUEST: CreateSessionRunRequest = {
-  workflow: "shared_session_v1",
-  name: "Countdown session",
-  objective: COUNTDOWN_OBJECTIVE,
-  agents: SESSION_PARTICIPANTS.map((agent) => agent.id),
-  policy: {
-    sessionProtocol: "countdown",
-    sessionStartValue: SESSION_START_VALUE,
-    maxTurns: SESSION_START_VALUE,
-  },
-};
 
 export const CREATE_FREE_CHAT_REQUEST: CreateSessionRunRequest = {
   workflow: "shared_session_v1",
@@ -115,57 +103,44 @@ export const CREATE_FREE_CHAT_REQUEST: CreateSessionRunRequest = {
   objective: FREE_CHAT_OBJECTIVE,
   agents: SESSION_PARTICIPANTS.map((agent) => agent.id),
   policy: {
+    // Pinned to the deterministic policy this fixture has always described.
+    // Phase 14 changed the *default* to "coordinator" (P14-05); every test
+    // built on this fixture asserts round-robin or parallel-wave mechanics,
+    // which is exactly what "round_robin" continues to name.
+    sessionPlanning: "round_robin",
+    sessionProtocol: "free_chat",
+    maxTurns: FREE_CHAT_FIXTURE_TURNS,
+  },
+};
+
+/** A free-chat session that plans each round through its first participant. */
+export const CREATE_PLANNED_SESSION_REQUEST: CreateSessionRunRequest = {
+  ...CREATE_FREE_CHAT_REQUEST,
+  name: "Planned session",
+  policy: {
+    sessionPlanning: "coordinator",
     sessionProtocol: "free_chat",
     maxTurns: FREE_CHAT_FIXTURE_TURNS,
   },
 };
 
 /* ------------------------------------------------------------------ *
- * Countdown payloads and raw outputs.
+ * Free-chat payloads and the done signal.
  * ------------------------------------------------------------------ */
 
-export const countdownPayload = (value: number): SessionMessagePayload => ({
-  schemaVersion: 1,
-  type: "session_message",
-  content: String(value),
-});
+export const freeChatPayload = (content: string, done?: boolean): SessionMessagePayload =>
+  done === undefined
+    ? { schemaVersion: 1, type: "session_message", content }
+    : { schemaVersion: 1, type: "session_message", content, done };
 
-/** The full 10 -> 1 transcript, in commit order. */
-export const COUNTDOWN_TRANSCRIPT: readonly SessionMessagePayload[] = Array.from(
-  { length: SESSION_START_VALUE },
-  (_unused, index) => countdownPayload(SESSION_START_VALUE - index),
-);
-
-/**
- * Which participant publishes each number, by round-robin over three
- * participants: One publishes 10, Two publishes 9, Three publishes 8, and so on.
- */
-export const countdownAuthorFor = (
-  turnIndex: number,
-  participants: readonly CoordinationAgentView[] = SESSION_PARTICIPANTS,
-): CoordinationAgentView => {
-  const participant = participants[turnIndex % participants.length];
-  if (!participant) {
-    throw new Error("countdownAuthorFor requires a non-empty participant list");
-  }
-  return participant;
-};
-
-export const VALID_COUNTDOWN_OUTPUT = JSON.stringify(countdownPayload(SESSION_START_VALUE));
-
-/** The headline failure case: 6 published when 8 was expected. */
-export const WRONG_NUMBER_OUTPUT = JSON.stringify(countdownPayload(6));
-export const WRONG_NUMBER_EXPECTED = 8;
-
-/** Skips by two -- the mischievous demo Agent's signature mistake. */
-export const SKIPPED_NUMBER_OUTPUT = JSON.stringify(countdownPayload(8));
-export const SKIPPED_NUMBER_EXPECTED = 9;
-
-export const NON_INTEGER_OUTPUT = JSON.stringify({
-  schemaVersion: 1,
-  type: "session_message",
-  content: "nine",
-});
+/* ------------------------------------------------------------------ *
+ * Message-shape fixtures.
+ *
+ * These pin the shared-session *message* protocol -- size, emptiness, fences,
+ * prose, forged provenance -- independently of any protocol rule. They were
+ * countdown payloads until P14-07 deleted that protocol; the shapes they test
+ * are unchanged, so they were retargeted at free chat rather than deleted.
+ * ------------------------------------------------------------------ */
 
 export const EMPTY_CONTENT_OUTPUT = JSON.stringify({
   schemaVersion: 1,
@@ -179,36 +154,14 @@ export const OVERSIZE_CONTENT_OUTPUT = JSON.stringify({
   content: "x".repeat(SESSION_LIMITS.messageMaxChars + 1),
 });
 
-export const FENCED_COUNTDOWN_OUTPUT = `\`\`\`json\n${VALID_COUNTDOWN_OUTPUT}\n\`\`\``;
-
-/** Prose around the JSON: rejected, because the parser never searches prose. */
-export const PROSE_COUNTDOWN_OUTPUT = `Sure! Here you go:\n${VALID_COUNTDOWN_OUTPUT}`;
-
 /** Agent-supplied identity is ignored; the backend constructs provenance. */
 export const FORGED_PROVENANCE_OUTPUT = JSON.stringify({
   schemaVersion: 1,
   type: "session_message",
-  content: "10",
+  content: "Seller verification first.",
   id: "artifact-forged",
   createdByAgentId: PARTICIPANT_THREE.id,
 });
-
-/** `done` is free-chat only; a countdown message carrying it is rejected. */
-export const COUNTDOWN_WITH_DONE_OUTPUT = JSON.stringify({
-  schemaVersion: 1,
-  type: "session_message",
-  content: "10",
-  done: true,
-});
-
-/* ------------------------------------------------------------------ *
- * Free-chat payloads and the done signal.
- * ------------------------------------------------------------------ */
-
-export const freeChatPayload = (content: string, done?: boolean): SessionMessagePayload =>
-  done === undefined
-    ? { schemaVersion: 1, type: "session_message", content }
-    : { schemaVersion: 1, type: "session_message", content, done };
 
 export const FREE_CHAT_TRANSCRIPT: readonly SessionMessagePayload[] = [
   freeChatPayload("Start with seller verification before any listing goes live."),
@@ -217,6 +170,11 @@ export const FREE_CHAT_TRANSCRIPT: readonly SessionMessagePayload[] = [
 ];
 
 export const VALID_FREE_CHAT_OUTPUT = JSON.stringify(FREE_CHAT_TRANSCRIPT[0]);
+
+export const FENCED_MESSAGE_OUTPUT = `\`\`\`json\n${VALID_FREE_CHAT_OUTPUT}\n\`\`\``;
+
+/** Prose around the JSON: rejected, because the parser never searches prose. */
+export const PROSE_MESSAGE_OUTPUT = `Sure! Here you go:\n${VALID_FREE_CHAT_OUTPUT}`;
 
 /**
  * A unanimous round: every participant's latest message carries `done: true`,
@@ -273,26 +231,48 @@ const sessionArtifact = (
   createdAt: FIXED_NOW,
 });
 
-export const FIRST_COUNTDOWN_ARTIFACT = sessionArtifact(
-  "artifact-session-1",
-  "turn-session-1",
-  PARTICIPANT_ONE,
-  countdownPayload(10),
-);
-
-export const SECOND_COUNTDOWN_ARTIFACT = sessionArtifact(
-  "artifact-session-2",
-  "turn-session-2",
-  PARTICIPANT_TWO,
-  countdownPayload(9),
-);
-
-export const FINAL_COUNTDOWN_ARTIFACT = sessionArtifact(
-  "artifact-session-10",
-  "turn-session-10",
-  countdownAuthorFor(9),
-  countdownPayload(1),
-);
+/**
+ * A stored pre-Phase-14 countdown run, exactly as it sits in an existing JSON
+ * database (P14-07).
+ *
+ * The engine no longer has a countdown protocol, so this shape is no longer
+ * constructible through the type: the cast is the point. Deletion applied to
+ * the engine, not to the ledger, and this fixture is what proves a stored run
+ * still loads, renders, and reads back through the API unchanged.
+ */
+export const LEGACY_COUNTDOWN_RUN = {
+  id: "run-legacy-countdown",
+  name: "Test Relay",
+  objective: "Count down from 10 to 1 together, one number per turn.",
+  requiredSections: [],
+  participants: SESSION_PARTICIPANTS.map((agent) => ({
+    role: "participant",
+    agentId: agent.id,
+    agentNameSnapshot: agent.name,
+  })),
+  policy: {
+    workflow: "shared_session_v1",
+    maxRevisions: 0,
+    maxTurns: 10,
+    maxAttemptsPerTurn: 2,
+    perAttemptTimeoutMs: 120_000,
+    contextMaxChars: 40_000,
+    outputMaxChars: 20_000,
+    sessionProtocol: "countdown",
+    sessionStartValue: 10,
+    sessionParallel: false,
+    maxParallelTurns: 3,
+  },
+  status: "completed",
+  phase: "done",
+  revision: 0,
+  nextTurnSequence: 11,
+  activeTurnIds: [],
+  sharedState: { nextExpectedNumber: 0 },
+  version: 21,
+  createdAt: FIXED_NOW,
+  updatedAt: FIXED_NOW,
+} as unknown as CoordinationRun;
 
 export const FREE_CHAT_ARTIFACT = sessionArtifact(
   "artifact-free-chat-1",
@@ -309,6 +289,55 @@ export const DONE_SIGNAL_ARTIFACT = sessionArtifact(
 );
 
 /* ------------------------------------------------------------------ *
+ * Session plans (P14-01).
+ * ------------------------------------------------------------------ */
+
+export const planAssignment = (
+  agent: CoordinationAgentView,
+  position: number,
+  instruction = `Contribute step ${position}.`,
+): SessionPlanAssignment => ({ agentId: agent.id, position, instruction });
+
+export const planPayload = (
+  mode: SessionPlanMode,
+  assignments: SessionPlanAssignment[],
+): SessionPlanPayload => ({
+  schemaVersion: 1,
+  type: "session_plan",
+  mode,
+  assignments,
+});
+
+/** Every participant, in roster order, as a plan of the given mode. */
+export const fullRosterPlan = (mode: SessionPlanMode): SessionPlanPayload =>
+  planPayload(
+    mode,
+    SESSION_PARTICIPANTS.map((agent, index) => planAssignment(agent, index + 1)),
+  );
+
+export const VALID_SEQUENTIAL_PLAN_OUTPUT = JSON.stringify(fullRosterPlan("sequential"));
+export const VALID_PARALLEL_PLAN_OUTPUT = JSON.stringify(fullRosterPlan("parallel"));
+
+export const planArtifact = (
+  id: string,
+  turnId: string,
+  agent: CoordinationAgentView,
+  payload: SessionPlanPayload,
+  transcriptSequence?: number,
+): CoordinationArtifact => ({
+  id,
+  runId: "run-session",
+  turnId,
+  type: "session_plan",
+  payload,
+  createdByRole: "participant",
+  createdByAgentId: agent.id,
+  sizeChars: JSON.stringify(payload).length,
+  createdAt: FIXED_NOW,
+  ...(transcriptSequence === undefined ? {} : { transcriptSequence }),
+});
+
+/* ------------------------------------------------------------------ *
  * Expected event sequences.
  *
  * Every member is an existing frozen `CoordinationEventType`: the session
@@ -323,14 +352,6 @@ const COMMITTED_TURN_EVENTS: readonly CoordinationEventType[] = [
   "turn.committed",
 ];
 
-/** A 10 -> 1 countdown with one attempt per turn and no retries. */
-export const NORMAL_COUNTDOWN_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
-  "run.created",
-  "run.started",
-  ...Array.from({ length: SESSION_START_VALUE }, () => COMMITTED_TURN_EVENTS).flat(),
-  "run.completed",
-];
-
 /** A free-chat run that reaches `maxTurns` with no retries. */
 export const NORMAL_FREE_CHAT_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
   "run.created",
@@ -339,8 +360,8 @@ export const NORMAL_FREE_CHAT_EVENT_SEQUENCE: readonly CoordinationEventType[] =
   "run.completed",
 ];
 
-/** A wrong number: the first attempt is rejected, the retry commits. */
-export const WRONG_NUMBER_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
+/** A rejected attempt followed by a retry that commits. */
+export const INVALID_THEN_RETRY_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
   "turn.scheduled",
   "attempt.started",
   "attempt.invalid_output",
