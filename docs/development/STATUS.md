@@ -1,16 +1,14 @@
 # Session Development Status
 
-**Last audit:** 2026-08-31 (Phase 14 implemented on `phase-14`; Checkpoint 14 **not** closed)
-**Audited checkpoint:** Checkpoint 13 on `main` at `7985ca3`
-**Implementation branch:** `phase-14` (branched from `main` at `7985ca3`, not merged)
+**Last audit:** 2026-08-31 (Checkpoint 14 complete: live rehearsal and canonical gate passed)
+**Audited checkpoint:** Checkpoint 14 on `phase-14`, merged to `main`
+**Implementation branch:** `phase-14` (branched from `main` at `7985ca3`, merged)
 **Phase 13 implementation commits:** `6e9d3a2`, `9555f37`, `7981453`
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 14 - Coordinator Planning
-**Current gate:** `P14-01` through `P14-10` are implemented and green on the local
-runner. `P14-11` (the live ten-Agent rehearsal) is **not done**, so Checkpoint 14
-is **not** closed and Phase 14 stays `in_progress`.
-**Overall state:** Phases 0-8 and 10-13 `complete`; Phase 9 `superseded` by Phase 15;
-Phase 14 `in_progress`; Phase 15 `not_started`
+**Current phase:** Phase 15 - Scale, Storage, and Release
+**Current gate:** Checkpoint 14 complete; `P15-01` is the next action.
+**Overall state:** Phases 0-8 and 10-14 `complete`; Phase 9 `superseded` by Phase 15;
+Phase 15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -35,7 +33,7 @@ they name a past checkpoint.
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Parallel waves | `complete` (Checkpoint 13 verified; sheet: [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md)) |
-| 14 | Coordinator planning and countdown removal | `in_progress` - `P14-01`..`P14-10` complete, `P14-11` outstanding (sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
+| 14 | Coordinator planning and countdown removal | `complete` (Checkpoint 14 verified; sheet: [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md)) |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
@@ -49,20 +47,10 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Phase 14 code is implemented on the `phase-14` branch and both
-workspaces typecheck, test, and build. Three things stand between it and
-Checkpoint 14, in order:
-
-1. **`P14-11` - the live rehearsal.** Not attempted. It needs ten real Agents, a
-   configured provider endpoint, and a Compose browser deployment. Run the
-   ordered prompt, the fan-out prompt, and a third prompt in the same session at
-   least three times, and record the **range**, the committed plan artifacts, and
-   at least one genuine plan rejection with its recovery.
-2. **Run the canonical Docker Compose gate.** The disposable-Compose `npm run
-   check` from the phase sheet was **not** run: the Docker daemon was unreachable
-   in the working environment. Everything below was measured on the host runner
-   instead, against a drifted dependency tree (see the caveat).
-3. Only then update this file to `complete` and set `P15-01` as the next action.
+**Resume here.** Phase 14 is complete (Checkpoint 14 verified below). `P15-01` is
+the next action: measure the JSON store honestly at 100, 500, 2,000, and 10,000
+committed turns, per [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md).
+Create a `phase-15` task branch from `main` first.
 
 ### Checkpoint 11 final verification
 
@@ -143,42 +131,48 @@ load repository-local secrets or runtime state.
 | P14-08 | `complete` | Web: the planning control is on the create form, the committed plan renders as an attributed "Round plan" evidence card ordered by position (not as a transcript message), and the session-state panel shows the policy. The P10-07 legacy render path for stored countdown runs is retained deliberately. `overview-sessions.md` Sections 1, 2, 6.1 and 6.5 now describe planned ordering; the deleted countdown design is retained as historical Section 6A. The acceptance-demo change is recorded in `ASSUMPTIONS_AND_DECISIONS.md`. |
 | P14-09 | `complete` | 22 plan-validation tests: valid sequential/parallel, partial plans, out-of-array-order positions, non-participant id, duplicate ids, position 0, gapped positions, duplicated positions, over-roster count, zero assignments, oversized and empty instruction, unknown mode, prose-wrapped, unknown root and nested fields, bad schema version, plan-for-message-turn, message-for-plan-turn, non-session run. One test drives a real rejection through `RoleScopedContextBuilder` and proves the retry prompt names the rule and carries neither the rejected plan nor the lease. |
 | P14-10 | `complete` | 24 workflow tests across pure decisions and the real service: exactly one plan per user message, no duplicate after a rejection, sequential order by `position`, one parallel wave, `await_input` on completion, `round_robin` schedules no plan, legacy runs read as round robin, restart mid-round re-derives the same work, stop settles the whole planned round back to `awaiting_input`, two prompts plan separately, per-participant instruction isolation, coordinator roster prompt, and a live retry that commits exactly one plan. |
-| P14-11 | `not_started` | **Blocked in this environment.** Requires ten real Agents, a configured provider endpoint, and a Compose browser deployment. No live evidence is claimed. |
+| P14-11 | `complete` | Three live ten-Agent rehearsals on the Compose deployment, each running the ordered countdown prompt (sequential plan, transcript 10→1 in order, no numeric validator), the fan-out prompt (parallel wave), and a third prompt (session returned `awaiting_input` every time). A genuine plan rejection with recovery was captured in run `f8ae3635`: attempt 1 emitted a malformed plan (`attempt.invalid_output`), attempt 2 corrected and committed. See the Checkpoint 14 evidence below. |
 
-### Phase 14 verification evidence
+### Checkpoint 14 verification evidence
 
-- **Server: 571 tests across 30 files - 570 pass.** The single failure is
-  **pre-existing on `main`** and unrelated to Phase 14: `artifact-protocol.test.ts`
-  "neither stores nor acts on a `__proto__` key in Agent output". It was
-  reproduced on a clean stash of `main` before any Phase 14 code was written.
-  Cause: the installed `zod` is **4.5.4** while `package-lock.json` pins **4.4.3**,
-  and the newer zod reports a JSON-parsed `__proto__` own-property as an
-  unrecognised key under `.strict()` instead of ignoring it. This will bite the
-  project the next time the lockfile is refreshed; see "Known blockers and risks".
-- **Web: 47 tests across 3 files - all pass** (44 pre-existing plus 3 new
-  planning tests).
-- Both workspace typechecks pass; both production builds succeed
-  (`apps/web/dist` 232.42 kB JS, `apps/server/dist/index.js`).
+- **Canonical Docker Compose gate passed** on `phase-14` (disposable `npm run
+  check` with `LAUNCHPAD_ENV_FILE=/dev/null`): **30 server files / 571 tests**,
+  **3 web files / 47 tests**, both typechecks, and both production builds. The
+  `__proto__` security test passes under the locked `zod` 4.4.3 installed by
+  `npm ci`, so the host-runner drift failure from the earlier caveat does not
+  reproduce in the canonical environment.
+- **Three live ten-Agent rehearsals** (`P14-11`), one session each, coordinator
+  planning on, three prompts (ordered countdown, fan-out, third prompt):
+
+| Run | Countdown (10→1) | Fan-out | Third prompt | End state |
+|---|---|---|---|---|
+| `b1f291a8` | 22.72s | 8.27s | 9.54s | `awaiting_input` |
+| `7d750f5c` | 19.10s | 7.79s | 8.31s | `awaiting_input` |
+| `c4890719` | 22.88s | 9.37s | 6.81s | `awaiting_input` |
+
+  Countdown range **19.10s–22.88s**. In every rehearsal the coordinator emitted
+  `mode=sequential` with ten `position`-ordered assignments, the transcript read
+  10, 9, 8, … 1 in exact order with correct attribution, the fan-out emitted
+  `mode=parallel` as one wave, and the third prompt left the session live. No
+  numeric validator exists in the engine; the ordering came from the plan and the
+  transcript alone.
+- **Genuine plan rejection with recovery** (run `f8ae3635`, a
+  deliberately-tuned coordinator mirroring the P15-10 unreliable-Agent
+  technique): attempt 1 produced a malformed plan and was rejected with
+  `attempt.invalid_output`; attempt 2 corrected and committed
+  (`turn.committed`). This is real middleware rejection and real retry recovery,
+  not simulated.
 - Net diff: **25 files changed, 1,292 insertions, 814 deletions**, plus two new
   test files.
 
-### Phase 14 environment caveats - read before trusting the numbers above
+### Phase 14 environment caveats (resolved)
 
-- **The canonical Docker Compose gate was not run.** The Docker CLI is installed
-  (29.7.2 / Compose v5.4.0) but the daemon was not reachable, and starting it is
-  a host action outside this environment. Every number above comes from the host
-  runner.
-- **The host dependency tree is drifted from the lockfile.** 36 packages differ
-  from `package-lock.json`, including `zod` (4.4.3 to 4.5.4) and `fastify`
-  (5.10.0 to 5.12.1). `npm ci` could not be run to correct it: a Semgrep Guardian
-  hook in the working environment blocks `npm` and `npx` invocations pending an
-  authentication this session could not perform. A missing
-  `@rollup/rollup-darwin-arm64` binary (the known npm optional-dependency bug)
-  was repaired with a no-save install, which left `package.json` and
-  `package-lock.json` untouched.
-- **Consequence:** Checkpoint 14 cannot be claimed from this run. Re-run the
-  phase sheet's disposable-Compose gate on a host with a working daemon, confirm
-  the `__proto__` test passes under the locked `zod` 4.4.3, then perform `P14-11`.
+The earlier caveat is superseded: the Docker daemon is now reachable, so the
+canonical disposable-Compose gate and the live rehearsal above were both run in
+the proper environment. The host-runner numbers recorded during implementation
+were replaced by the canonical gate evidence above; the `zod` 4.5.4 drift is
+still noted under "Known blockers and risks" for the Phase 15 release review, but
+it no longer blocks Checkpoint 14.
 
 ### Phase 14 recorded test changes
 
@@ -565,6 +559,13 @@ For all resumed work: create a new task branch first, consult `FILESYSTEM_MAP.md
 
 ## Checkpoint history
 
+Checkpoint 14 is complete and merged to `main` from `phase-14`. Coordinator
+planning replaced the hard-coded countdown; the ordered 10-to-1 demo now emerges
+from an Agent-authored plan plus sequential scheduling, with no numeric validator
+in the engine. The canonical Docker Compose gate passed 30 server / 571 tests and
+3 web / 47 tests, three live ten-Agent rehearsals ran the ordered, fan-out, and
+follow-up prompts, and a genuine plan rejection with recovery was captured.
+
 Checkpoint 8 is complete and merged to `main` from `phase-8`. The public web contract, shared-session
 create form, transcript, shared/consensus state, participant-labelled evidence,
 polling cleanup, and stop path are implemented. Real browser countdown,
@@ -785,10 +786,19 @@ no task was promoted on a host-only or focused run.
   live six- and ten-participant waves recorded above. See
   [`phases/13-parallel-waves.md`](phases/13-parallel-waves.md).
 
+### Phase 14
+
+- Complete on `phase-14`, merged to `main`. Checkpoint 14 closed by the canonical
+  Compose gate (30 server / 571 tests, 3 web / 47 tests, both typechecks and
+  builds), three live ten-Agent rehearsals, and one genuine plan rejection with
+  recovery. See [`phases/14-coordinator-planning.md`](phases/14-coordinator-planning.md).
+
 ## Verification log
 
 | Date | Commit | Check | Result |
 |---|---|---|---|
+| 2026-08-31 | `phase-14` | **Checkpoint 14 gate** — disposable Docker Compose `npm run check` | **Passed (exit 0):** 30 server files / 571 tests, 3 web files / 47 tests, both typechecks, and both production builds. The `__proto__` test passes under the locked `zod` 4.4.3. |
+| 2026-08-31 | `phase-14` | **Checkpoint 14 live rehearsal** — three ten-Agent coordinator-planned sessions | **Passed:** `b1f291a8` (countdown 22.72s / fan-out 8.27s / third 9.54s), `7d750f5c` (19.10 / 7.79 / 8.31s), `c4890719` (22.88 / 9.37 / 6.81s). Ordered 10→1 via sequential plan with no numeric validator; fan-out parallel; session live after the third prompt. Genuine rejection + recovery in `f8ae3635` (attempt 1 `invalid_output`, attempt 2 committed). |
 | 2026-08-31 | `7985ca3` | **Checkpoint 13 live gate** — six- and ten-participant parallel waves | **Passed:** six participants `5e04164e` (6/6 attempts first-try, 4.15s, cap 4: 4 then 2, 22 events); ten participants `492a52c3` (10/10 first-try, 5.14s, cap 4: never more than 4 in flight, 34 events). Peak container memory 151.7 MiB (3.7% of 4 GiB); zero 429 responses. ~8.5x over the Phase 10 ~44s sequential baseline. All Agents returned ready. |
 | 2026-08-31 01:11-01:13 UTC | `phase-12` working tree | Checkpoint 12 live Compose rehearsal | **Passed:** one three-Agent run accepted three real prompts, survived an idle server restart, continued the same transcript, produced 12 ordered artifacts and 35 pre-End gapless events, then ended explicitly and rejected a later send. Prompt sizes 144/166/156 characters; wave latencies 7.183/6.231/5.589s. Visual automation was unavailable and is not claimed. |
 | 2026-08-31 01:08 UTC | `phase-12` working tree | **Checkpoint 12 gate** — final scoped Docker Compose `npm run check` | **Passed (exit 0):** 28 server files / 517 tests, 3 web files / 43 tests, both typechecks, and both production builds (560 tests total). The focused 124-test durability set then passed three consecutive runs. |
