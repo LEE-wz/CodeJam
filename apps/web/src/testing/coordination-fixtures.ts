@@ -99,6 +99,7 @@ const verifiedBase = (
       phase: status === "completed" ? "done" : "drafting",
       revision: name === "rejectionRevision" ? 1 : 0,
       nextTurnSequence: 2,
+      activeTurnIds: [],
       version: 2,
       ...(isTerminalFailure ? {
         errorCode: name === "interrupted" ? "SERVER_RESTARTED" : name === "stopped" ? "STOPPED_BY_USER" : "MAX_ATTEMPTS_EXCEEDED",
@@ -258,6 +259,7 @@ const sessionBase = (
       phase: status === "completed" ? "done" : "sessioning",
       revision: 0,
       nextTurnSequence: turns.length + 1,
+      activeTurnIds: [],
       ...(latestCountdown === undefined ? {} : { sharedState: { nextExpectedNumber: latestCountdown } }),
       version: events.length,
       ...(status === "stopped" ? { errorCode: "STOPPED_BY_USER", errorMessage: "The run was stopped by the user." } : {}),
