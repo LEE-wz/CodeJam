@@ -29,6 +29,7 @@ import {
   DEFAULT_SESSION_AUCTION_POLICY,
   splitAuctionUsage,
 } from "./types.js";
+import type { CoordinationAgentView } from "./contracts.js";
 import type {
   CoordinationRunDetails,
   CreateSessionRunRequest,
@@ -38,13 +39,16 @@ import type {
 
 const settled = new Set(["awaiting_input", "completed", "failed", "stopped"]);
 
-const harness = (steps: ScriptedRuntimeStep[]) => {
+const harness = (
+  steps: ScriptedRuntimeStep[],
+  agents: readonly CoordinationAgentView[] = SESSION_PARTICIPANTS,
+) => {
   const clock = new AdvancingClock();
   const ids = new DeterministicIdGenerator();
   const repository = new InMemoryCoordinationRepository(clock);
   const runtime = new ScriptedCoordinationRuntime(steps);
   const service = new CoordinationService({
-    agentDirectory: new FakeAgentDirectory(SESSION_PARTICIPANTS),
+    agentDirectory: new FakeAgentDirectory(agents),
     repository,
     workflow: new VerifiedHandoffWorkflowV1(),
     sessionWorkflow: new SharedSessionWorkflowV1(),
@@ -110,6 +114,23 @@ const bid = (
     },
     confidenceBps,
     estimatedOutputTokens: 900,
+  } satisfies SessionBidPayload);
+
+const directBid = (agentId: string): string =>
+  JSON.stringify({
+    schemaVersion: 1,
+    type: "session_bid",
+    recommendation: "direct",
+    candidateAnswer: "A concise direct answer.",
+    plan: {
+      summary: "Answer directly.",
+      mode: "single",
+      assignments: [{ agentId, position: 1, instruction: "Answer the request." }],
+      risks: [],
+      assumptions: [],
+    },
+    confidenceBps: 9_000,
+    estimatedOutputTokens: 400,
   } satisfies SessionBidPayload);
 
 const startAuction = async (
@@ -214,6 +235,32 @@ describe("PA14-12 and PA14-18 awarded team execution", () => {
 });
 
 describe("PA14-13 winning-execution failure and fallback", () => {
+  it("runs one auction after direct retry exhaustion when the policy opts in", async () => {
+    const auction = await startAuction(
+      [
+        { kind: "failed", message: "direct runtime failure" },
+        { kind: "failed", message: "direct runtime failure" },
+        succeeds(bid("single", [PARTICIPANT_ONE.id], 9_000)),
+        succeeds(bid("single", [PARTICIPANT_TWO.id], 7_000)),
+        succeeds(bid("single", [PARTICIPANT_THREE.id], 6_000)),
+        succeeds(JSON.stringify(freeChatPayload("Recovered through the awarded plan."))),
+      ],
+      auctionRequest({
+        routingMode: "direct",
+        auctionOnDirectFailure: true,
+      }),
+    );
+    const details = await settle(auction.service, auction.runId);
+
+    expect(details.run.status).toBe("awaiting_input");
+    expect(details.turns.filter(({ kind }) => kind === "session_bid")).toHaveLength(3);
+    expect(details.artifacts.filter(({ type }) => type === "session_award")).toHaveLength(1);
+    expect(details.artifacts.some(
+      (artifact) => artifact.type === "session_message" &&
+        artifact.payload.content === "Recovered through the awarded plan.",
+    )).toBe(true);
+  });
+
   it("fails the round rather than silently awarding the runner-up", async () => {
     const auction = await startAuction(
       [
@@ -326,6 +373,65 @@ describe("PA14-13 winning-execution failure and fallback", () => {
       details.turns.filter(({ kind, status }) => kind === "session_bid" && status === "failed"),
     ).toHaveLength(1);
     expect(details.artifacts.filter(({ type }) => type === "session_award")).toHaveLength(1);
+  });
+});
+
+describe("PA14-03 production availability routing", () => {
+  it("skips a busy preferred primary before starting the Auto call", async () => {
+    const agents = SESSION_PARTICIPANTS.map((agent, index) => ({
+      ...agent,
+      status: index === 0 ? "busy" as const : "ready" as const,
+    }));
+    const context = harness(
+      [succeeds(directBid(PARTICIPANT_TWO.id))],
+      agents,
+    );
+    const run = await context.service.createRun(auctionRequest({ routingMode: "auto" }));
+    await context.service.resumeRun(run.id, { content: "Give a short status." });
+    const details = await settle(context.service, run.id);
+
+    expect(context.runtime.starts).toHaveLength(1);
+    expect(context.runtime.starts[0]!.agentId).toBe(PARTICIPANT_TWO.id);
+    expect(details.artifacts.find(({ type }) => type === "session_award")).toMatchObject({
+      type: "session_award",
+      payload: { selectedAgentId: PARTICIPANT_TWO.id, outcome: "publish_candidate" },
+    });
+    expect(details.auctionUsage).toMatchObject({
+      actualBidding: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+      actualExecution: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+      projectedExecution: { outputTokens: 400 },
+    });
+    expect(details.auctionUsage!.projectedExecution.inputTokens).toBeGreaterThan(0);
+  });
+
+  it("excludes busy bidders and rejects a winning plan that assigns one", async () => {
+    const agents = SESSION_PARTICIPANTS.map((agent, index) => ({
+      ...agent,
+      status: index === 0 ? "busy" as const : "ready" as const,
+    }));
+    const context = harness(
+      [
+        succeeds(bid("single", [PARTICIPANT_TWO.id], 7_000)),
+        // Highest declared confidence, but the proposed assignee is busy and
+        // must be ineligible under the same production availability snapshot.
+        succeeds(bid("parallel", [PARTICIPANT_THREE.id, PARTICIPANT_ONE.id], 9_500)),
+        succeeds(JSON.stringify(freeChatPayload("Available winner executed."))),
+      ],
+      agents,
+    );
+    const run = await context.service.createRun(auctionRequest({
+      routingMode: "auction",
+      minimumValidBids: 1,
+    }));
+    await context.service.resumeRun(run.id, { content: "Route around busy Agents." });
+    const details = await settle(context.service, run.id);
+
+    expect(details.run.status).toBe("awaiting_input");
+    expect(details.turns.filter(({ kind }) => kind === "session_bid")).toHaveLength(2);
+    expect(details.artifacts.find(({ type }) => type === "session_award")).toMatchObject({
+      type: "session_award",
+      payload: { selectedAgentId: PARTICIPANT_TWO.id, outcome: "execute_plan" },
+    });
   });
 });
 

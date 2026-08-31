@@ -11,7 +11,7 @@ import {
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
 } from "./testing/session-fixtures.js";
-import { resolveAuction } from "./auction-resolution.js";
+import { buildAuctionHistory, resolveAuction } from "./auction-resolution.js";
 import { RoleScopedContextBuilder } from "./context-builder.js";
 import {
   DEFAULT_COORDINATION_POLICY,
@@ -372,6 +372,64 @@ describe("PA14-10 atomic direct-candidate publication", () => {
     ).toHaveLength(1);
   });
 
+  it("publishes exactly one candidate under a competing direct-award collision", async () => {
+    const round = directRound();
+    const { repository } = await createHarness(round.run, round.turns, round.artifacts);
+    const command = {
+      runId: RUN_ID,
+      expectedRunVersion: round.run.version,
+      ...AWARD_COMMAND,
+      outcome: "publish_candidate" as const,
+    };
+
+    const results = await Promise.all([
+      repository.awardSessionBid(command),
+      repository.awardSessionBid(command),
+    ]);
+    expect(results.map(({ kind }) => kind).sort()).toEqual(["already_awarded", "awarded"]);
+
+    const details = await repository.getRunDetails(RUN_ID);
+    expect(details!.artifacts.filter(({ type }) => type === "session_award")).toHaveLength(1);
+    expect(details!.artifacts.filter(({ type }) => type === "session_message")).toHaveLength(1);
+    expect(details!.events.filter(({ type }) => type === "bid.candidate_published")).toHaveLength(1);
+  });
+
+  it("scores an Auto-direct award without applying the competitive bid minimum", () => {
+    const round = directRound();
+    const resolution = resolveAuction({
+      run: round.run,
+      turns: round.turns,
+      artifacts: round.artifacts,
+      decision: {
+        kind: "resolve_auction",
+        userArtifactId: USER_ARTIFACT_ID,
+        bidArtifactIds: ["artifact-bid-1"],
+        directCandidateBidArtifactId: "artifact-bid-1",
+      },
+      contextBuilder: new RoleScopedContextBuilder(),
+    });
+
+    expect(resolution.kind).toBe("award");
+    if (resolution.kind !== "award") return;
+    expect(resolution.command).toMatchObject({
+      outcome: "publish_candidate",
+      scoreBps: expect.any(Number),
+      components: {
+        // 9,000 declared confidence minus the documented 500-bps cold start.
+        calibratedConfidenceBps: 8_500,
+        normalizedProjectedCostBps: expect.any(Number),
+        reliabilityPenaltyBps: 0,
+      },
+      estimatedExecution: {
+        inputTokens: expect.any(Number),
+        outputTokens: 500,
+      },
+    });
+    expect(resolution.command.scoreBps).toBeGreaterThan(0);
+    expect(resolution.command.components.normalizedProjectedCostBps).toBeGreaterThan(0);
+    expect(resolution.command.estimatedExecution.inputTokens).toBeGreaterThan(0);
+  });
+
   it("refuses publication when the candidate no longer passes its gates", async () => {
     const round = directRound();
     round.run.policy.auctionPolicy!.directConfidenceThresholdBps = 9_500;
@@ -388,6 +446,114 @@ describe("PA14-10 atomic direct-candidate publication", () => {
     const details = await repository.getRunDetails(RUN_ID);
     expect(details!.artifacts.some(({ type }) => type === "session_award")).toBe(false);
     expect(details!.artifacts.some(({ type }) => type === "session_message")).toBe(false);
+  });
+});
+
+describe("PA14-08 reliability history provenance", () => {
+  it("uses provider usage from every awarded-plan attempt instead of artifact characters", () => {
+    const payload = bidPayload(PARTICIPANT_ONE.id, {
+      estimatedOutputTokens: 100,
+      plan: {
+        summary: "Delegate the awarded plan.",
+        mode: "sequential",
+        assignments: [
+          { agentId: PARTICIPANT_TWO.id, position: 1, instruction: "First step." },
+          { agentId: PARTICIPANT_THREE.id, position: 2, instruction: "Second step." },
+        ],
+        risks: [],
+        assumptions: [],
+      },
+    });
+    const winningBid = bidArtifact(1, PARTICIPANT_ONE.id, payload);
+    const award: CoordinationArtifact = {
+      id: "artifact-award-history",
+      runId: RUN_ID,
+      type: "session_award",
+      createdBy: { kind: "system" },
+      payload: {
+        schemaVersion: 1,
+        type: "session_award",
+        userArtifactId: USER_ARTIFACT_ID,
+        winningBidArtifactId: winningBid.id,
+        selectedAgentId: PARTICIPANT_ONE.id,
+        outcome: "execute_plan",
+        scoringVersion: "confidence_cost_v1",
+        scoreBps: 4_000,
+        components: {
+          calibratedConfidenceBps: 6_500,
+          normalizedProjectedCostBps: 1_000,
+          reliabilityPenaltyBps: 0,
+        },
+        estimatedExecution: { inputTokens: 500, outputTokens: 100 },
+      },
+      sizeChars: 240,
+      createdAt: NOW,
+    };
+    const executionTurns: CoordinationTurn[] = [
+      {
+        id: "turn-exec-history-1",
+        runId: RUN_ID,
+        sequence: 4,
+        role: "participant",
+        agentId: PARTICIPANT_TWO.id,
+        kind: "session_turn",
+        wavePurpose: "session_execution",
+        status: "failed",
+        attemptCount: 1,
+        inputArtifactIds: [USER_ARTIFACT_ID, award.id],
+        lastValidationErrors: [],
+        createdAt: NOW,
+      },
+      {
+        id: "turn-exec-history-2",
+        runId: RUN_ID,
+        sequence: 5,
+        role: "participant",
+        agentId: PARTICIPANT_THREE.id,
+        kind: "session_turn",
+        wavePurpose: "session_execution",
+        status: "committed",
+        attemptCount: 1,
+        inputArtifactIds: [USER_ARTIFACT_ID, award.id],
+        lastValidationErrors: [],
+        createdAt: NOW,
+      },
+    ];
+    const history = buildAuctionHistory({
+      run: auctionRun(),
+      turns: [bidTurn(1, PARTICIPANT_ONE.id), ...executionTurns],
+      attempts: [
+        {
+          id: "attempt-history-1",
+          runId: RUN_ID,
+          turnId: executionTurns[0]!.id,
+          number: 1,
+          agentId: PARTICIPANT_TWO.id,
+          leaseToken: "lease-history-1",
+          status: "failed",
+          usage: { inputTokens: 40, cachedInputTokens: 0, outputTokens: 80 },
+          createdAt: NOW,
+        },
+        {
+          id: "attempt-history-2",
+          runId: RUN_ID,
+          turnId: executionTurns[1]!.id,
+          number: 1,
+          agentId: PARTICIPANT_THREE.id,
+          leaseToken: "lease-history-2",
+          status: "succeeded",
+          usage: { inputTokens: 50, cachedInputTokens: 0, outputTokens: 70 },
+          createdAt: NOW,
+        },
+      ],
+      artifacts: [userArtifact(), winningBid, award],
+    }, PARTICIPANT_ONE.id);
+
+    expect(history.executions).toEqual([{
+      failed: true,
+      estimatedOutputTokens: 100,
+      actualOutputTokens: 150,
+    }]);
   });
 });
 
@@ -563,6 +729,33 @@ describe("PA14-17 award feedback", () => {
         decision: "rejected",
       }),
     ).resolves.toEqual({ kind: "not_found" });
+  });
+
+  it("keeps a concurrent detail read valid while feedback is appended", async () => {
+    const round = settledRound();
+    const { repository } = await createHarness(round.run, round.turns, round.artifacts);
+    const awarded = await repository.awardSessionBid({
+      runId: RUN_ID,
+      expectedRunVersion: round.run.version,
+      ...AWARD_COMMAND,
+    });
+    expect(awarded.kind).toBe("awarded");
+    const awardId = (awarded as { award: { id: string } }).award.id;
+
+    const [recorded, concurrentRead] = await Promise.all([
+      repository.recordAwardFeedback({
+        runId: RUN_ID,
+        awardArtifactId: awardId,
+        decision: "rejected",
+      }),
+      repository.getRunDetails(RUN_ID),
+    ]);
+    expect(recorded.kind).toBe("recorded");
+    expect(concurrentRead?.run.id).toBe(RUN_ID);
+    expect(concurrentRead?.artifacts.some(({ id }) => id === awardId)).toBe(true);
+
+    const after = await repository.getRunDetails(RUN_ID);
+    expect(after!.events.filter(({ type }) => type === "award.feedback_recorded")).toHaveLength(1);
   });
 });
 

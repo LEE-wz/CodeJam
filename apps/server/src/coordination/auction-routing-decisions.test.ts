@@ -202,10 +202,12 @@ const view = (
   runRecord: CoordinationRun,
   turns: CoordinationTurn[],
   artifacts: CoordinationArtifact[],
+  availableAgentIds?: string[],
 ): WorkflowView => ({
   run: { ...runRecord, nextTurnSequence: Math.max(1, ...turns.map(({ sequence }) => sequence)) + 1 },
   turns,
   artifacts,
+  ...(availableAgentIds === undefined ? {} : { availableAgentIds }),
 });
 
 describe("PA14-20 routing decisions", () => {
@@ -218,6 +220,55 @@ describe("PA14-20 routing decisions", () => {
       turnKind: "session_turn",
       expectedArtifactType: "session_message",
       agentId: PARTICIPANT_ONE.id,
+    });
+  });
+
+  it("escalates a failed direct turn into one bounded auction when explicitly enabled", () => {
+    const failedDirect = {
+      ...executionTurn(1, PARTICIPANT_ONE.id, "failed", "unused-award"),
+      inputArtifactIds: [USER_ID],
+    };
+    const decision = workflow.decideNext(
+      view(
+        run({ routingMode: "direct", auctionOnDirectFailure: true }),
+        [failedDirect],
+        [userMessage()],
+      ),
+    );
+    expect(decision).toMatchObject({
+      kind: "schedule_wave",
+      wavePurpose: "session_bidding",
+    });
+    expect((decision as { members: unknown[] }).members).toHaveLength(AGENTS.length);
+  });
+
+  it("fails a direct round without a hidden auction when escalation is disabled", () => {
+    const failedDirect = {
+      ...executionTurn(1, PARTICIPANT_ONE.id, "failed", "unused-award"),
+      inputArtifactIds: [USER_ID],
+    };
+    expect(workflow.decideNext(
+      view(
+        run({ routingMode: "direct", auctionOnDirectFailure: false }),
+        [failedDirect],
+        [userMessage()],
+      ),
+    )).toMatchObject({ kind: "fail", code: "MAX_ATTEMPTS_EXCEEDED" });
+  });
+
+  it("uses the service availability snapshot for production primary selection", () => {
+    const decision = workflow.decideNext(
+      view(
+        run({ routingMode: "auto" }),
+        [],
+        [userMessage()],
+        [PARTICIPANT_THREE.id],
+      ),
+    );
+    expect(decision).toMatchObject({
+      kind: "schedule",
+      turnKind: "session_bid",
+      agentId: PARTICIPANT_THREE.id,
     });
   });
 

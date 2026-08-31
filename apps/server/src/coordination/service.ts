@@ -865,10 +865,18 @@ export class CoordinationService implements CoordinationServiceContract {
         return;
       }
 
+      const availableAgentIds = details.run.policy.auctionPolicy === undefined
+        ? undefined
+        : (await this.dependencies.agentDirectory.getAgentsByIds(
+            details.run.participants.map(({ agentId }) => agentId),
+          ))
+            .filter(({ status }) => status === "ready")
+            .map(({ id }) => id);
       const decision = this.workflowDispatch.forRun(details.run).decideNext({
         run: details.run,
         turns: details.turns,
         artifacts: details.artifacts,
+        ...(availableAgentIds === undefined ? {} : { availableAgentIds }),
       });
       if (decision.kind === "complete") {
         await this.dependencies.repository.completeRun({
@@ -893,10 +901,14 @@ export class CoordinationService implements CoordinationServiceContract {
         const resolution = resolveAuction({
           run: details.run,
           turns: details.turns,
+          attempts: details.attempts,
           artifacts: details.artifacts,
           events: details.events,
           decision,
           contextBuilder: this.dependencies.contextBuilder,
+          ...(availableAgentIds === undefined
+            ? {}
+            : { availableAgentIds: new Set(availableAgentIds) }),
         });
         if (resolution.kind === "fail") {
           await this.dependencies.repository.failRun({
@@ -982,6 +994,8 @@ export class CoordinationService implements CoordinationServiceContract {
         scheduled.run,
         scheduled.turn,
         () => this.ownsLoop(runId, epoch),
+        undefined,
+        decision.failurePolicy === "auction_on_exhaustion",
       );
       if (!this.ownsLoop(runId, epoch)) return;
       if (outcome === "committed") {
@@ -998,7 +1012,9 @@ export class CoordinationService implements CoordinationServiceContract {
           runId,
           turnId: scheduled.turn.id,
           code: "MAX_ATTEMPTS_EXCEEDED",
-          message: "Primary participant did not return a usable bid for this round",
+          message: scheduled.turn.kind === "session_bid"
+            ? "Primary participant did not return a usable bid for this round"
+            : "Direct participant did not complete; the configured auction escalation will run",
         });
         if (retired.kind === "failed") {
           reconciliations = 0;
@@ -1262,6 +1278,8 @@ export class CoordinationService implements CoordinationServiceContract {
      * purpose-specific policy once every sibling has settled (PA13-11/12).
      */
     wavePurpose?: CoordinationWavePurpose,
+    /** Direct exhaustion can be retired and re-derived as an auction. */
+    deferFailureToWorkflow = false,
   ): Promise<TurnExecutionOutcome> {
     // PA13-09: bid-shaped turns always start from a fresh provider thread, so a
     // participant with a long Playground history and one with none receive
@@ -1475,7 +1493,11 @@ export class CoordinationService implements CoordinationServiceContract {
       }
     }
 
-    if (wavePurpose !== undefined || scheduledTurn.kind === "session_bid") {
+    if (
+      wavePurpose !== undefined ||
+      scheduledTurn.kind === "session_bid" ||
+      deferFailureToWorkflow
+    ) {
       // The supervisor owns the consequence. Failing the run here would settle
       // it while siblings are still executing, which is exactly what PA13-11
       // forbids.

@@ -404,12 +404,25 @@ as primarily self-reported.
   expansion, transcript exclusion of losing bids, award attribution, estimates
   versus actuals, feedback, accessibility, polling cleanup, and narrow-screen
   rendering.
+
+  *Corrective audit evidence adds opt-in Direct-failure escalation, a disabled
+  non-escalation control, production availability-aware Auto and Auction paths,
+  unavailable-assignee rejection, real Auto-direct scoring, provider-usage
+  reliability history, competing direct publication, and feedback/read
+  concurrency. The standard Compose gate and ten repeated focused passes are
+  recorded in `STATUS.md`.*
 - [ ] **PA14-27** Run a real multi-prompt rehearsal in one ten-Agent session:
   one simple Auto prompt accepted in a single call; one explicit Auction with a
   single winner; one Auto escalation; one awarded sequential countdown; one
   awarded parallel fan-out; one partial bidder failure; one stop-and-resume; and
   one server restart between bid settlement and award. Record every call's
   usage and wall-clock timing.
+
+  *The autonomous driver is `scripts/pa14-27-rehearsal.mjs`. Its first live run
+  (`f09e195b-c6f5-4e29-aabd-b2271a9b9686`) passed Auto Direct, explicit Auction,
+  and Auto escalation, then the provider returned sustained headerless 429s.
+  The incomplete run and all 49 call records are documented in `STATUS.md`;
+  this checkbox deliberately remains open until one full run passes.*
 
 ## Requirements and invariants
 

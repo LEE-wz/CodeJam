@@ -82,6 +82,11 @@ export type WorkflowDecision =
       wavePurpose?: CoordinationWavePurpose;
       /** Awarded execution runs fresh; omitted elsewhere (PA14-11). */
       threadPolicy?: ExecutionThreadPolicy;
+      /**
+       * Explicit Direct may defer retry exhaustion to the durable workflow so
+       * an opted-in auction can be scheduled without failing the run first.
+       */
+      failurePolicy?: "auction_on_exhaustion";
     }
   /**
    * Schedule several turns as one atomic wave (PA13-10).
@@ -128,6 +133,13 @@ export interface WorkflowView {
   run: CoordinationRun;
   turns: CoordinationTurn[];
   artifacts: CoordinationArtifact[];
+  /**
+   * Participants currently eligible to start new work. Auction routing uses
+   * this service-owned snapshot to skip busy, stopped, missing, or errored
+   * Agents without changing the durable participant order. Omitted by pure
+   * fixture tests and legacy callers to mean that every participant is ready.
+   */
+  availableAgentIds?: AgentId[];
 }
 
 export interface VerifiedHandoffWorkflow {
@@ -136,9 +148,11 @@ export interface VerifiedHandoffWorkflow {
 
 /**
  * The shared-session decision source. Deliberately the same shape as
- * `VerifiedHandoffWorkflow`: both are pure functions of committed durable state
+ * `VerifiedHandoffWorkflow`: both are pure functions of their supplied view
  * and both return the frozen `WorkflowDecision`, so the orchestration loop in
- * `CoordinationService` needs no branch of its own.
+ * `CoordinationService` needs no branch of its own. Auction views may also
+ * carry a service-owned availability snapshot; availability never changes the
+ * durable participant order or scope.
  *
  * Round-robin position derives from committed session turns only, so a retry
  * never advances it (overview-sessions.md Section 5).

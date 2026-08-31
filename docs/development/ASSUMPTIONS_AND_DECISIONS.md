@@ -994,3 +994,30 @@ concurrency cap, an attempt ceiling, or participant scope.
   exactly when its turn is a `session_bid` turn, so the two actual totals always
   reconstruct `usageTotals`, and `projectedExecution` is summed only from
   committed awards. No field is a currency amount.
+
+## Corrective audit: auction routing and scoring evidence (2026-08-31)
+
+The post-implementation review found four places where the code did not yet
+implement the already-approved Phase 14 contract. These corrections clarify
+mechanics; they do not change a budget, participant scope, scoring formula, or
+trust boundary.
+
+- When `auctionOnDirectFailure` is true, retry exhaustion retires the failed
+  Direct turn without failing the run. The durable workflow then schedules one
+  bounded bid opportunity set and resolves it normally. Awarded execution turns
+  are identified by carrying the committed award id, so the earlier failed
+  Direct turn can never be mistaken for a failed winning execution after a
+  restart. With the flag false, Direct still fails without hidden expansion.
+- Before each auction workflow decision, the service snapshots which session
+  participants are currently `ready`. The pure selector, bid-wave builder,
+  scorer, and fallback resolver receive the same snapshot. It can narrow the
+  currently eligible set but never reorder or add durable participants. Omitted
+  availability in legacy fixtures means all snapshotted participants are ready.
+- An accepted Auto-direct candidate is scored directly with
+  `confidence_cost_v1`; `minimumValidBids` applies only to competitive ranking.
+  Its award therefore records calibrated confidence, projected cost, score, and
+  projected tokens from the real scorer rather than zero-valued placeholders.
+- Reliability history derives actual output tokens from durable attempt usage
+  across every execution turn and retry linked to an award. Artifact character
+  counts are not token evidence. A team plan's whole awarded execution is
+  attributed to the Agent whose bid won, including delegated failures.

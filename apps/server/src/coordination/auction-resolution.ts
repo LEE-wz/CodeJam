@@ -3,12 +3,14 @@ import type { AwardSessionBidInput } from "./contracts.js";
 import {
   auctionContextCeilingInputTokens,
   rankSessionBids,
+  scoreSessionBid,
   type AuctionScoreHistory,
   type ScoreBidInput,
 } from "./auction-scoring.js";
 import type {
   AgentId,
   CoordinationArtifact,
+  CoordinationAttempt,
   CoordinationEvent,
   CoordinationRun,
   CoordinationTurn,
@@ -20,6 +22,7 @@ export interface ResolveAuctionInput {
   run: CoordinationRun;
   turns: readonly CoordinationTurn[];
   artifacts: readonly CoordinationArtifact[];
+  attempts?: readonly CoordinationAttempt[] | undefined;
   /** Award feedback is an event, never a mutation of the immutable award. */
   events?: readonly CoordinationEvent[] | undefined;
   decision: Extract<WorkflowDecision, { kind: "resolve_auction" }>;
@@ -88,7 +91,7 @@ const renderExecutionPrompts = (input: ResolveAuctionInput, bid: BidArtifact): s
  * contributes nothing, which is what keeps the cold-start rule active.
  */
 export const buildAuctionHistory = (
-  input: Pick<ResolveAuctionInput, "run" | "turns" | "artifacts" | "events">,
+  input: Pick<ResolveAuctionInput, "run" | "turns" | "attempts" | "artifacts" | "events">,
   agentId: AgentId,
 ): AuctionScoreHistory => {
   const awards = input.artifacts.filter(
@@ -108,23 +111,26 @@ export const buildAuctionHistory = (
     const executionTurns = input.turns.filter(
       (turn) =>
         turn.kind === "session_turn" &&
-        turn.agentId === agentId &&
         turn.inputArtifactIds.includes(award.id),
     );
     if (executionTurns.length === 0) return [];
     const failed = executionTurns.some(({ status }) => status === "failed");
-    const outputChars = executionTurns.reduce((total, turn) => {
-      const artifact = input.artifacts.find(({ id }) => id === turn.outputArtifactId);
-      return total + (artifact?.sizeChars ?? 0);
-    }, 0);
+    const executionTurnIds = new Set(executionTurns.map(({ id }) => id));
+    const attemptsWithUsage = (input.attempts ?? []).filter(
+      (attempt) => executionTurnIds.has(attempt.turnId) && attempt.usage != null,
+    );
+    const actualOutputTokens = attemptsWithUsage.reduce(
+      (total, attempt) => total + (attempt.usage?.outputTokens ?? 0),
+      0,
+    );
     return [
       {
         failed,
         estimatedOutputTokens: bid.payload.estimatedOutputTokens,
-        // Chars-to-tokens uses the same conservative 3:1 ratio as the estimator,
-        // so an underestimation penalty is never an artefact of two different
-        // units.
-        ...(outputChars > 0 ? { actualOutputTokens: Math.ceil(outputChars / 3) } : {}),
+        // Reliability compares the estimate with provider-reported usage from
+        // every attempt that incurred output, including failed and retried
+        // attempts. Artifact character counts are not token evidence.
+        ...(attemptsWithUsage.length > 0 ? { actualOutputTokens } : {}),
       },
     ];
   });
@@ -184,21 +190,21 @@ export const resolveAuction = (input: ResolveAuctionInput): ResolveAuctionOutcom
     ? byId.get(input.decision.directCandidateBidArtifactId)
     : undefined;
   if (direct) {
-    const ranked = rankSessionBids({ run: input.run, bids: [toScoreInput(direct)] });
+    const directScore = scoreSessionBid({
+      ...toScoreInput(direct),
+      // Publishing an accepted candidate needs no second execution turn. Give
+      // its already validated single-assignment plan one projection slot so
+      // the common scorer can price it without applying the competitive
+      // minimum-valid-bids rule.
+      remainingTurnCapacity: Math.max(1, remainingTurnCapacity),
+    });
     // The accepted candidate is one bounded self-assigned answer that already
     // passed every publication gate, so `minimumValidBids` does not apply to it:
     // that threshold governs choosing between competitors.
-    const score =
-      ranked.kind === "ranked"
-        ? ranked.winner
-        : {
-            calibratedConfidenceBps: direct.payload.confidenceBps,
-            normalizedProjectedCostBps: 0,
-            reliabilityPenaltyBps: 0,
-            scoreBps: 0,
-            estimatedInputTokens: 0,
-            estimatedOutputTokens: direct.payload.estimatedOutputTokens,
-          };
+    if (!directScore.eligible) {
+      return { kind: "fail", message: directScore.reason };
+    }
+    const score = directScore.score;
     return {
       kind: "award",
       command: {

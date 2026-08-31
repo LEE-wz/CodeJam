@@ -387,6 +387,12 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
         const requestedRouting = activeUser.routing;
         const routingMode = requestedRouting?.routingMode ?? auctionPolicy.routingMode;
         const explicitAgentId = requestedRouting?.selectedAgentId;
+        const availableAgentIds = view.availableAgentIds === undefined
+          ? undefined
+          : new Set(view.availableAgentIds);
+        const eligibleParticipants = availableAgentIds === undefined
+          ? participants
+          : participants.filter(({ agentId }) => availableAgentIds.has(agentId));
         const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
         const roundBidTurns = turns.filter(
           (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
@@ -420,14 +426,20 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
                   instruction: "",
                 },
               ];
-          if (roundExecutionTurns.some(({ status }) => status === "failed")) {
+          // A direct-failure escalation may leave a failed pre-award execution
+          // turn in this same user-message round. Only turns that explicitly
+          // carry this immutable award are winning/fallback execution evidence.
+          const awardExecutionTurns = roundExecutionTurns.filter((turn) =>
+            turn.inputArtifactIds.includes(award.id),
+          );
+          if (awardExecutionTurns.some(({ status }) => status === "failed")) {
             return {
               kind: "fail",
               code: "MAX_ATTEMPTS_EXCEEDED",
               message: "Awarded execution did not complete",
             };
           }
-          const attemptedAgentIds = new Set(roundExecutionTurns.map(({ agentId }) => agentId));
+          const attemptedAgentIds = new Set(awardExecutionTurns.map(({ agentId }) => agentId));
           const remaining = assignments.filter(
             ({ agentId }) => !attemptedAgentIds.has(agentId),
           );
@@ -498,13 +510,40 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
 
         if (routingMode === "direct") {
           if (roundExecutionTurns.length > 0) {
-            return roundExecutionTurns.some(({ status }) => status === "failed")
-              ? {
-                  kind: "fail",
-                  code: "MAX_ATTEMPTS_EXCEEDED",
-                  message: "Direct execution did not complete",
-                }
-              : { kind: "await_input" };
+            if (!roundExecutionTurns.some(({ status }) => status === "failed")) {
+              return { kind: "await_input" };
+            }
+            if (!auctionPolicy.auctionOnDirectFailure) {
+              return {
+                kind: "fail",
+                code: "MAX_ATTEMPTS_EXCEEDED",
+                message: "Direct execution did not complete",
+              };
+            }
+            // The failed direct turn is durable evidence that this round has
+            // crossed the explicit escalation boundary. A restart either
+            // schedules the one bounded bid opportunity set or, once those
+            // turns settle, resolves exactly the bids they committed.
+            if (roundBidTurns.length > 0 || eligibleParticipants.length === 0) {
+              return {
+                kind: "resolve_auction",
+                userArtifactId: activeUser.id,
+                bidArtifactIds: bidArtifacts
+                  .filter((bid) => roundBidTurns.some((turn) => turn.outputArtifactId === bid.id))
+                  .map(({ id }) => id),
+              };
+            }
+            if (turns.length + eligibleParticipants.length > run.policy.maxTurns) {
+              return {
+                kind: "fail",
+                code: "MAX_TURNS_EXCEEDED",
+                message: "Direct-failure auction would exceed the session turn limit",
+              };
+            }
+            return buildSessionBidWaveDecision({
+              participants: eligibleParticipants,
+              inputArtifactIds,
+            });
           }
           if (turns.length + 1 > run.policy.maxTurns) {
             return {
@@ -519,6 +558,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             explicitAgentId,
             previousAwardedAgentId: previousAwardedAgentId(awardArtifacts, activeUser.id),
             defaultAgentId: auctionPolicy.defaultAgentId,
+            availableAgentIds,
           });
           if (!selection.selectedAgentId) {
             return invalidState("Direct routing found no available participant");
@@ -532,6 +572,9 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             revision: 0,
             inputArtifactIds,
             expectedArtifactType: "session_message",
+            ...(auctionPolicy.auctionOnDirectFailure
+              ? { failurePolicy: "auction_on_exhaustion" as const }
+              : {}),
           };
         }
 
@@ -553,14 +596,20 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           if (roundBidTurns.length > 0) {
             return resolve();
           }
-          if (turns.length + participants.length > run.policy.maxTurns) {
+          if (eligibleParticipants.length === 0) {
+            return resolve();
+          }
+          if (turns.length + eligibleParticipants.length > run.policy.maxTurns) {
             return {
               kind: "fail",
               code: "MAX_TURNS_EXCEEDED",
               message: "Bid wave would exceed the session turn limit",
             };
           }
-          return buildSessionBidWaveDecision({ participants, inputArtifactIds });
+          return buildSessionBidWaveDecision({
+            participants: eligibleParticipants,
+            inputArtifactIds,
+          });
         }
 
         if (roundBidTurns.length === 0) {
@@ -577,6 +626,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             explicitAgentId,
             previousAwardedAgentId: previousAwardedAgentId(awardArtifacts, activeUser.id),
             defaultAgentId: auctionPolicy.defaultAgentId,
+            availableAgentIds,
           });
           if (!selection.selectedAgentId) {
             return invalidState("Auto routing found no available primary participant");
@@ -603,7 +653,9 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
         }
 
         const attemptedAgentIds = new Set(roundBidTurns.map(({ agentId }) => agentId));
-        const remaining = participants.filter(({ agentId }) => !attemptedAgentIds.has(agentId));
+        const remaining = eligibleParticipants.filter(
+          ({ agentId }) => !attemptedAgentIds.has(agentId),
+        );
         if (remaining.length > 0) {
           if (turns.length + remaining.length > run.policy.maxTurns) {
             return {
