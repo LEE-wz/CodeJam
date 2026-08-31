@@ -29,6 +29,7 @@ const run: CoordinationRun = {
   phase: "drafting",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
@@ -160,4 +161,50 @@ describe("Coordination HTTP routes", () => {
       await app.close();
     },
   );
+
+  it("accepts bounded parallel-session policy and rejects an over-limit worker cap", async () => {
+    let received: unknown;
+    const coordination: CoordinationServiceContract = {
+      initialize: async () => undefined,
+      listRuns: async () => [],
+      getRun: async () => undefined,
+      createRun: async (input) => {
+        received = input;
+        return run;
+      },
+      startRun: async () => run,
+      stopRun: async () => run,
+    };
+    const app = await createApp(
+      loadConfig({ NODE_ENV: "test", APP_AUTH_TOKEN: "a-strong-test-token" }),
+      agentService,
+      coordination,
+    );
+    const headers = { authorization: "Bearer a-strong-test-token" };
+    const body = {
+      workflow: "shared_session_v1",
+      name: "Parallel launch review",
+      objective: "Give one launch risk each.",
+      agents: ["planner", "critic", "finalizer"],
+      policy: {
+        sessionProtocol: "free_chat",
+        maxTurns: 6,
+        sessionParallel: true,
+        maxParallelTurns: 2,
+      },
+    };
+
+    expect((await app.inject({ method: "POST", url: "/api/coordination-runs", headers, payload: body })).statusCode)
+      .toBe(201);
+    expect(received).toMatchObject({ policy: { sessionParallel: true, maxParallelTurns: 2 } });
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/coordination-runs",
+      headers,
+      payload: { ...body, policy: { ...body.policy, maxParallelTurns: 11 } },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+    await app.close();
+  });
 });

@@ -44,6 +44,7 @@ const runFor = (protocol: "countdown" | "free_chat"): CoordinationRun => ({
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 10 } } : {}),
   version: 1,
   createdAt: FIXED_NOW,

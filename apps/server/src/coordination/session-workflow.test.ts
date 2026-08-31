@@ -50,6 +50,7 @@ const sessionRun = (
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 10 } } : {}),
   version: 1,
   createdAt: now,
@@ -184,6 +185,73 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
       kind: "schedule",
       agentId: PARTICIPANT_THREE.id,
     });
+  });
+
+  it("returns one deterministic wave for every participant missing the active prompt", () => {
+    const view = committedView("free_chat", []);
+    view.run.policy.sessionParallel = true;
+    view.run.activeTurnIds = ["turn-other-wave"];
+
+    const decision = workflow.decideNext(view);
+    expect(decision).toMatchObject({ kind: "schedule_wave" });
+    if (decision.kind !== "schedule_wave") return;
+    expect(decision.turns.map(({ agentId }) => agentId)).toEqual([
+      PARTICIPANT_ONE.id,
+      PARTICIPANT_TWO.id,
+      PARTICIPANT_THREE.id,
+    ]);
+    expect(new Set(decision.turns.map(({ agentId }) => agentId)).size).toBe(3);
+  });
+
+  it("accepts parallel committed history without a strict round-robin turn order", () => {
+    const view = committedView("free_chat", [
+      freeChatPayload("Planner response"),
+      freeChatPayload("Finaliser response"),
+    ]);
+    view.run.policy.sessionParallel = true;
+    view.turns[1]!.agentId = PARTICIPANT_THREE.id;
+    const finaliserArtifact = view.artifacts.find(({ id }) => id === "artifact-2");
+    if (!finaliserArtifact || finaliserArtifact.type !== "session_message") {
+      throw new Error("expected second session artifact");
+    }
+    finaliserArtifact.createdByAgentId = PARTICIPANT_THREE.id;
+
+    expect(workflow.decideNext(view)).toMatchObject({
+      kind: "schedule",
+      agentId: PARTICIPANT_TWO.id,
+    });
+  });
+
+  it.each([
+    {
+      label: "a foreign turn",
+      corrupt: (view: WorkflowView) => {
+        view.turns.push({ ...view.turns[0]!, id: "turn-foreign", runId: "other-run", sequence: 9 });
+      },
+    },
+    {
+      label: "an unknown participant",
+      corrupt: (view: WorkflowView) => {
+        view.turns[0]!.agentId = "unknown-agent";
+      },
+    },
+    {
+      label: "a duplicate turn identity",
+      corrupt: (view: WorkflowView) => {
+        view.turns.push({ ...view.turns[0]! });
+      },
+    },
+    {
+      label: "an artifact without a committed turn",
+      corrupt: (view: WorkflowView) => {
+        view.artifacts.push({ ...view.artifacts[1]!, id: "artifact-uncommitted", turnId: "missing-turn" });
+      },
+    },
+  ])("rejects $label in a parallel session view", ({ corrupt }) => {
+    const view = committedView("free_chat", [freeChatPayload("One")]);
+    view.run.policy.sessionParallel = true;
+    corrupt(view);
+    expect(workflow.decideNext(view)).toMatchObject({ kind: "fail", code: "INVALID_STATE" });
   });
 
   it("treats a later omitted done flag as a withdrawn signal", () => {

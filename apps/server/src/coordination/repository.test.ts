@@ -69,6 +69,7 @@ const runRecord = (overrides: Partial<CoordinationRun> = {}): CoordinationRun =>
   phase: "drafting",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
@@ -139,6 +140,7 @@ const sessionRunRecord = (overrides: Partial<CoordinationRun> = {}): Coordinatio
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
+  activeTurnIds: [],
   sharedState: { nextExpectedNumber: 2 },
   version: 1,
   createdAt: "2026-08-29T00:00:00.000Z",
@@ -191,6 +193,38 @@ const sessionArtifact = (
     type: "session_message",
     payload: countdownPayload(Number(content)),
     ...overrides,
+  }) as CoordinationArtifact;
+
+const freeChatSessionRunRecord = (
+  overrides: Partial<CoordinationRun> = {},
+): CoordinationRun => ({
+  ...sessionRunRecord(),
+  policy: {
+    ...DEFAULT_COORDINATION_POLICY,
+    workflow: "shared_session_v1",
+    maxRevisions: 0,
+    maxTurns: 12,
+    sessionProtocol: "free_chat",
+  },
+  sharedState: undefined,
+  ...overrides,
+});
+
+const freeChatArtifact = (
+  id: string,
+  turnId: string,
+  agentId: string,
+): CoordinationArtifact =>
+  ({
+    id,
+    runId: "run-session",
+    turnId,
+    createdByRole: "participant",
+    createdByAgentId: agentId,
+    sizeChars: 12,
+    createdAt: "2026-08-29T00:00:00.000Z",
+    type: "session_message",
+    payload: freeChatPayload(`message ${id}`),
   }) as CoordinationArtifact;
 
 const agentRunRow = (id: string, agentId: string, status: AgentRun["status"]): AgentRun => ({
@@ -385,6 +419,24 @@ describe("read model", () => {
     const second = await harness.repository.getRunDetails("run-1");
     expect(second?.run.status).toBe("created");
     expect(second?.events).toHaveLength(1);
+  });
+
+  it("reads a legacy singular active-turn pointer as a one-turn wave without migrating it", async () => {
+    const harness = await createHarness();
+    const legacy = runRecord({ status: "running" }) as CoordinationRun & { activeTurnId?: string };
+    delete legacy.activeTurnIds;
+    legacy.activeTurnId = "turn-legacy";
+    await harness.store.mutate((database) => {
+      database.coordinationRuns.push(legacy);
+    });
+
+    expect((await harness.repository.getRunDetails("run-1"))?.run.activeTurnIds)
+      .toEqual(["turn-legacy"]);
+    const persisted = harness.store.snapshot().coordinationRuns[0] as CoordinationRun & {
+      activeTurnId?: string;
+    };
+    expect(persisted.activeTurnId).toBe("turn-legacy");
+    expect(persisted.activeTurnIds).toBeUndefined();
   });
 });
 
@@ -663,7 +715,7 @@ describe("scheduleTurn and beginAttempt", () => {
 
     expect(result.kind).toBe("scheduled");
     if (result.kind !== "scheduled") return;
-    expect(result.run.activeTurnId).toBe("turn-1");
+    expect(result.run.activeTurnIds).toEqual(["turn-1"]);
     expect(result.run.nextTurnSequence).toBe(2);
     expect(result.run.version).toBe(started.run.version + 1);
     expect(await eventTypes(harness)).toEqual(["run.created", "run.started", "turn.scheduled"]);
@@ -734,6 +786,216 @@ describe("scheduleTurn and beginAttempt", () => {
 
 // -------------------------------------------- P2-10 to P2-13 lease and races
 
+describe("P13 durable waves", () => {
+  const scheduleWave = async (harness: Harness) => {
+    await harness.repository.createRun({ run: freeChatSessionRunRecord() });
+    const started = await harness.repository.startRun("run-session");
+    if (started.kind !== "started") throw new Error("expected session to start");
+    const turns = [
+      sessionTurnRecord({
+        id: "turn-wave-1",
+        sequence: 1,
+        agentId: PARTICIPANT_ONE.id,
+      }),
+      sessionTurnRecord({
+        id: "turn-wave-2",
+        sequence: 2,
+        agentId: PARTICIPANT_TWO.id,
+      }),
+    ];
+    const scheduled = await harness.repository.scheduleTurns({
+      runId: "run-session",
+      expectedRunVersion: started.run.version,
+      turns,
+      nextPhase: "sessioning",
+      nextRevision: 0,
+    });
+    if (scheduled.kind !== "scheduled") throw new Error("expected wave to schedule");
+    return { scheduled, turns };
+  };
+
+  const beginWave = async (harness: Harness) => {
+    const { scheduled, turns } = await scheduleWave(harness);
+    const attempts = [
+      sessionAttemptRecord({
+        id: "attempt-wave-1",
+        turnId: turns[0]!.id,
+        agentId: turns[0]!.agentId,
+        leaseToken: "lease-wave-1",
+      }),
+      sessionAttemptRecord({
+        id: "attempt-wave-2",
+        turnId: turns[1]!.id,
+        agentId: turns[1]!.agentId,
+        leaseToken: "lease-wave-2",
+      }),
+    ];
+    await Promise.all(
+      attempts.map((attempt) =>
+        harness.repository.beginAttempt({
+          runId: "run-session",
+          turnId: attempt.turnId,
+          attempt,
+        }),
+      ),
+    );
+    return { scheduled, turns, attempts };
+  };
+
+  it("schedules all siblings atomically against one run version", async () => {
+    const harness = await createHarness();
+    const { scheduled, turns } = await scheduleWave(harness);
+
+    expect(scheduled.run.activeTurnIds).toEqual(turns.map(({ id }) => id));
+    expect(scheduled.run.nextTurnSequence).toBe(3);
+    expect((await harness.repository.getRunDetails("run-session"))?.events.slice(-2).map((event) => event.turnId))
+      .toEqual(turns.map(({ id }) => id));
+
+    const competing = await harness.repository.scheduleTurns({
+      runId: "run-session",
+      expectedRunVersion: scheduled.run.version - 1,
+      turns: [sessionTurnRecord({ id: "turn-partial", sequence: 3, agentId: PARTICIPANT_THREE.id })],
+      nextPhase: "sessioning",
+      nextRevision: 0,
+    });
+    expect(competing.kind).toBe("stale");
+    expect((await harness.repository.getRunDetails("run-session"))?.turns.map(({ id }) => id))
+      .toEqual(turns.map(({ id }) => id));
+  });
+
+  it("lets sibling commits settle independently and keeps event sequences gapless", async () => {
+    const harness = await createHarness();
+    const { turns, attempts } = await beginWave(harness);
+    const commits = await Promise.all(
+      attempts.map((attempt, index) =>
+        harness.repository.commitAcceptedArtifact({
+          runId: "run-session",
+          turnId: attempt.turnId,
+          attemptId: attempt.id,
+          leaseToken: attempt.leaseToken,
+          artifact: freeChatArtifact(`artifact-wave-${index + 1}`, attempt.turnId, turns[index]!.agentId),
+        }),
+      ),
+    );
+    expect(commits.every((commit) => commit.kind === "committed")).toBe(true);
+
+    const details = await harness.repository.getRunDetails("run-session");
+    expect(details?.run.activeTurnIds).toEqual([]);
+    expect(details?.turns.map(({ status }) => status)).toEqual(["committed", "committed"]);
+    expect(details?.artifacts.map(({ transcriptSequence }) => transcriptSequence)).toEqual([1, 2]);
+    expect(details?.events.map(({ sequence }) => sequence)).toEqual(
+      details?.events.map((_event, index) => index + 1),
+    );
+  });
+
+  it("fences a superseded sibling lease while another sibling commits", async () => {
+    const harness = await createHarness();
+    const { turns, attempts } = await beginWave(harness);
+    const retired = await harness.repository.finishAttempt({
+      runId: "run-session",
+      turnId: attempts[0]!.turnId,
+      attemptId: attempts[0]!.id,
+      leaseToken: attempts[0]!.leaseToken,
+      status: "failed",
+      errorCode: "AGENT_EXECUTION_FAILED",
+      errorMessage: "retry",
+    });
+    expect(retired).toBe("finished");
+    expect((await harness.repository.beginAttempt({
+      runId: "run-session",
+      turnId: turns[0]!.id,
+      attempt: sessionAttemptRecord({
+        id: "attempt-wave-1b",
+        turnId: turns[0]!.id,
+        agentId: turns[0]!.agentId,
+        leaseToken: "lease-wave-1b",
+      }),
+    })).kind).toBe("started");
+
+    const [stale, committed] = await Promise.all([
+      harness.repository.commitAcceptedArtifact({
+        runId: "run-session",
+        turnId: attempts[0]!.turnId,
+        attemptId: attempts[0]!.id,
+        leaseToken: attempts[0]!.leaseToken,
+        artifact: freeChatArtifact("artifact-stale", attempts[0]!.turnId, turns[0]!.agentId),
+      }),
+      harness.repository.commitAcceptedArtifact({
+        runId: "run-session",
+        turnId: attempts[1]!.turnId,
+        attemptId: attempts[1]!.id,
+        leaseToken: attempts[1]!.leaseToken,
+        artifact: freeChatArtifact("artifact-committed", attempts[1]!.turnId, turns[1]!.agentId),
+      }),
+    ]);
+    expect(stale.kind).toBe("stale");
+    expect(committed.kind).toBe("committed");
+    expect((await harness.repository.getRunDetails("run-session"))?.run.activeTurnIds)
+      .toEqual([turns[0]!.id]);
+  });
+
+  it("applies a sibling retry settlement and a sibling commit without losing either", async () => {
+    const harness = await createHarness();
+    const { turns, attempts } = await beginWave(harness);
+    const [finished, committed] = await Promise.all([
+      harness.repository.finishAttempt({
+        runId: "run-session",
+        turnId: attempts[0]!.turnId,
+        attemptId: attempts[0]!.id,
+        leaseToken: attempts[0]!.leaseToken,
+        status: "timed_out",
+        errorCode: "ATTEMPT_TIMED_OUT",
+        errorMessage: "timed out",
+      }),
+      harness.repository.commitAcceptedArtifact({
+        runId: "run-session",
+        turnId: attempts[1]!.turnId,
+        attemptId: attempts[1]!.id,
+        leaseToken: attempts[1]!.leaseToken,
+        artifact: freeChatArtifact("artifact-sibling-commit", attempts[1]!.turnId, turns[1]!.agentId),
+      }),
+    ]);
+    expect(finished).toBe("finished");
+    expect(committed.kind).toBe("committed");
+    const details = await harness.repository.getRunDetails("run-session");
+    expect(details?.run.activeTurnIds).toEqual([turns[0]!.id]);
+    expect(details?.turns.map(({ status }) => status)).toEqual(["scheduled", "committed"]);
+  });
+
+  it("settles every sibling when stopping a wave and refuses late commits", async () => {
+    const harness = await createHarness();
+    const { attempts } = await beginWave(harness);
+    await harness.repository.requestStop("run-session");
+    await harness.repository.finishStopped("run-session");
+    const late = await harness.repository.commitAcceptedArtifact({
+      runId: "run-session",
+      turnId: attempts[0]!.turnId,
+      attemptId: attempts[0]!.id,
+      leaseToken: attempts[0]!.leaseToken,
+      artifact: freeChatArtifact("artifact-late", attempts[0]!.turnId, attempts[0]!.agentId),
+    });
+    const details = await harness.repository.getRunDetails("run-session");
+    expect(late.kind).toBe("stale");
+    expect(details?.run).toMatchObject({ status: "awaiting_input", activeTurnIds: [] });
+    expect(details?.turns.map(({ status }) => status)).toEqual(["cancelled", "cancelled"]);
+    expect(details?.attempts.map(({ status }) => status)).toEqual(["cancelled", "cancelled"]);
+  });
+
+  it("settles every active sibling on restart and leaves the session resumable", async () => {
+    const harness = await createHarness();
+    await beginWave(harness);
+
+    expect(await harness.repository.interruptActiveRuns()).toEqual(["run-session"]);
+    const details = await harness.repository.getRunDetails("run-session");
+    expect(details?.run).toMatchObject({ status: "awaiting_input", activeTurnIds: [] });
+    expect(details?.turns.map(({ status }) => status)).toEqual(["failed", "failed"]);
+    expect(details?.attempts.map(({ status, errorCode }) => ({ status, errorCode }))).toEqual([
+      { status: "cancelled", errorCode: "SERVER_RESTARTED" },
+      { status: "cancelled", errorCode: "SERVER_RESTARTED" },
+    ]);
+  });
+});
+
 describe("attachAgentRun", () => {
   it("attaches only to the attempt holding the lease and stamps the Agent Run", async () => {
     const harness = await createHarness();
@@ -792,7 +1054,7 @@ describe("commitAcceptedArtifact", () => {
     expect(result.kind).toBe("committed");
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.run.latestProposalArtifactId).toBe("artifact-1");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.turns[0]).toMatchObject({
       status: "committed",
       outputArtifactId: "artifact-1",
@@ -873,7 +1135,7 @@ describe("commitAcceptedArtifact", () => {
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.artifacts).toHaveLength(0);
     expect(details?.run.latestProposalArtifactId).toBeUndefined();
-    expect(details?.run.activeTurnId).toBe("turn-1");
+    expect(details?.run.activeTurnIds).toEqual(["turn-1"]);
     expect(details?.attempts[0]?.status).toBe("running");
     expect(await eventTypes(harness)).toContain("attempt.stale_ignored");
   });
@@ -1074,7 +1336,7 @@ describe("finishAttempt", () => {
 
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.turns[0]?.status).toBe("cancelled");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(await eventTypes(harness)).toContain("attempt.cancelled");
   });
 
@@ -1164,7 +1426,7 @@ describe("terminal commands", () => {
 
     expect(failed).toMatchObject({ status: "failed", errorCode: "MAX_TURNS_EXCEEDED" });
     const details = await harness.repository.getRunDetails("run-1");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.turns[0]?.status).toBe("failed");
     expect(details?.attempts[0]).toMatchObject({
       status: "cancelled",
@@ -1234,7 +1496,7 @@ describe("listNonTerminalRuns", () => {
     const started = await harness.repository.startRun("run-1");
     if (started.kind !== "started") throw new Error("run did not start");
     expect(await harness.repository.listNonTerminalRuns()).toEqual([
-      { runId: "run-1", status: "running", hasRunningAttempt: false },
+      { runId: "run-1", status: "running", activeTurnIds: [], hasRunningAttempt: false },
     ]);
 
     await harness.repository.scheduleTurn({
@@ -1253,7 +1515,7 @@ describe("listNonTerminalRuns", () => {
       {
         runId: "run-1",
         status: "running",
-        activeTurnId: "turn-1",
+        activeTurnIds: ["turn-1"],
         hasRunningAttempt: true,
       },
     ]);
@@ -1283,7 +1545,7 @@ describe("reconcileRun", () => {
     const details = await harness.repository.getRunDetails("run-1");
     // The run is still running and has no active turn: schedulable again.
     expect(details?.run.status).toBe("running");
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.run.version).toBe((before?.run.version ?? 0) + 1);
     expect(details?.turns[0]?.status).toBe("failed");
     expect(details?.attempts[0]).toMatchObject({
@@ -1368,7 +1630,7 @@ describe("interruptActiveRuns", () => {
 
     const details = await harness.repository.getRunDetails("run-1");
     expect(details?.run).toMatchObject({ status: "failed", errorCode: "SERVER_RESTARTED" });
-    expect(details?.run.activeTurnId).toBeUndefined();
+    expect(details?.run.activeTurnIds).toEqual([]);
     expect(details?.turns[0]?.status).toBe("failed");
     expect(details?.attempts[0]).toMatchObject({
       status: "cancelled",
@@ -1500,7 +1762,7 @@ describe("durable shared-session commits and races", () => {
       (run) => run.id === "run-session",
     );
     expect(persistedRun).toMatchObject({ sharedState: { nextExpectedNumber: 1 } });
-    expect(persistedRun?.activeTurnId).toBeUndefined();
+    expect(persistedRun?.activeTurnIds).toEqual([]);
     expect(reloaded.snapshot().coordinationArtifacts).toHaveLength(1);
     expect(reloaded.snapshot().coordinationEvents.map((event) => event.type)).toEqual([
       "run.created",
