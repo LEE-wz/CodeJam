@@ -1,17 +1,16 @@
 # Session Development Status
 
-**Last audit:** 2026-09-01 (Auction Checkpoint 14 closed: the restart-
-reconciliation defect is fixed and regressed, `PA14-27` passed every round of
-run `40f52425`, and `PA14-18` deleted the countdown engine while keeping stored
-countdown history readable)
-**Audited checkpoint:** Auction Checkpoint 14 complete at `dbc359c`
-**Implementation branch:** `bidding-agent-implementation` at `dbc359c`
-(auction-track root `aa17407`)
+**Last audit:** 2026-09-01 (Phase 15 scale, storage, documentation, demo, clean
+release, browser, and security gates complete)
+**Audited checkpoint:** Checkpoint 15 complete in submission commit
+`1e3318fb23ce11615cce854b9a188029e01a80a8`
+**Implementation branch:** `bidding-agent-implementation` (auction-track root
+`aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Phase 15 - Scale, Storage, and Release (`not_started`)
-**Current gate:** Auction Checkpoint 14 **complete**; Phase 15 is the next phase
+**Current phase:** Phase 15 - Scale, Storage, and Release (`complete`)
+**Current gate:** Checkpoint 15 **complete**; feature work is frozen
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 11-12 and auction Phases 13-14 `complete`; Phase 15 `not_started`
+Phases 11-12 and auction Phases 13-14 `complete`; Phase 15 `complete`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -37,7 +36,7 @@ they name a past checkpoint.
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Auction foundation and purpose-aware parallel waves | `complete` on `bidding-agent-implementation` — all of `PA13-01`-`PA13-20`; Auction Checkpoint 13 met (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
 | 14 | Adaptive auction coordination | `complete` on `bidding-agent-implementation` — `PA14-01`-`PA14-27` all complete; Auction Checkpoint 14 closed at `dbc359c` (auction sheet: [`phases/parallel/14-adaptive-auction-coordination.md`](phases/parallel/14-adaptive-auction-coordination.md)); main-track sheet unchanged |
-| 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
+| 15 | Scale, storage, and release | `complete` at `1e3318fb23ce11615cce854b9a188029e01a80a8` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
 [`plans/session-v2-plan.md`](plans/session-v2-plan.md), approved through the
@@ -50,17 +49,10 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Auction Phase 14 is complete. No auction-track feature work
-remains on this branch. The next actions are:
-
-1. Decide which implementation ships. The main track closed its own
-   Checkpoint 14 on `phase-14` (merged to `main`), so both branches now satisfy
-   their own gates. Run the common comparison suite described in
-   [`phases/parallel/README.md`](phases/parallel/README.md) against each branch
-   and record the result. The documentation deliberately encodes no automatic
-   winner.
-2. Begin Phase 15 on a task branch cut from this checkpoint, starting at
-   `P15-01` (measure `JsonStore` at 100 / 500 / 2,000 / 10,000 committed turns).
+**Resume here.** Checkpoint 15 is closed and feature work on this release
+candidate is frozen. There are no outstanding Phase 15 tasks. Any storage
+engine replacement, first-read pagination, or multi-process work starts from a
+new approved phase rather than changing this release candidate.
 
 The restart-reconciliation defect that blocked `PA14-27` is fixed. Boot recovery
 (`interruptActiveRuns`) now keeps an auction round with pending work `running`
@@ -73,11 +65,82 @@ plan is
 [`plans/pa14-27-restart-reconciliation-fix.md`](plans/pa14-27-restart-reconciliation-fix.md);
 the regression lives in `auction-restart-recovery.test.ts`.
 
-The mandatory disposable Docker Compose gate passes on the closed checkpoint:
-**38 server files / 694 tests**, **5 web files / 66 tests**, both workspace
-typechecks, and both production builds (**760 tests total**). The focused
-restart set additionally passed ten consecutive host runs with zero flakes; the
-Compose gate above is the authoritative one.
+The mandatory disposable Docker Compose gate passes on the release candidate:
+**38 server files / 697 tests**, **5 web files / 68 tests**, both workspace
+typechecks, and both production builds (**765 tests total**). `npm ci` reports
+the unchanged 1 moderate and 5 high dependency-audit findings. A separate
+`docker compose build launchpad` also passes.
+
+## Phase 15 task ledger
+
+| Task | Status | Current implementation/evidence |
+|---|---|---|
+| P15-01 | `complete` | `npm run scale:p15-01` uses a fresh temporary `JsonStore`, establishes a real validated auction-wave shape, materialises only unmeasured setup history, and measures real final mutations, snapshot memory, detail reads, and prompt construction at 100/500/2,000/10,000 turns. Results are below and in `COORDINATION_OPERATIONS.md`. |
+| P15-02 | `complete` | `npm run scale:p15-02` measures the real Fastify full/delta routes and 1.5-second polling bytes. The browser already performs one full load then delta-only active polling; no client change was needed. |
+| P15-03 | `complete` | Default/recommended `maxTurns` is 2,000, the UI warns at 1,600 and whenever creation exceeds the recommendation, and the explicit 100,000 hard ceiling remains available without a performance claim. |
+| P15-04 | `complete` | Mini-RFC keeps `JsonStore` for this single-process release after first removing the quadratic transcript-ID representation. |
+| P15-05 | `deferred (complete)` | No storage swap. The measured practical recommendation is 2,000 turns; the deferral and later swap triggers are recorded in `COORDINATION_OPERATIONS.md` and `DECISIONS.md`. |
+| P15-06 | `complete` | Root README now describes the shipped adaptive-auction Session product, setup, lifecycle, evidence, failure/recovery, verification, measured limits, and honest constraints. |
+| P15-07 | `complete` | Shipped architecture, protocol, API, operations, and decision references exist at the root of `docs/` and match the auction implementation. |
+| P15-08 | `complete` | This ledger, `overview-sessions.md`, `FILESYSTEM_MAP.md`, and superseded Phase 9 sheet describe the final Phase 15 layout and contract. |
+| P15-09 | `complete` | Repository-local Markdown audit found 53 files, zero broken local links and zero absolute local paths; documented command names and anchors were checked from the release tree. |
+| P15-10 | `complete` | `AGENT_TEMPLATES.md` supplies ten collaborative participants, including a coordinator-capable Agent and deliberately unreliable Agent. |
+| P15-11 | `complete` | `DEMO.md` separates the honest three-minute recorded narration from the long-form live rehearsal, names every state, fallback, reset, security, and latency beat. |
+| P15-12 | `complete` | Approved real run `40f52425` supplies ordered, parallel, multi-prompt restart, genuine invalid-bid recovery, contention, Stop, and resume evidence. Its portable content-free report is `docs/recordings/PA14-27.md`; the prepared release state retains the one labelled fallback run only. |
+| P15-13 | `complete` | Three automated browser playback rehearsals covered ordered, parallel, awaiting, ended, stopped, and failed states in 1.225–1.369 seconds each. The provider-backed source run records 4.3–325.2 seconds per round. An independent reader reproduced the documentation audit after the clean-checkout/demo corrections. Exact implementation commit: `1e3318fb23ce11615cce854b9a188029e01a80a8`. |
+| P15-14 | `complete` | Full status/diff review preserved unrelated history and excludes `.env`, `data/`, workspaces, logs, generated graph output, and ignored scale reports. |
+| P15-15 | `complete` | Disposable clean-source Docker Compose gate: 697 server + 68 web tests, both typechecks, both production builds, 765 tests total. Release image build passes. |
+| P15-16 | `complete` | In-app browser verified current awaiting-input, completed/End, stopped, failed, idle-restart, ordered-award, and parallel-award states against the release image; console errors/warnings were empty. |
+| P15-17 | `complete` | Logs, full archived database, API details, and visible Session DOM passed content-free scans: public attempts expose no leases; events use allowed bounded keys; no auth/cookie/stack/raw prompt values were found; user prompts occur only in `user_message` artifacts/transcript. |
+| P15-18 | `complete` | The legacy 12 product criteria and all 9 shipped Session criteria are covered by the clean gate, browser flows, durable restart/lease/race tests, CRUD regressions, and the request ledger below. |
+| P15-19 | `complete` | Local release state was reduced from 28 coordination runs/633 Agent runs/1,255 messages to the one labelled content-free fallback Session and its ten reset participants; the recoverable full archive is outside the repository. |
+| P15-20 | `complete` | Submission implementation commit `1e3318fb23ce11615cce854b9a188029e01a80a8`; release feature work frozen. This exact hash is recorded by the immediate ledger-only follow-up commit. |
+
+### P15-01 measured store cost
+
+Measured on Node v24.12.0 / darwin arm64; no point is extrapolated:
+
+| Turns | DB | mutation p50 | mutation p95 | mutation max | snapshot | heap | RSS | detail | final prompt |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 0.42 MiB | 22.32 ms | 25.27 ms | 26.91 ms | 1.09 ms | 0.71 MiB | 122.58 MiB | 2.42 ms | 0.11 s |
+| 500 | 2.05 MiB | 130.05 ms | 157.04 ms | 159.08 ms | 5.94 ms | 3.55 MiB | 181.36 MiB | 14.09 ms | 0.63 s |
+| 2,000 | 8.21 MiB | 529.00 ms | 833.28 ms | 868.37 ms | 23.93 ms | 14.37 MiB | 536.92 MiB | 64.58 ms | 2.97 s |
+| 10,000 | 41.15 MiB | 2,697.20 ms | 5,655.91 ms | 6,034.24 ms | 105.13 ms | 53.93 MiB | 1,705.03 MiB | 226.45 ms | 18.05 s |
+
+### P15-02 measured polling cost
+
+| Turns | full payload / read | idle delta / read | active-wave delta / read | full vs active-delta bytes |
+|---:|---:|---:|---:|---:|
+| 100 | 0.31 MiB / 9.35 ms | 1,866 B / 2.57 ms | 37,238 B / 2.80 ms | 8.61× per minute |
+| 500 | 1.53 MiB / 13.06 ms | 1,868 B / 11.24 ms | 37,261 B / 10.10 ms | 43.07× per minute |
+| 2,000 | 6.15 MiB / 55.06 ms | 1,870 B / 45.10 ms | 37,335 B / 46.24 ms | 172.65× per minute |
+| 10,000 | 30.86 MiB / 271.06 ms | 1,874 B / 213.70 ms | 37,442 B / 218.38 ms | 864.38× per minute |
+
+### Session v2 request acceptance ledger
+
+| Request | Acceptance evidence |
+|---|---|
+| 1. Recover Agents after completion | End, Stop, failure, restart, and reconciliation tests plus browser flows leave no reservation without running work; cleaned demo participants are `ready`. |
+| 2. Remove verified handoff UI | Session is the only coordination workspace; the legacy server workflow remains readable and regressed. |
+| 3. Remove countdown | Countdown creation/execution is deleted while the stored-history compatibility test and web read rendering remain green. |
+| 4. Support up to 10 Agents | Contract/UI bounds are 2–10; real ten-bid auction, scale harness, and release tests pass. |
+| 5. Raise turn ceiling | Explicit max is 100,000; measured default/recommendation is 2,000 with warning at 1,600 and additive compact transcript bounds. |
+| 6. Long-lived multi-prompt Sessions | `awaiting_input`, user messages, Stop/resume, explicit End, one durable transcript, and idle restart are exercised in tests and the real recording. |
+| 7. Relay → Session | User-facing product, workspace, README, and docs use Session; retained coordination API/module names are an explicit compatibility decision. |
+| 8. Parallel Agents | Purpose-aware bounded waves, atomic sibling scheduling/settlement, concurrency races, and a real three-Agent fan-out pass. |
+| 9. Context-aware assignment | Adaptive private bids embed mechanically validated plans; deterministic scoring commits one award and executes single/sequential/parallel assignments with scoped context. |
+
+### Release security inspection
+
+- API run `40f52425`: 82 turns, 94 attempts, 84 artifacts, 306 events,
+  zero public lease tokens, zero forbidden event keys, nine user messages.
+- Full archived database: all 652 durable attempts retained internal leases;
+  public projection exposed zero. User prompts occurred only in `user_message`
+  artifacts; no non-user artifact carried a prompt field.
+- Release container logs: 60 inspected lines; no authorization, bearer, cookie,
+  lease-token, raw-system-prompt, or stack-trace match.
+- Visible Session DOM: no authorization, cookie, lease, raw prompt contract, or
+  stack text; intended user transcript content remained visible.
 
 ## Auction Phase 14 task ledger
 

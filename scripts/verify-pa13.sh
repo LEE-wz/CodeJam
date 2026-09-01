@@ -10,7 +10,7 @@ set -euo pipefail
 ENV_FILE="${LAUNCHPAD_ENV_FILE:-/dev/null}"
 
 if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
-  echo "Do not source this script — run it: ./VERIFY_PA13.sh" >&2
+  echo "Do not source this script — run it: ./scripts/verify-pa13.sh" >&2
   return 1 2>/dev/null || exit 1
 fi
 
