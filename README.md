@@ -31,12 +31,73 @@ Volcengine ECS.
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS
 
+## Sessions
+
+A Session is one durable conversation shared by up to ten Agents. You send a
+prompt; the middleware decides who answers, in what order, and whether their
+output is acceptable; the transcript persists across prompts and across
+restarts.
+
+The point is that **the middleware provides the reliability, not the models**.
+Agents return malformed JSON, time out, and contradict each other. Every
+guarantee below is enforced by backend code that treats model output as
+untrusted input.
+
+### What it does
+
+- **Multi-prompt sessions.** A session stays alive between prompts in an
+  `awaiting_input` state, and survives a server restart.
+- **Adaptive routing.** Auto tries one primary candidate and expands to an
+  auction when confidence, recommendation, or budget gates miss. Direct runs
+  one ordinary turn; Auction gathers one private bid per eligible participant.
+  The backend validates each embedded plan and records one immutable award.
+- **Parallel waves.** Independent work fans out concurrently, capped by
+  `maxParallelTurns`. One sibling failing never aborts the others.
+- **Evidence.** Every turn, attempt, artifact, and decision is recorded with a
+  reason — and with no prompts, no raw output, and no lease tokens.
+
+### Using a session
+
+1. Create Agents and wait for each to reach `ready`. Instructions to paste are
+   in [docs/AGENT_TEMPLATES.md](docs/AGENT_TEMPLATES.md).
+2. Create a session: give it a name and an objective, pick 2–10 participants,
+   and leave routing on **Auto**.
+3. Send a prompt. Watch the bid evidence, immutable award, then execution.
+4. Send more prompts to the same session. The transcript carries forward.
+5. **Stop** cancels the current wave and leaves the session recoverable. **End**
+   finishes the session deliberately. They are different actions.
+
+The API is documented in [docs/COORDINATION_API.md](docs/COORDINATION_API.md).
+
+### Limitations
+
+Stated plainly, because they are real:
+
+- **Single process, single user.** No identity, tenancy, audit, or horizontal
+  scaling. Two servers against one data directory will corrupt it.
+- **Recovery uses durable evidence, not provider-process resurrection.** Idle
+  sessions survive intact. In-flight attempts are cancelled/fenced; auction
+  recovery re-derives from committed bids and awards without re-scoring a
+  winner or treating cancelled execution as complete.
+- **Transcript length is measured, not assumed.** The default and recommendation
+  are **2,000 committed turns** (2.97s for the measured final prompt); the UI
+  warns from 1,600. The explicit 100,000 ceiling remains available but is not a
+  performance claim: 10,000 turns already took 18.05s for one measured prompt.
+- **No streaming.** Progress is observed by polling every 1.5s.
+- **Long sessions prompt against a recent window.** When the transcript exceeds
+  the context budget, older entries are dropped first.
+- **The middleware never judges quality.** “Winner” means highest-ranked valid
+  bid under the recorded scoring version, not objectively best.
+- **A wave is N concurrent model calls.** Ten participants can saturate a
+  per-account provider rate limit far faster than single-Agent use.
+
 ## Requirements
 
 - Node.js 22+
 - npm 10+
 - Docker, Colima, or Podman
 - A Volcengine Ark API key and endpoint that supports the Responses API
+- Terraform 1.x only when validating or using the optional Terraform deployment
 
 Codex CLI is included in the Runtime image and is not required on the host.
 
@@ -59,7 +120,7 @@ Runtime image.
 ### 2. Clone the repository
 
 ```bash
-git clone <repository-url> volc-agent-launchpad
+git clone https://github.com/LEE-wz/CodeJam.git volc-agent-launchpad
 cd volc-agent-launchpad
 ```
 
@@ -238,6 +299,18 @@ docker compose config
 ```
 
 ## Documentation
+
+**Session**
+
+- [Session architecture](docs/COORDINATION_ARCHITECTURE.md)
+- [Session protocol](docs/COORDINATION_PROTOCOL.md)
+- [Session API](docs/COORDINATION_API.md)
+- [Session operations](docs/COORDINATION_OPERATIONS.md)
+- [Decisions](docs/DECISIONS.md)
+- [Demo script](docs/DEMO.md)
+- [Agent templates](docs/AGENT_TEMPLATES.md)
+
+**Platform**
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Local POC](docs/LOCAL_POC.md)

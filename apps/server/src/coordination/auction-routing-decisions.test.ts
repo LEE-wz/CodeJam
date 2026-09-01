@@ -397,11 +397,14 @@ describe("PA14-11 and PA14-12 awarded execution", () => {
         ],
       ),
     );
-    // The second Agent runs only after the first committed, and sees it.
+    // The second Agent runs only after the first committed. Phase 15 pins that
+    // message through the inclusive transcript sequence instead of copying its
+    // artifact id into every later turn.
     expect(second).toMatchObject({ kind: "schedule", agentId: PARTICIPANT_THREE.id });
-    expect((second as { inputArtifactIds: string[] }).inputArtifactIds).toContain(
-      "artifact-msg-1",
-    );
+    expect(second).toMatchObject({
+      inputArtifactIds: [USER_ID, committed.id],
+      inputThroughSequence: 11,
+    });
   });
 
   it("schedules a parallel plan as one bounded execution wave", () => {

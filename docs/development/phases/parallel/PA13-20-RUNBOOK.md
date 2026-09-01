@@ -26,7 +26,7 @@ awards belong to parallel Phase 14.
 | Docker running | `docker info` |
 | On the right branch | `git branch --show-current` → `bidding-agent-implementation` |
 | `.env` present with real credentials | `ARK_API_KEY`, `ARK_MODEL`, `APP_AUTH_TOKEN` all non-empty |
-| The Compose gate already passed | `./VERIFY_PA13.sh` — this is `PA13-09`–`PA13-19`, not this task |
+| The Compose gate already passed | `./scripts/verify-pa13.sh` — this is `PA13-09`–`PA13-19`, not this task |
 
 Do not run this rehearsal against a deployment whose gate has not passed. A live
 failure is only interpretable when the unit and race evidence is already green.
@@ -36,7 +36,7 @@ failure is only interpretable when the unit and race evidence is already green.
 ## Step 1 — Build and start the deployment
 
 ```bash
-cd /Users/dylnho/Downloads/TechJam/CodeJam
+cd "$(git rev-parse --show-toplevel)"
 unset LAUNCHPAD_ENV_FILE     # see the note below
 docker compose up --build -d
 ```
@@ -44,7 +44,7 @@ docker compose up --build -d
 **`unset LAUNCHPAD_ENV_FILE` first, always.** `docker-compose.yml` reads
 `env_file: ${LAUNCHPAD_ENV_FILE:-.env}`. The verification gate deliberately sets
 it to `/dev/null` so the disposable check never loads repository secrets. If that
-variable is still set in your shell — it leaks if `VERIFY_PA13.sh` was *sourced*
+variable is still set in your shell — it leaks if `scripts/verify-pa13.sh` was *sourced*
 rather than executed — the server starts with **no `.env`**, and because the
 compose `environment:` block still sets `HOST=0.0.0.0`, it fails the
 non-loopback auth-token check and crash-loops:

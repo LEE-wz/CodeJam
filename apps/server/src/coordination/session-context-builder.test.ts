@@ -91,6 +91,14 @@ const turn = (inputArtifactIds: string[]): CoordinationTurn => ({
   createdAt: FIXED_NOW,
 });
 
+const boundedTurn = (
+  inputThroughSequence: number,
+  inputArtifactIds: string[] = [],
+): CoordinationTurn => ({
+  ...turn(inputArtifactIds),
+  inputThroughSequence,
+});
+
 const build = (
   protocol: "free_chat",
   artifacts: CoordinationArtifact[],
@@ -338,5 +346,74 @@ describe("session context builder", () => {
     expect(second.prompt).toBe(first.prompt);
     expect(second.promptDigest).toBe(first.promptDigest);
     expect(first.promptDigest).toBe(digestPrompt(first.prompt));
+  });
+});
+
+describe("session transcript sequence bounds (P15-05)", () => {
+  const withSequence = (
+    artifact: CoordinationArtifact,
+    transcriptSequence: number,
+  ): CoordinationArtifact => ({ ...artifact, transcriptSequence });
+
+  const transcript = [
+    userMessage(0, "Start with seller verification.", 1),
+    withSequence(message(0, "Verification first, then listings."), 2),
+    withSequence(message(1, "Add an escrow hold."), 3),
+  ];
+
+  const build = (nextTurn: CoordinationTurn, artifacts = transcript) =>
+    new RoleScopedContextBuilder().build({
+      run: sessionRun("free_chat"),
+      turn: nextTurn,
+      artifacts,
+      retryValidationErrors: [],
+    });
+
+  it("renders the same transcript as the equivalent legacy id list", () => {
+    const bounded = build(boundedTurn(3));
+    const listed = build(turn(transcript.map(({ id }) => id)));
+    expect(bounded.prompt).toBe(listed.prompt);
+    expect(bounded.promptDigest).toBe(listed.promptDigest);
+  });
+
+  it("excludes transcript artifacts committed above the bound", () => {
+    const later = withSequence(message(2, "This must stay out."), 4);
+    const built = build(boundedTurn(3), [...transcript, later]);
+    expect(built.prompt).toContain("Add an escrow hold.");
+    expect(built.prompt).not.toContain("This must stay out.");
+  });
+
+  it("never exposes private bid evidence even when it is named explicitly", () => {
+    const bid: CoordinationArtifact = {
+      id: "artifact-private-bid",
+      runId: "run-session-context",
+      turnId: "turn-private-bid",
+      type: "session_bid",
+      payload: {
+        schemaVersion: 1,
+        type: "session_bid",
+        recommendation: "direct",
+        confidenceBps: 9000,
+        estimatedOutputTokens: 10,
+        rationale: "PRIVATE BID RATIONALE",
+        candidateAnswer: "PRIVATE CANDIDATE",
+        plan: {
+          mode: "single",
+          assignments: [{
+            agentId: PARTICIPANT_ONE.id,
+            position: 1,
+            instruction: "PRIVATE ASSIGNMENT",
+          }],
+        },
+      },
+      createdByRole: "participant",
+      createdByAgentId: PARTICIPANT_ONE.id,
+      sizeChars: 100,
+      createdAt: FIXED_NOW,
+    };
+    const built = build(boundedTurn(3, [bid.id]), [...transcript, bid]);
+    expect(built.prompt).not.toContain("PRIVATE BID RATIONALE");
+    expect(built.prompt).not.toContain("PRIVATE CANDIDATE");
+    expect(built.prompt).not.toContain("PRIVATE ASSIGNMENT");
   });
 });

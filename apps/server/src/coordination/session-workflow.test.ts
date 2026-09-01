@@ -150,10 +150,8 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
       expect(first).toMatchObject({ kind: "schedule", agentId: expected.agentId });
       expect(second).toEqual(first);
       if (first.kind === "schedule") {
-        expect(first.inputArtifactIds).toEqual([
-          "user-artifact-1",
-          ...payloads.map((_payload, index) => `artifact-${index + 1}`),
-        ]);
+        expect(first.inputArtifactIds).toEqual(["user-artifact-1"]);
+        expect(first.inputThroughSequence).toBe(payloads.length + 1);
       }
     });
   }
@@ -242,6 +240,7 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
       phase: "sessioning",
       revision: 0,
       inputArtifactIds: [user.id],
+      inputThroughSequence: 1,
       expectedArtifactType: "session_message",
     });
   });
@@ -268,6 +267,7 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
         agentId,
         turnKind: "session_bid",
         inputArtifactIds: [userId],
+        inputThroughSequence: 1,
         expectedArtifactType: "session_bid",
       })),
     });

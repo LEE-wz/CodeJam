@@ -16,6 +16,21 @@ type BidArtifact = Extract<CoordinationArtifact, { type: "session_bid" }>;
 type AwardArtifact = Extract<CoordinationArtifact, { type: "session_award" }>;
 type UserArtifact = Extract<CoordinationArtifact, { type: "user_message" }>;
 
+const transcriptSequenceOf = (artifact: {
+  transcriptSequence?: number;
+}): number => artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
+
+/**
+ * Pin a turn's transcript without copying every prior artifact id (P15-05).
+ * Round-specific non-transcript evidence remains named in `inputArtifactIds`.
+ */
+const transcriptBoundOf = (
+  artifacts: ReadonlyArray<{ transcriptSequence?: number }>,
+): number => artifacts.reduce(
+  (highest, artifact) => Math.max(highest, transcriptSequenceOf(artifact)),
+  Number.MIN_SAFE_INTEGER,
+);
+
 const invalidState = (message: string): WorkflowDecision => ({
   kind: "fail",
   code: "INVALID_STATE",
@@ -240,6 +255,7 @@ const finalArtifactId = (
 export const buildSessionBidWaveDecision = (input: {
   participants: readonly CoordinationParticipant[];
   inputArtifactIds: readonly CoordinationArtifactId[];
+  inputThroughSequence?: number;
   priorBidAgentIds?: ReadonlySet<AgentId>;
 }): Extract<WorkflowDecision, { kind: "schedule_wave" }> => ({
   kind: "schedule_wave",
@@ -253,6 +269,9 @@ export const buildSessionBidWaveDecision = (input: {
       agentId,
       turnKind: "session_bid" as const,
       inputArtifactIds: [...input.inputArtifactIds],
+      ...(input.inputThroughSequence === undefined
+        ? {}
+        : { inputThroughSequence: input.inputThroughSequence }),
       expectedArtifactType: "session_bid" as const,
     })),
 });
@@ -341,7 +360,11 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
         const eligibleParticipants = availableAgentIds === undefined
           ? participants
           : participants.filter(({ agentId }) => availableAgentIds.has(agentId));
-        const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
+        // Keep the active user id explicit because round/restart derivation
+        // identifies work by that durable marker. The transcript itself is
+        // pinned by sequence, avoiding an O(n) id list on every turn.
+        const inputArtifactIds = [activeUser.id];
+        const inputThroughSequence = transcriptBoundOf(transcriptArtifacts);
         const roundBidTurns = turns.filter(
           (turn) => turn.kind === "session_bid" && turn.inputArtifactIds.includes(activeUser.id),
         );
@@ -426,6 +449,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
                 agentId,
                 turnKind: "session_turn" as const,
                 inputArtifactIds: [...executionInputIds],
+                inputThroughSequence,
                 expectedArtifactType: "session_message" as const,
                 threadPolicy: "fresh" as const,
               })),
@@ -452,6 +476,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             phase: "sessioning",
             revision: 0,
             inputArtifactIds: executionInputIds,
+            inputThroughSequence,
             expectedArtifactType: "session_message",
             // PA14-11: the awarded prompt is fully explicit, so it starts from
             // a fresh thread and cannot inherit a bid thread or a private
@@ -499,6 +524,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             return buildSessionBidWaveDecision({
               participants: eligibleParticipants,
               inputArtifactIds,
+              inputThroughSequence,
             });
           }
           if (turns.length + 1 > run.policy.maxTurns) {
@@ -527,6 +553,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             phase: "sessioning",
             revision: 0,
             inputArtifactIds,
+            inputThroughSequence,
             expectedArtifactType: "session_message",
             ...(auctionPolicy.auctionOnDirectFailure
               ? { failurePolicy: "auction_on_exhaustion" as const }
@@ -565,6 +592,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           return buildSessionBidWaveDecision({
             participants: eligibleParticipants,
             inputArtifactIds,
+            inputThroughSequence,
           });
         }
 
@@ -596,6 +624,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             phase: "sessioning",
             revision: 0,
             inputArtifactIds,
+            inputThroughSequence,
             expectedArtifactType: "session_bid",
           };
         }
@@ -623,6 +652,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
           return buildSessionBidWaveDecision({
             participants,
             inputArtifactIds,
+            inputThroughSequence,
             priorBidAgentIds: attemptedAgentIds,
           });
         }
@@ -659,7 +689,9 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             message: "Session wave would exceed its turn limit",
           };
         }
-        const inputArtifactIds = transcriptArtifacts.map(({ id }) => id);
+        const activeUserId = activeUser?.id;
+        const inputArtifactIds = activeUserId ? [activeUserId] : [];
+        const inputThroughSequence = transcriptBoundOf(transcriptArtifacts);
         return {
           kind: "schedule_wave",
           wavePurpose: run.policy.sessionWavePurpose ?? "session_execution",
@@ -670,6 +702,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
             agentId,
             turnKind: "session_turn" as const,
             inputArtifactIds: [...inputArtifactIds],
+            inputThroughSequence,
             expectedArtifactType: "session_message" as const,
           })),
         };
@@ -686,7 +719,8 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
       turnKind: "session_turn",
       phase: "sessioning",
       revision: 0,
-      inputArtifactIds: transcriptArtifacts.map(({ id }) => id),
+      inputArtifactIds: run.lastUserArtifactId ? [run.lastUserArtifactId] : [],
+      inputThroughSequence: transcriptBoundOf(transcriptArtifacts),
       expectedArtifactType: "session_message",
     };
   }

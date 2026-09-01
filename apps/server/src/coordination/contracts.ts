@@ -77,6 +77,8 @@ export type WorkflowDecision =
       phase: CoordinationRun["phase"];
       revision: number;
       inputArtifactIds: CoordinationArtifactId[];
+      /** Inclusive session transcript bound (P15-05). */
+      inputThroughSequence?: number;
       expectedArtifactType: ArtifactType;
       /** A standalone Auto primary bid is still bidding work, not execution. */
       wavePurpose?: CoordinationWavePurpose;
@@ -105,6 +107,8 @@ export type WorkflowDecision =
         agentId: AgentId;
         turnKind: CoordinationTurn["kind"];
         inputArtifactIds: CoordinationArtifactId[];
+        /** Inclusive session transcript bound (P15-05). */
+        inputThroughSequence?: number;
         expectedArtifactType: ArtifactType;
         threadPolicy?: ExecutionThreadPolicy;
       }>;

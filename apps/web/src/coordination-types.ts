@@ -78,7 +78,9 @@ export const SESSION_LIMITS = {
   maxParticipants: 10,
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
-  defaultSessionTurns: 200,
+  defaultSessionTurns: 2_000,
+  recommendedMaxSessionTurns: 2_000,
+  sessionTurnWarningThreshold: 1_600,
 } as const;
 
 export interface RequiredSection {
@@ -151,6 +153,7 @@ export interface CoordinationTurn {
   attemptCount: number;
   activeAttemptId?: string;
   inputArtifactIds: string[];
+  inputThroughSequence?: number;
   outputArtifactId?: string;
   lastValidationErrors: string[];
   createdAt: string;

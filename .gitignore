@@ -1,4 +1,6 @@
 node_modules/
+p15-01-store-scale.json
+p15-02-read-path.json
 dist/
 .env
 .env.production
@@ -16,6 +18,7 @@ deploy/volcengine/*.tfstate*
 deploy/volcengine/terraform.tfvars
 
 analysis.md
+graphify-out/
 multi-agent-coordination-middleware-design-spec.md
 multi-agent-coordination-simple-explainer.md
 relay-verified-handoffs-implementation-plan.md

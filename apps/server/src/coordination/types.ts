@@ -358,6 +358,16 @@ export interface CoordinationTurn {
   attemptCount: number;
   activeAttemptId?: CoordinationAttemptId;
   inputArtifactIds: CoordinationArtifactId[];
+  /**
+   * Inclusive transcript sequence visible to this session turn (P15-05).
+   *
+   * Older turns list every visible artifact in `inputArtifactIds`. New session
+   * turns keep only round-specific evidence there (the active user message and,
+   * when applicable, the award) and pin ordinary transcript visibility with
+   * this bound. The context builder still applies its artifact-type whitelist,
+   * so private bids and losing evidence cannot become prompt context.
+   */
+  inputThroughSequence?: number;
   outputArtifactId?: CoordinationArtifactId;
   lastValidationErrors: string[];
   createdAt: string;
@@ -762,7 +772,11 @@ export const SESSION_LIMITS = {
   maxParticipants: 10,
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
-  defaultSessionTurns: 200,
+  /** Measured interactive recommendation from the Phase 15 scale harness. */
+  defaultSessionTurns: 2_000,
+  recommendedMaxSessionTurns: 2_000,
+  /** Warn at 80% of the measured recommendation. */
+  sessionTurnWarningThreshold: 1_600,
   messageMinChars: 1,
   messageMaxChars: 500,
   minParallelTurns: 1,

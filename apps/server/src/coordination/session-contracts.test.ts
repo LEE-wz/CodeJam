@@ -265,7 +265,9 @@ describe("Phase 5 session message payload", () => {
     expect(SESSION_LIMITS.maxParticipants).toBe(10);
     expect(SESSION_LIMITS.minSessionTurns).toBe(3);
     expect(SESSION_LIMITS.maxSessionTurns).toBe(100_000);
-    expect(SESSION_LIMITS.defaultSessionTurns).toBe(200);
+    expect(SESSION_LIMITS.defaultSessionTurns).toBe(2_000);
+    expect(SESSION_LIMITS.recommendedMaxSessionTurns).toBe(2_000);
+    expect(SESSION_LIMITS.sessionTurnWarningThreshold).toBe(1_600);
   });
 });
 

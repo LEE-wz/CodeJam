@@ -1,5 +1,10 @@
 # Phase 9 — Documentation, Demo, and Release Candidate
 
+> **Superseded.** This historical release sheet was absorbed by
+> [Phase 15 — Scale, Storage, and Release](15-scale-and-release.md). Its
+> countdown/coordinator tasks do not describe the shipped adaptive-auction
+> Session and must not be used as current release instructions.
+
 **Goal:** produce a clean, reproducible, honestly scoped submission whose normal and failure claims for both workflows (verified handoff and shared session) are supported by tests and rehearsed evidence.  
 **Ends at:** Checkpoint 9 — submission candidate frozen except for release-blocking fixes.
 

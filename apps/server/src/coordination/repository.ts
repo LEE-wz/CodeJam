@@ -518,6 +518,9 @@ export class DurableCoordinationRepository implements CoordinationRepository {
           revision: run.revision,
           expectedArtifactType: expectedArtifactTypeForTurn(turn),
           inputArtifactCount: turn.inputArtifactIds.length,
+          ...(turn.inputThroughSequence === undefined
+            ? {}
+            : { inputThroughSequence: turn.inputThroughSequence }),
           ...(turn.wavePurpose === undefined ? {} : { wavePurpose: turn.wavePurpose }),
           ...(turns.length > 1 ? { waveSize: turns.length } : {}),
         }));

@@ -702,6 +702,13 @@ function CreationForm({
         <summary>Safety limits</summary>
         <div className="session-policy-grid">
           <label>Maximum turns<input ref={policyRef} type="number" min={SESSION_LIMITS.minSessionTurns} max={SESSION_LIMITS.maxSessionTurns} value={form.maxTurns} onChange={(event) => setForm({ ...form, maxTurns: event.target.value })} /></label>
+          {Number(form.maxTurns) > SESSION_LIMITS.recommendedMaxSessionTurns && (
+            <p className="field-hint field-hint-warning">
+              Measured guidance is {SESSION_LIMITS.recommendedMaxSessionTurns.toLocaleString()} turns or fewer.
+              The 100,000-turn ceiling remains available for explicit callers, but long JSON-backed
+              sessions become progressively slower.
+            </p>
+          )}
           <label>Attempt timeout (seconds)<input type="number" min="10" max="180" value={form.perAttemptTimeoutSeconds} onChange={(event) => setForm({ ...form, perAttemptTimeoutSeconds: event.target.value })} /></label>
         </div>
         {errors.policy && <p className="field-error" role="alert">{errors.policy}</p>}
@@ -969,6 +976,14 @@ export function SessionWorkspace({ agents }: SessionWorkspaceProps) {
                 <div><span>Turns</span><strong>{details.turns.length} / {selectedRun.policy.maxTurns.toLocaleString()}</strong></div>
                 <div><span>Attempt timeout</span><strong>{selectedRun.policy.perAttemptTimeoutMs / 1_000}s</strong></div>
               </div>
+
+              {details.turns.length >= SESSION_LIMITS.sessionTurnWarningThreshold && (
+                <div className="session-notice" role="status">
+                  {details.turns.length >= SESSION_LIMITS.recommendedMaxSessionTurns
+                    ? `This session is past the measured ${SESSION_LIMITS.recommendedMaxSessionTurns.toLocaleString()}-turn interactive recommendation. Start a new session if prompt latency is no longer comfortable.`
+                    : `This session is approaching the measured ${SESSION_LIMITS.recommendedMaxSessionTurns.toLocaleString()}-turn interactive recommendation.`}
+                </div>
+              )}
 
               {session && (
                 <section className="session-state" aria-label="Session state">

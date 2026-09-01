@@ -298,25 +298,7 @@ Use temporary directories for persistence tests. Do not open or mutate real `dat
 
 Do not modify `workflow.ts`. Verified handoff must keep scheduling exactly one turn at a time, proven by its unmodified regression matrix.
 
-## Phase 14 — Coordinator planning and countdown removal
-
-**Primary paths**
-
-- `apps/server/src/coordination/schemas.ts`, `artifact-protocol.ts`, `session-workflow.ts`, `context-builder.ts`, `types.ts`, `routes.ts`, `service.ts`
-- `apps/server/src/coordination/repository.ts` only for the countdown deletion
-- `apps/web/src/` for the planning policy control and countdown remnants
-- matching `*.test.ts` files, `coordination/testing/**`, and `apps/web/src/testing/**`
-
-**Conditional paths**
-
-- `docs/development/overview-sessions.md` and `ASSUMPTIONS_AND_DECISIONS.md` for the amendment record
-- `apps/server/src/coordination/workflow.ts` only for the mechanical
-  `session_bid: undefined` exhaustiveness entry; verified-handoff decisions
-  remain unchanged
-
-Countdown deletion applies to the engine only. Stored history keeps its fields, and a fixture test proves a pre-existing countdown run still loads and renders.
-
-## Parallel Phase 14 — Adaptive auction coordination
+## Phase 14 — Adaptive auction coordination
 
 **Primary paths**
 
@@ -331,17 +313,22 @@ Countdown deletion applies to the engine only. Stored history keeps its fields, 
 - `apps/server/src/coordination/runtime-gateway.ts` for fresh bid threads and bounded execution accounting
 - `docs/development/ASSUMPTIONS_AND_DECISIONS.md` for mechanical scoring or migration clarifications
 
-Do not edit the main Phase 14 sheet for auction-track work. Losing bids remain
-evidence only, and no prompt, raw rejected output, lease, or provider thread ID
-may enter scoring explanations or the public read model.
+The branch authority is
+`phases/parallel/14-adaptive-auction-coordination.md`; the historical main-track
+coordinator-planning sheet is not the shipped design. Losing bids remain
+evidence-only, and no prompt, raw rejected output, lease, or provider thread ID
+may enter scoring explanations or the public read model. Countdown execution is
+removed, while stored countdown records stay readable.
 
 ## Phase 15 — Scale, storage, and release
 
 **Primary paths**
 
 - `README.md`, `docs/development/**`, and the Session v2 documentation set named by the Phase 15 guide
-- a temporary scale-measurement harness and its output
-- `apps/server/src/store.ts` and `apps/server/src/coordination/repository.ts` only if the storage swap is approved
+- `apps/server/src/scale/**` for reproducible temporary-directory measurement harnesses; generated report JSON remains ignored
+- `apps/server/src/coordination/types.ts`, `contracts.ts`, `service.ts`, `session-workflow.ts`, `context-builder.ts`, and `repository.ts` for the approved transcript-bound scale correction
+- `apps/web/src/SessionWorkspace.tsx`, `SessionWorkspace.test.tsx`, `coordination-types.ts`, and `styles.css` for the measured-ceiling warning
+- `apps/server/src/store.ts` only if a storage-engine swap is approved
 - package/Compose/Docker files needed to verify documented commands
 
 **Conditional paths**
@@ -349,7 +336,10 @@ may enter scoring explanations or the public read model.
 - implementation files referenced by documentation, read only to verify exact current behaviour
 - deployment files only when deployment validation is in submission scope
 
-Run the scale harness against temporary directories only. Never measure against real `data/` content, and never publish an unmeasured scale claim.
+`SessionWorkspace.tsx` is the final Session product surface; no
+`RelayWorkspace.tsx` exists. Run the scale harness against temporary
+directories only. Never measure against real `data/` content, and never publish
+an unmeasured scale claim.
 
 ## Always excluded unless explicitly authorized
 

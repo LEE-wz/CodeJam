@@ -267,12 +267,22 @@ const selectVisibleArtifacts = (input: ContextBuildInput): CoordinationArtifact[
   );
 
   if (input.turn.kind === "session_turn" || input.turn.kind === "session_bid") {
-    return input.turn.inputArtifactIds.flatMap((id) => {
-      const artifact = byId.get(id);
-      return artifact?.type === "session_message" || artifact?.type === "user_message"
-        ? [artifact]
-        : [];
-    }).sort((left, right) => {
+    const named = new Set(input.turn.inputArtifactIds);
+    const bound = input.turn.inputThroughSequence;
+    const selected = bound === undefined
+      ? input.turn.inputArtifactIds.flatMap((id) => {
+          const artifact = byId.get(id);
+          return artifact ? [artifact] : [];
+        })
+      : [...byId.values()].filter(
+          (artifact) =>
+            named.has(artifact.id) ||
+            ((artifact.type === "session_message" || artifact.type === "user_message") &&
+              (artifact.transcriptSequence ?? Number.MIN_SAFE_INTEGER) <= bound),
+        );
+    return selected.filter(
+      (artifact) => artifact.type === "session_message" || artifact.type === "user_message",
+    ).sort((left, right) => {
       const leftSequence = left.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
       const rightSequence = right.transcriptSequence ?? Number.MIN_SAFE_INTEGER;
       return leftSequence - rightSequence || left.createdAt.localeCompare(right.createdAt);

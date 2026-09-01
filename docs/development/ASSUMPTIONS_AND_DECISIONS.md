@@ -1021,3 +1021,44 @@ trust boundary.
   across every execution turn and retry linked to an award. Artifact character
   counts are not token evidence. A team plan's whole awarded execution is
   attributed to the Agent whose bid won, including delegated failures.
+
+## Mini-RFC: Phase 15 transcript bounds and storage decision (2026-09-01)
+
+**Status:** Approved by measured implementation evidence for `P15-01`–`P15-05`.
+
+**Decision:** keep the v2 `JsonStore`, change the Session turn input model from
+an ever-growing transcript-id copy to an inclusive sequence bound, set the
+default and recommendation to 2,000 committed turns, warn at 1,600, and defer a
+repository-engine swap.
+
+The scale harness found that each new Session turn copied every earlier
+transcript artifact id into `inputArtifactIds`. That made the turn ledger
+quadratic independently of the storage engine. New turns instead store
+`inputThroughSequence`, pinning the same immutable transcript prefix in one
+integer, and name only round-specific artifacts such as the current user
+message and award. The context builder combines that bound with explicit ids.
+Private bids remain unreachable unless a committed winning award names them.
+Stored legacy turns keep the id-list path, so this is additive and needs no data
+migration.
+
+Measured on Node v24.12.0 / darwin arm64:
+
+| Turns | Database | mutation p50 | mutation p95 | `getRunDetails` | final prompt |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 0.42 MiB | 22.32 ms | 25.27 ms | 2.42 ms | 0.11 s |
+| 500 | 2.05 MiB | 130.05 ms | 157.04 ms | 14.09 ms | 0.63 s |
+| 2,000 | 8.21 MiB | 529.00 ms | 833.28 ms | 64.58 ms | 2.97 s |
+| 10,000 | 41.15 MiB | 2,697.20 ms | 5,655.91 ms | 226.45 ms | 18.05 s |
+
+The byte shape is approximately linear after the correction, but mutations
+still clone, serialize, and atomically rewrite the full database. Ten thousand
+turns are therefore outside the interactive recommendation. The 100,000
+ceiling remains an explicit caller-controlled safety/type limit, not a
+performance statement.
+
+**Alternative rejected for this release:** SQLite or append-only JSONL behind
+`CoordinationRepository`. A swap before correcting the input model would have
+preserved the quadratic ledger. A later swap remains valid when multi-process
+semantics, paginated first reads, or lower whole-document mutation cost justify
+it; it must preserve existing expected-version, lease, atomic-wave, and race
+semantics without changing service, workflow, protocol, or routes.

@@ -479,4 +479,35 @@ describe("SessionWorkspace", () => {
     expect(style.overflowY).toBe("auto");
     expect(transcript.children).toHaveLength(80);
   });
+
+  it("warns when a requested ceiling exceeds measured guidance", async () => {
+    mockedApi.list.mockResolvedValue({ runs: [] });
+    const user = userEvent.setup();
+    render(<SessionWorkspace agents={agents} />);
+    await user.click(await screen.findByRole("button", { name: "Create session" }));
+    const input = screen.getByLabelText("Maximum turns");
+    await user.clear(input);
+    await user.type(input, String(SESSION_LIMITS.recommendedMaxSessionTurns + 1));
+    expect(await screen.findByText(/Measured guidance is 2,000 turns or fewer/i)).toBeTruthy();
+  });
+
+  it("warns as a durable session approaches the measured recommendation", async () => {
+    const base = UI_SESSION_FIXTURES.freeChatPartial;
+    const scaled = {
+      ...base,
+      run: { ...base.run, status: "awaiting_input" as const },
+      turns: Array.from(
+        { length: SESSION_LIMITS.sessionTurnWarningThreshold },
+        (_unused, index) => ({
+          ...base.turns[0]!,
+          id: `turn-scale-${index + 1}`,
+          sequence: index + 1,
+        }),
+      ),
+    };
+    mockedApi.list.mockResolvedValue({ runs: [scaled.run] });
+    mockedApi.detail.mockResolvedValue(scaled);
+    render(<SessionWorkspace agents={agents} />);
+    expect(await screen.findByText(/approaching the measured 2,000-turn/i)).toBeTruthy();
+  });
 });

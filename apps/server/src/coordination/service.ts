@@ -1038,6 +1038,7 @@ export class CoordinationService implements CoordinationServiceContract {
           agentId: member.agentId,
           turnKind: member.turnKind,
           inputArtifactIds: member.inputArtifactIds,
+          inputThroughSequence: member.inputThroughSequence,
           threadPolicy: member.threadPolicy,
         },
         run.nextTurnSequence + index,
@@ -1201,6 +1202,7 @@ export class CoordinationService implements CoordinationServiceContract {
       agentId?: string | undefined;
       turnKind: CoordinationTurn["kind"];
       inputArtifactIds: readonly string[];
+      inputThroughSequence?: number | undefined;
       threadPolicy?: ExecutionThreadPolicy | undefined;
     },
     sequence: number = run.nextTurnSequence,
@@ -1230,6 +1232,9 @@ export class CoordinationService implements CoordinationServiceContract {
       status: "scheduled",
       attemptCount: 0,
       inputArtifactIds: [...spec.inputArtifactIds],
+      ...(spec.inputThroughSequence === undefined
+        ? {}
+        : { inputThroughSequence: spec.inputThroughSequence }),
       lastValidationErrors: [],
       createdAt: this.dependencies.clock.nowIso(),
     };
