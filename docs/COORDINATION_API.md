@@ -43,7 +43,7 @@ The body is a union discriminated on `workflow`. A session run:
   "workflow": "shared_session_v1",
   "name": "Marketplace design",
   "objective": "Design the trust and safety model for a peer marketplace.",
-  "participantAgentIds": ["a1e...", "b2f...", "c3d..."],
+  "agents": ["a1e...", "b2f...", "c3d..."],
   "policy": {
     "sessionPlanning": "coordinator",
     "maxTurns": 200,
@@ -57,7 +57,7 @@ The body is a union discriminated on `workflow`. A session run:
 | `workflow` | `"shared_session_v1"` |
 | `name` | 1–80 characters |
 | `objective` | 1–4,000 characters |
-| `participantAgentIds` | 2–10 distinct ids |
+| `agents` | 2–10 distinct Agent ids, all distinct |
 | `policy.sessionPlanning` | `"coordinator"` (default) or `"round_robin"` |
 | `policy.sessionProtocol` | `"free_chat"` |
 | `policy.sessionParallel` | boolean |

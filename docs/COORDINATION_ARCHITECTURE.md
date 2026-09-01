@@ -136,16 +136,27 @@ structural property rather than a hope.
 
 ## 7. Reservations
 
-An Agent is **reserved** while it appears in a run whose status is `running` or
-`stop_requested` (ADR-13). A reserved Agent cannot be used in the Playground,
-edited, deleted, or started/stopped, and cannot join a second active run.
+Two **different** rules apply here, and conflating them is a common mistake.
 
-Reservation is **derived**, not stored — it is computed from run state, so it
-cannot drift out of sync with reality.
+**Reservation** (what blocks Playground use, editing, deleting, and
+start/stop): an Agent is reserved while it has a **running attempt** — not
+merely while it appears in a running run. This is the P11-05 narrowing of
+ADR-13, and it is what makes long-lived sessions usable: the idle participants
+of a live session stay available in the Playground.
 
-The scope narrowed in P11-05: a session sitting in `awaiting_input` does not
-reserve its participants. That is what makes long-lived sessions usable — a
-session you are not actively prompting does not hold ten Agents hostage.
+**Admission** (what blocks *starting another run*): deliberately stricter.
+Enrolment in any other **non-terminal** run refuses the start with
+`AGENT_RESERVED` — including a run sitting in `awaiting_input`. Narrowing
+reservation to running attempts "is not a licence for two coordination state
+machines to drive one Agent".
+
+The practical consequence: an Agent in an `awaiting_input` session is free for
+the Playground but **cannot join a second session** until that session reaches
+a terminal state (End, Stop, or failure). To reuse participants, end the first
+session or pick different Agents.
+
+Both facts are **derived**, not stored — reservation from attempt rows,
+admission from run membership — so neither can drift out of sync with reality.
 
 ## 8. Persistence
 

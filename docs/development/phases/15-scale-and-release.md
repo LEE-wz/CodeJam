@@ -53,7 +53,7 @@ If a measurement method, a documented claim, a storage trade-off, or required re
 - [x] **P15-14** Inspect `git status` and the full diff. Preserve user work; exclude secrets, runtime data, generated clutter, and unrelated refactors.
 - [x] **P15-15** Run a clean install followed by the full typecheck, test, and build through Docker Compose.
 - [ ] **P15-16** Run the normal, stop, end, restart, and failure browser flows against the release configuration.
-- [ ] **P15-17** Inspect logs, the database, API payloads, and the UI for tokens, authorization headers, cookies, raw prompts, lease tokens, stack traces, or other sensitive data. Session v2 adds user-authored prompt content to durable storage: confirm it appears only where it is meant to, and that events still carry no content.
+- [x] **P15-17** Inspect logs, the database, API payloads, and the UI for tokens, authorization headers, cookies, raw prompts, lease tokens, stack traces, or other sensitive data. Session v2 adds user-authored prompt content to durable storage: confirm it appears only where it is meant to, and that events still carry no content.
 - [ ] **P15-18** Confirm every acceptance criterion in `overview.md` Section 31.3 and the amended `overview-sessions.md`, plus each of the nine Session v2 requests from [`../plans/session-v2-plan.md`](../plans/session-v2-plan.md) §1, and record the evidence for each.
 - [ ] **P15-19** Remove stale demo data and misleading historical runs from local runtime state before judging evidence is captured.
 - [ ] **P15-20** Record the submission commit and freeze feature work.
