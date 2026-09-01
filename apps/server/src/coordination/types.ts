@@ -204,12 +204,16 @@ export type ReviewDecision = "approve" | "reject";
 export type CoordinationWorkflowKind = "verified_handoff_v1" | "shared_session_v1";
 
 /**
- * Which rules a shared session turn is validated against. `countdown` requires
- * each message to be the exact next integer; `free_chat` accepts any bounded
- * non-empty message and never judges its substance (overview-sessions.md
- * Sections 6.1 and 6.5).
+ * Which rules a shared session turn is validated against. `free_chat` accepts
+ * any bounded non-empty message and never judges its substance
+ * (overview-sessions.md Sections 6.1 and 6.5).
+ *
+ * The `countdown` member was deleted in auction Phase 14 (PA14-18): ordered
+ * output is now produced by an awarded sequential plan rather than by an
+ * engine-side numeric validator. Stored countdown runs keep their persisted
+ * `"countdown"` value and stay readable; no engine path accepts one.
  */
-export type SessionProtocol = "countdown" | "free_chat";
+export type SessionProtocol = "free_chat";
 
 export type CoordinationErrorCode =
   | "VALIDATION_FAILED"
@@ -256,11 +260,6 @@ export interface CoordinationPolicy {
    */
   sessionProtocol?: SessionProtocol;
   /**
-   * Countdown sessions only: the first number the participants must publish.
-   * Absent on free-chat and verified-handoff runs.
-   */
-  sessionStartValue?: number;
-  /**
    * Shared-session runs only. Absent means `sequential`, so every run stored
    * before PA13-10 keeps its exact Phase 12 behaviour on reload.
    */
@@ -299,15 +298,15 @@ export interface RequiredSection {
 }
 
 /**
- * Durable state a shared session run carries between turns. Countdown runs hold
- * the next integer the workflow will accept; the repository decrements it in the
- * same atomic mutation that commits the message. Free-chat runs have no shared
- * state and omit this object entirely (overview-sessions.md Section 6.5).
+ * A session run carries no protocol shared state. `CoordinationSharedState` and
+ * `run.sharedState` existed only for the countdown protocol and were deleted
+ * with it (PA14-18).
+ *
+ * Deletion applies to the engine, not to the ledger: a run persisted before the
+ * deletion still carries `sharedState` and `policy.sessionStartValue` in its
+ * JSON, and the read path returns the stored document untouched, so that
+ * history still loads and renders.
  */
-export interface CoordinationSharedState {
-  nextExpectedNumber: number;
-}
-
 export interface CoordinationRun {
   id: CoordinationRunId;
   name: string;
@@ -328,8 +327,6 @@ export interface CoordinationRun {
   lastUserArtifactId?: CoordinationArtifactId;
   /** Present only when an explicit End session action completed the run. */
   endedByUser?: boolean;
-  /** Countdown sessions only. Absent on free-chat and verified-handoff runs. */
-  sharedState?: CoordinationSharedState;
   version: number;
   errorCode?: CoordinationErrorCode;
   errorMessage?: string;
@@ -434,8 +431,6 @@ export interface FinalPayload {
  * artifacts by backend code, so the trust boundary in overview.md Section 5.1
  * is unchanged: Agents supply input, the state machine decides.
  *
- * `done` is rejected on countdown messages, where the numeric validator is the
- * sole authority on completion (P6-05 cross-field rule).
  */
 export interface SessionMessagePayload {
   schemaVersion: 1;
@@ -732,7 +727,6 @@ export interface CreateSessionRunRequest {
   policy?:
     | {
         sessionProtocol?: SessionProtocol | undefined;
-        sessionStartValue?: number | undefined;
         maxTurns?: number | undefined;
         perAttemptTimeoutMs?: number | undefined;
         sessionWaveMode?: SessionWaveMode | undefined;
@@ -754,7 +748,6 @@ export type CreateRunRequest = CreateCoordinationRunRequest | CreateSessionRunRe
  * explicitly; `defaultSessionTurns` is what a session gets when it does not, so
  * a runaway wave costs a bounded number of turns rather than the ceiling.
  *
- * The countdown values remain until P14-07 deletes the protocol.
  */
 /**
  * Context budget for shared-session runs (P10-05). Ten participants holding a
@@ -767,9 +760,6 @@ export const SESSION_CONTEXT_MAX_CHARS = 40_000;
 export const SESSION_LIMITS = {
   minParticipants: 2,
   maxParticipants: 10,
-  minStartValue: 2,
-  maxStartValue: 12,
-  defaultStartValue: 10,
   minSessionTurns: 3,
   maxSessionTurns: 100_000,
   defaultSessionTurns: 200,

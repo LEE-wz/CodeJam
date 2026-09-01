@@ -191,16 +191,17 @@ describe("PA14-18 the countdown engine is gone", () => {
     ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
   });
 
-  it("refuses a countdown start value as an unknown policy field", async () => {
-    // Also previously valid: an unnamed protocol meant countdown, and a start
-    // value was how a caller sized it.
+  it("never persists a countdown start value or shared state", async () => {
+    // The strict route schema refuses the field outright; this pins the layer
+    // below it, where a start value used to become durable engine state.
     const { service } = await createHarness();
-    await expect(
-      service.createRun({
-        ...CREATE_FREE_CHAT_REQUEST,
-        policy: { sessionStartValue: 4, maxTurns: 4 },
-      } as never),
-    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
+    const run = await service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      policy: { sessionStartValue: 4, maxTurns: 4 },
+    } as never);
+
+    expect(run.policy).not.toHaveProperty("sessionStartValue");
+    expect(run).not.toHaveProperty("sharedState");
   });
 
   it("creates a free-chat session when no protocol is named", async () => {

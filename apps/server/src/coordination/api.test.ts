@@ -44,13 +44,12 @@ import {
   VALID_PROPOSAL_OUTPUT,
 } from "./testing/fixtures.js";
 import {
-  CREATE_COUNTDOWN_REQUEST,
   CREATE_FREE_CHAT_REQUEST,
   PARTICIPANT_ONE,
+  PROSE_MESSAGE_OUTPUT,
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
   SESSION_PARTICIPANTS,
-  countdownPayload,
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 import { VerifiedHandoffWorkflowV1 } from "./workflow.js";
@@ -195,6 +194,10 @@ const createStack = async (steps: ScriptedRuntimeStep[] = []): Promise<Stack> =>
   return { app, store, service, runtime, logs };
 };
 
+const doneRound = (count: number) =>
+  Array.from({ length: count }, (_unused, index) =>
+    succeeds(JSON.stringify(freeChatPayload(`Contribution ${index + 1}`, true))));
+
 const CREATE_BODY = {
   name: "Launch plan review",
   objective: "Produce a practical launch plan for a student marketplace.",
@@ -245,11 +248,11 @@ const createRun = async (app: FastifyInstance, overrides: Record<string, unknown
     payload: { ...CREATE_BODY, ...overrides },
   });
 
-const SESSION_COUNTDOWN_BODY = {
-  ...CREATE_COUNTDOWN_REQUEST,
-  // Keep the durable API test short while still exercising the shared-state
-  // transition through both a first and final countdown message.
-  policy: { sessionProtocol: "countdown", sessionStartValue: 2, maxTurns: 2 },
+const SESSION_BODY = {
+  ...CREATE_FREE_CHAT_REQUEST,
+  // Room for one full round of three participants plus headroom, so a wave
+  // settles by unanimous consent rather than by hitting the turn ceiling.
+  policy: { sessionProtocol: "free_chat", maxTurns: 6 },
 };
 
 const createSessionRun = async (
@@ -260,7 +263,19 @@ const createSessionRun = async (
     method: "POST",
     url: "/api/coordination-runs",
     headers,
-    payload: { ...SESSION_COUNTDOWN_BODY, ...overrides },
+    payload: { ...SESSION_BODY, ...overrides },
+  });
+
+/**
+ * Starts a session wave. Free chat answers a user prompt rather than a bare
+ * start, so every session test drives it the way the product does.
+ */
+const sendSessionPrompt = async (app: FastifyInstance, runId: string, content = "Begin.") =>
+  app.inject({
+    method: "POST",
+    url: `/api/coordination-runs/${runId}/messages`,
+    headers,
+    payload: { content, clientMessageId: `prompt-${runId}` },
   });
 
 // --------------------------------------------------------- P2-16 API surface
@@ -867,7 +882,7 @@ describe("durable shared-session API", () => {
   });
 
   it.each([
-    ["auction routing on countdown", { sessionProtocol: "countdown", auctionPolicy: {} }],
+    ["auction routing on an unknown protocol", { sessionProtocol: "other", auctionPolicy: {} }],
     [
       "the Phase 13 wave seam with auction routing",
       { sessionProtocol: "free_chat", sessionWaveMode: "parallel", auctionPolicy: {} },
@@ -962,58 +977,43 @@ describe("durable shared-session API", () => {
     });
   });
 
-  it("creates, starts, and exposes a countdown with durable shared state", async () => {
-    const { app } = await createStack([
-      succeeds(JSON.stringify(countdownPayload(2))),
-      succeeds(JSON.stringify(countdownPayload(1))),
-    ]);
+  it("creates a session, answers a prompt, and exposes durable evidence", async () => {
+    const { app } = await createStack(doneRound(3));
     const created = await createSessionRun(app);
     expect(created.statusCode).toBe(201);
     const runId = (created.json() as { run: { id: string } }).run.id;
 
-    const started = await app.inject({
-      method: "POST",
-      url: `/api/coordination-runs/${runId}/start`,
-      headers,
-    });
-    expect(started.statusCode).toBe(202);
+    expect((await sendSessionPrompt(app, runId)).statusCode).toBe(202);
 
     const details = (await settleHttp(app, runId)) as unknown as {
-      run: {
-        status: string;
-        phase: string;
-        sharedState?: { nextExpectedNumber: number };
-        finalArtifactId?: string;
-      };
+      run: { status: string; phase: string; finalArtifactId?: string };
       turns: Array<{ sequence: number; role: string; kind: string; status: string }>;
       attempts: Array<{ status: string; leaseToken?: string }>;
       artifacts: Array<{ id: string; type: string; payload: { content: string } }>;
       events: Array<{ sequence: number; type: string; details: Record<string, unknown> }>;
     };
 
-    expect(details.run).toMatchObject({
-      status: "completed",
-      phase: "done",
-      sharedState: { nextExpectedNumber: 0 },
-    });
+    // A unanimous done round returns the session to idle rather than ending it:
+    // the user owns the end of a session (P12).
+    expect(details.run).toMatchObject({ status: "awaiting_input", phase: "sessioning" });
+    expect(details.run).not.toHaveProperty("sharedState");
     expect(details.turns.map((turn) => `${turn.sequence}:${turn.role}:${turn.kind}:${turn.status}`))
       .toEqual([
         "1:participant:session_turn:committed",
         "2:participant:session_turn:committed",
+        "3:participant:session_turn:committed",
       ]);
-    expect(details.artifacts.map(({ type, payload }) => `${type}:${payload.content}`)).toEqual([
-      "session_message:2",
-      "session_message:1",
+    expect(details.artifacts.map(({ type }) => type)).toEqual([
+      "user_message",
+      "session_message",
+      "session_message",
+      "session_message",
     ]);
-    expect(details.run.finalArtifactId).toBe(details.artifacts.at(-1)?.id);
     expect(details.attempts.every((attempt) => !("leaseToken" in attempt))).toBe(true);
     expect(details.events.map((event) => event.sequence)).toEqual(
       details.events.map((_event, index) => index + 1),
     );
-    expect(details.events.at(-1)).toMatchObject({
-      type: "run.completed",
-      details: { artifactType: "session_message" },
-    });
+    expect(details.events.at(-1)?.type).toBe("run.awaiting_input");
   });
 
   it.each([
@@ -1022,12 +1022,10 @@ describe("durable shared-session API", () => {
     ["a verified-only requiredSections field", { requiredSections: [] }],
     ["a verified-only maxRevisions field", { policy: { maxRevisions: 1 } }],
     ["an unknown session protocol", { policy: { sessionProtocol: "other" } }],
-    ["a countdown start below range", { policy: { sessionStartValue: 1 } }],
-    ["a countdown ceiling below its start", { policy: { sessionStartValue: 4, maxTurns: 3 } }],
-    [
-      "a free-chat start value",
-      { policy: { sessionProtocol: "free_chat", sessionStartValue: 3, maxTurns: 3 } },
-    ],
+    // PA14-18: the countdown protocol and its start value are gone from the
+    // create surface, and the strict schema refuses both.
+    ["the deleted countdown protocol", { policy: { sessionProtocol: "countdown", maxTurns: 3 } }],
+    ["a countdown start value", { policy: { sessionProtocol: "free_chat", sessionStartValue: 3, maxTurns: 3 } }],
     ["a free-chat ceiling below range", { policy: { sessionProtocol: "free_chat", maxTurns: 2 } }],
   ])("rejects %s with a 400", async (_label, overrides) => {
     const { app } = await createStack();
@@ -1094,7 +1092,7 @@ describe("durable shared-session API", () => {
     if (attemptId) {
       runtime.resolveAttempt(attemptId, {
         kind: "succeeded",
-        rawOutput: JSON.stringify(countdownPayload(2)),
+        rawOutput: JSON.stringify(freeChatPayload("A late contribution.")),
       });
     }
     await settleHttp(app, first.run.id);
@@ -1117,22 +1115,21 @@ describe("durable shared-session API", () => {
 });
 
 describe("durable shared-session evidence timelines", () => {
-  it("records a wrong-number retry without advancing shared state prematurely", async () => {
+  it("records an invalid-output retry in the durable evidence timeline", async () => {
     const { app } = await createStack([
-      succeeds(JSON.stringify(countdownPayload(1))),
-      succeeds(JSON.stringify(countdownPayload(2))),
-      succeeds(JSON.stringify(countdownPayload(1))),
+      succeeds(PROSE_MESSAGE_OUTPUT),
+      ...doneRound(3),
     ]);
     const created = await createSessionRun(app);
     const runId = (created.json() as { run: { id: string } }).run.id;
-    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+    await sendSessionPrompt(app, runId);
 
     const details = (await settleHttp(app, runId)) as unknown as {
-      run: { status: string; sharedState?: { nextExpectedNumber: number } };
+      run: { status: string };
       attempts: Array<{ number: number; status: string }>;
       events: Array<{ type: string }>;
     };
-    expect(details.run).toMatchObject({ status: "completed", sharedState: { nextExpectedNumber: 0 } });
+    expect(details.run).toMatchObject({ status: "awaiting_input" });
     expect(details.attempts.slice(0, 2).map(({ number, status }) => `${number}:${status}`)).toEqual([
       "1:invalid_output",
       "2:succeeded",
@@ -1183,7 +1180,7 @@ describe("durable shared-session evidence timelines", () => {
       };
       const hardCap = scenario.body.policy.maxTurns === 3;
       expect(details.run).toMatchObject({ status: hardCap ? "failed" : "awaiting_input" });
-      expect(details.run.sharedState).toBeUndefined();
+      expect(details.run).not.toHaveProperty("sharedState");
       expect(details.run.finalArtifactId).toBeUndefined();
       expect(details.events.map((event) => event.sequence)).toEqual(
         details.events.map((_event, index) => index + 1),
@@ -1196,7 +1193,7 @@ describe("durable shared-session evidence timelines", () => {
     const { app, runtime } = await createStack([deferred()]);
     const created = await createSessionRun(app);
     const runId = (created.json() as { run: { id: string } }).run.id;
-    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+    await sendSessionPrompt(app, runId);
     await runtime.waitForStarts(1);
 
     const attemptId = runtime.pendingAttemptIds()[0];
@@ -1209,7 +1206,7 @@ describe("durable shared-session evidence timelines", () => {
     if (attemptId) {
       runtime.resolveAttempt(attemptId, {
         kind: "succeeded",
-        rawOutput: JSON.stringify(countdownPayload(2)),
+        rawOutput: JSON.stringify(freeChatPayload("A late contribution.")),
       });
     }
 
@@ -1218,14 +1215,14 @@ describe("durable shared-session evidence timelines", () => {
       artifacts: unknown[];
       events: Array<{ sequence: number; type: string }>;
     };
-    expect(details.run).toMatchObject({
-      status: "awaiting_input",
-      sharedState: { nextExpectedNumber: 2 },
-    });
-    expect(details.artifacts).toEqual([]);
+    expect(details.run).toMatchObject({ status: "awaiting_input" });
+    expect(details.run).not.toHaveProperty("sharedState");
+    // The user prompt is durable; the cancelled wave committed nothing.
+    expect(details.artifacts.filter(({ type }) => type === "session_message")).toEqual([]);
     expect(details.events.map((event) => event.type)).toEqual([
       "run.created",
       "run.started",
+      "user.message_appended",
       "turn.scheduled",
       "attempt.started",
       "run.stop_requested",
@@ -1241,7 +1238,7 @@ describe("durable shared-session evidence timelines", () => {
     const { app, runtime, store } = await createStack([deferred()]);
     const created = await createSessionRun(app);
     const runId = (created.json() as { run: { id: string } }).run.id;
-    await app.inject({ method: "POST", url: `/api/coordination-runs/${runId}/start`, headers });
+    await sendSessionPrompt(app, runId);
     await runtime.waitForStarts(1);
 
     const restarted = new DurableCoordinationRepository({
@@ -1263,7 +1260,7 @@ describe("durable shared-session evidence timelines", () => {
     if (lateAttempt) {
       runtime.resolveAttempt(lateAttempt, {
         kind: "succeeded",
-        rawOutput: JSON.stringify(countdownPayload(2)),
+        rawOutput: JSON.stringify(freeChatPayload("A late contribution.")),
       });
     }
     await new Promise((resolve) => setImmediate(resolve));

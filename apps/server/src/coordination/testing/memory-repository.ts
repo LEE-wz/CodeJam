@@ -301,18 +301,6 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     if (artifact.type === "session_message") {
       artifact.transcriptSequence = this.nextTranscriptSequence(run.id);
     }
-    let nextExpectedNumber: number | undefined;
-    if (
-      artifact.type === "session_message" &&
-      run.policy.workflow === "shared_session_v1" &&
-      run.policy.sessionProtocol === "countdown"
-    ) {
-      const value = Number(artifact.payload.content);
-      if (!Number.isInteger(value) || !run.sharedState) {
-        return { kind: "stale" };
-      }
-      nextExpectedNumber = value - 1;
-    }
     this.artifacts.push(artifact);
     attempt.status = "succeeded";
     attempt.finishedAt = this.clock.nowIso();
@@ -324,9 +312,6 @@ export class InMemoryCoordinationRepository implements CoordinationRepository {
     run.activeTurnIds = run.activeTurnIds.filter((id) => id !== turn.id);
     if (artifact.type === "proposal") run.latestProposalArtifactId = artifact.id;
     if (artifact.type === "review") run.latestReviewArtifactId = artifact.id;
-    if (nextExpectedNumber !== undefined && run.sharedState) {
-      run.sharedState.nextExpectedNumber = nextExpectedNumber;
-    }
     run.version += 1;
     run.updatedAt = this.clock.nowIso();
     return {

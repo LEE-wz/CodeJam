@@ -502,29 +502,8 @@ export class SharedSessionArtifactProtocol implements ArtifactProtocol {
     }
 
     const payload = schemaResult.data;
-    if (run.policy.sessionProtocol === "countdown") {
-      if (payload.done !== undefined) {
-        return invalidAt(
-          "done",
-          "countdown_done_not_allowed",
-          "done is not allowed on countdown messages",
-        );
-      }
-      const expected = run.sharedState?.nextExpectedNumber;
-      const received = Number(payload.content);
-      if (
-        typeof expected !== "number" ||
-        !Number.isInteger(expected) ||
-        !Number.isInteger(received) ||
-        received !== expected
-      ) {
-        return invalidAt(
-          "content",
-          "unexpected_countdown_number",
-          `Expected the next number ${String(expected)}, received ${payload.content}`,
-        );
-      }
-    } else if (run.policy.sessionProtocol !== "free_chat") {
+    if (run.policy.sessionProtocol !== "free_chat") {
+      // Free chat is the only protocol an engine path accepts (PA14-18).
       return invalidAt("output", "invalid_session_protocol", "Session protocol is invalid");
     }
 

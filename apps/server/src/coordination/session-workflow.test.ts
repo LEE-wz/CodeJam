@@ -11,7 +11,6 @@ import {
   PARTICIPANT_ONE,
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
-  countdownPayload,
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 import type {
@@ -37,7 +36,7 @@ const participants = (count = 3): CoordinationParticipant[] =>
   }));
 
 const sessionRun = (
-  protocol: "countdown" | "free_chat",
+  protocol: "free_chat",
   overrides: Partial<CoordinationRun> = {},
 ): CoordinationRun => ({
   id: "run-session",
@@ -49,15 +48,13 @@ const sessionRun = (
     ...DEFAULT_COORDINATION_POLICY,
     workflow: "shared_session_v1",
     sessionProtocol: protocol,
-    maxTurns: protocol === "countdown" ? 10 : 6,
-    ...(protocol === "countdown" ? { sessionStartValue: 10 } : {}),
+    maxTurns: 6,
   },
   status: "running",
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 1,
   activeTurnIds: [],
-  ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 10 } } : {}),
   version: 1,
   createdAt: now,
   updatedAt: now,
@@ -65,7 +62,7 @@ const sessionRun = (
 });
 
 const committedView = (
-  protocol: "countdown" | "free_chat",
+  protocol: "free_chat",
   payloads: readonly SessionMessagePayload[],
   options: {
     participantCount?: number;
@@ -123,28 +120,26 @@ const committedView = (
         ...DEFAULT_COORDINATION_POLICY,
         workflow: "shared_session_v1",
         sessionProtocol: protocol,
-        maxTurns: options.maxTurns ?? (protocol === "countdown" ? startValue : 6),
-        ...(protocol === "countdown" ? { sessionStartValue: startValue } : {}),
+        maxTurns: options.maxTurns ?? 6,
       },
-      ...(protocol === "countdown"
-        ? { sharedState: { nextExpectedNumber: startValue - payloads.length } }
-        : { lastUserArtifactId: userArtifact!.id }),
+      lastUserArtifactId: userArtifact!.id,
     }),
     turns,
     artifacts: userArtifact ? [userArtifact, ...artifacts] : artifacts,
   };
 };
 
-const countdown = (start: number, count: number): SessionMessagePayload[] =>
-  Array.from({ length: count }, (_unused, index) => countdownPayload(start - index));
+/** A committed round of bounded messages, one per turn. */
+const messages = (count: number): SessionMessagePayload[] =>
+  Array.from({ length: count }, (_unused, index) => freeChatPayload(`Contribution ${index + 1}`));
 
 describe("SharedSessionWorkflowV1 routing decision table", () => {
   const workflow = new SharedSessionWorkflowV1();
 
   for (const participantCount of [2, 3, 4]) {
     it(`cycles deterministically over ${participantCount} participants`, () => {
-      const payloads = countdown(10, participantCount + 1);
-      const view = committedView("countdown", payloads, { participantCount });
+      const payloads = messages(participantCount + 1);
+      const view = committedView("free_chat", payloads, { participantCount, maxTurns: 20 });
       const expected = participants(participantCount)[payloads.length % participantCount]!;
       const first = workflow.decideNext(view);
       const second = workflow.decideNext({
@@ -155,22 +150,17 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
       expect(first).toMatchObject({ kind: "schedule", agentId: expected.agentId });
       expect(second).toEqual(first);
       if (first.kind === "schedule") {
-        expect(first.inputArtifactIds).toEqual(payloads.map((_payload, index) => `artifact-${index + 1}`));
+        expect(first.inputArtifactIds).toEqual([
+          "user-artifact-1",
+          ...payloads.map((_payload, index) => `artifact-${index + 1}`),
+        ]);
       }
     });
   }
 
-  it("completes countdown at one with the last message as final artifact", () => {
-    expect(workflow.decideNext(committedView("countdown", countdown(3, 3), { startValue: 3 })))
-      .toEqual({ kind: "complete", finalArtifactId: "artifact-3" });
-  });
-
-  it("fails countdown when scheduling would exceed maxTurns", () => {
+  it("fails when the committed transcript has reached maxTurns", () => {
     expect(
-      workflow.decideNext(committedView("countdown", countdown(4, 3), {
-        startValue: 4,
-        maxTurns: 3,
-      })),
+      workflow.decideNext(committedView("free_chat", messages(3), { maxTurns: 3 })),
     ).toMatchObject({ kind: "fail", code: "MAX_TURNS_EXCEEDED" });
   });
 
@@ -351,16 +341,6 @@ describe("SharedSessionWorkflowV1 routing decision table", () => {
     });
   });
 
-  it.each([
-    ["missing", undefined],
-    ["non-integer", { nextExpectedNumber: 2.5 }],
-    ["inconsistent", { nextExpectedNumber: 1 }],
-  ])("fails safely for %s countdown shared state", (_name, sharedState) => {
-    const view = committedView("countdown", countdown(3, 1), { startValue: 3 });
-    view.run.sharedState = sharedState;
-    expect(workflow.decideNext(view)).toMatchObject({ kind: "fail", code: "INVALID_STATE" });
-  });
-
   it("rejects non-session artifacts in a session run", () => {
     const view = committedView("free_chat", [freeChatPayload("One")]);
     view.artifacts.push({
@@ -383,16 +363,16 @@ describe("CoordinationWorkflowDispatchV1", () => {
     const verified = new FakeWorkflow();
     const session = new SharedSessionWorkflowV1();
     const dispatch = new CoordinationWorkflowDispatchV1(verified, session);
-    expect(dispatch.forRun(sessionRun("countdown"))).toBe(session);
+    expect(dispatch.forRun(sessionRun("free_chat"))).toBe(session);
     expect(dispatch.forRun({
-      ...sessionRun("countdown"),
+      ...sessionRun("free_chat"),
       policy: { ...DEFAULT_COORDINATION_POLICY },
     })).toBe(verified);
   });
 
   it("fails loudly when a session workflow is not registered", () => {
     const dispatch = new CoordinationWorkflowDispatchV1(new FakeWorkflow());
-    expect(() => dispatch.forRun(sessionRun("countdown"))).toThrow(
+    expect(() => dispatch.forRun(sessionRun("free_chat"))).toThrow(
       "Shared session workflow is not registered",
     );
   });

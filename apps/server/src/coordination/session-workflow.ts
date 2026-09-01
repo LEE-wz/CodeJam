@@ -60,11 +60,9 @@ const validateSessionView = (
   if (!isPositiveInteger(run.nextTurnSequence) || run.revision !== 0) {
     return invalidState("Session run has invalid sequence or revision state");
   }
-  if (
-    !isPositiveInteger(run.policy.maxTurns) ||
-    (run.policy.sessionProtocol !== "countdown" &&
-      run.policy.sessionProtocol !== "free_chat")
-  ) {
+  if (!isPositiveInteger(run.policy.maxTurns) || run.policy.sessionProtocol !== "free_chat") {
+    // A stored countdown run still loads and renders (PA14-18); it is simply
+    // not schedulable, because the engine that advanced it no longer exists.
     return invalidState("Session run has an invalid policy");
   }
 
@@ -230,37 +228,6 @@ const validateSessionView = (
   };
 };
 
-const validateCountdownState = (
-  view: WorkflowView,
-  artifacts: SessionArtifact[],
-): WorkflowDecision | undefined => {
-  const { run } = view;
-  const startValue = run.policy.sessionStartValue;
-  const nextExpectedNumber = run.sharedState?.nextExpectedNumber;
-  if (
-    !isPositiveInteger(startValue ?? 0) ||
-    typeof nextExpectedNumber !== "number" ||
-    !Number.isInteger(nextExpectedNumber)
-  ) {
-    return invalidState("Countdown session has missing or invalid shared state");
-  }
-
-  for (const [index, artifact] of artifacts.entries()) {
-    const value = Number(artifact.payload.content);
-    if (
-      !Number.isInteger(value) ||
-      value !== startValue! - index ||
-      artifact.payload.done !== undefined
-    ) {
-      return invalidState("Countdown transcript is inconsistent with shared state");
-    }
-  }
-  if (nextExpectedNumber !== startValue! - artifacts.length) {
-    return invalidState("Countdown transcript is inconsistent with shared state");
-  }
-  return undefined;
-};
-
 const finalArtifactId = (
   artifacts: SessionArtifact[],
 ): CoordinationArtifactId | undefined => artifacts.at(-1)?.id;
@@ -337,26 +304,7 @@ export class SharedSessionWorkflowV1 implements SharedSessionWorkflow {
     } = validated;
     const lastArtifactId = finalArtifactId(committedArtifacts);
 
-    if (run.policy.sessionProtocol === "countdown") {
-      const invalid = validateCountdownState(view, committedArtifacts);
-      if (invalid) return invalid;
-      if (Number(committedArtifacts.at(-1)?.payload.content) === 1) {
-        return lastArtifactId
-          ? { kind: "complete", finalArtifactId: lastArtifactId }
-          : invalidState("Completed session has no final artifact");
-      }
-      if (run.nextTurnSequence > run.policy.maxTurns) {
-        return {
-          kind: "fail",
-          code: "MAX_TURNS_EXCEEDED",
-          message: "Countdown session reached its turn limit",
-        };
-      }
-    } else {
-      if (run.sharedState !== undefined || run.policy.sessionStartValue !== undefined) {
-        return invalidState("Free-chat session must not carry countdown state");
-      }
-
+    {
       if (committedArtifacts.length >= run.policy.maxTurns) {
         return {
           kind: "fail",

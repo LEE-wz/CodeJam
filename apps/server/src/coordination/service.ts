@@ -429,39 +429,19 @@ export class CoordinationService implements CoordinationServiceContract {
       throw new CoordinationError(404, "NOT_FOUND", "Selected Agent was not found");
     }
 
-    const protocol = input.policy?.sessionProtocol ?? "countdown";
-    if (protocol !== "countdown" && protocol !== "free_chat") {
+    // Free chat is the only session protocol (PA14-18). An unnamed protocol can
+    // therefore only mean free chat, and any other value is a stored artefact
+    // of the deleted countdown engine rather than a creatable session.
+    const protocol = input.policy?.sessionProtocol ?? "free_chat";
+    if (protocol !== "free_chat") {
       throw new CoordinationError(400, "VALIDATION_FAILED", "Session protocol is invalid");
     }
-    if (protocol === "free_chat" && input.policy?.sessionStartValue !== undefined) {
-      throw new CoordinationError(
-        400,
-        "VALIDATION_FAILED",
-        "Free-chat sessions do not accept a start value",
-      );
-    }
-    const startValue =
-      protocol === "countdown"
-        ? (input.policy?.sessionStartValue ?? SESSION_LIMITS.defaultStartValue)
-        : undefined;
-    const maxTurns =
-      input.policy?.maxTurns ??
-      (protocol === "countdown"
-        ? (startValue ?? SESSION_LIMITS.defaultStartValue)
-        : SESSION_LIMITS.defaultSessionTurns);
+    const maxTurns = input.policy?.maxTurns ?? SESSION_LIMITS.defaultSessionTurns;
 
     if (
-      (protocol === "countdown" &&
-        (!Number.isInteger(startValue) ||
-          startValue! < SESSION_LIMITS.minStartValue ||
-          startValue! > SESSION_LIMITS.maxStartValue ||
-          !Number.isInteger(maxTurns) ||
-          maxTurns < startValue! ||
-          maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
-      (protocol === "free_chat" &&
-        (!Number.isInteger(maxTurns) ||
-          maxTurns < SESSION_LIMITS.minSessionTurns ||
-          maxTurns > SESSION_LIMITS.maxSessionTurns)) ||
+      !Number.isInteger(maxTurns) ||
+      maxTurns < SESSION_LIMITS.minSessionTurns ||
+      maxTurns > SESSION_LIMITS.maxSessionTurns ||
       (input.policy?.perAttemptTimeoutMs !== undefined &&
         (!Number.isInteger(input.policy.perAttemptTimeoutMs) ||
           input.policy.perAttemptTimeoutMs < 10_000 ||
@@ -484,10 +464,8 @@ export class CoordinationService implements CoordinationServiceContract {
       (waveMode !== "sequential" && waveMode !== "parallel") ||
       (wavePurpose !== "session_execution" && wavePurpose !== "session_bidding") ||
       (waveMode === "sequential" && wavePurpose === "session_bidding") ||
-      (protocol === "countdown" && waveMode === "parallel") ||
       (auctionPolicy !== undefined &&
-        (protocol !== "free_chat" ||
-          input.policy?.sessionWaveMode !== undefined ||
+        (input.policy?.sessionWaveMode !== undefined ||
           input.policy?.sessionWavePurpose !== undefined)) ||
       (input.policy?.maxParallelTurns !== undefined &&
         (!Number.isInteger(input.policy.maxParallelTurns) ||
@@ -507,7 +485,6 @@ export class CoordinationService implements CoordinationServiceContract {
       contextMaxChars: SESSION_CONTEXT_MAX_CHARS,
       maxTurns,
       sessionProtocol: protocol,
-      ...(startValue !== undefined ? { sessionStartValue: startValue } : {}),
       ...(waveMode === "sequential" ? {} : { sessionWaveMode: waveMode }),
       ...(wavePurpose === "session_execution" ? {} : { sessionWavePurpose: wavePurpose }),
       ...(input.policy?.maxParallelTurns !== undefined
@@ -548,7 +525,6 @@ export class CoordinationService implements CoordinationServiceContract {
       revision: 0,
       nextTurnSequence: 1,
       activeTurnIds: [],
-      ...(startValue !== undefined ? { sharedState: { nextExpectedNumber: startValue } } : {}),
       version: 1,
       createdAt: timestamp,
       updatedAt: timestamp,

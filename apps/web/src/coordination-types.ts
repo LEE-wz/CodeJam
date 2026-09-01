@@ -356,8 +356,12 @@ export interface CreateSessionRunRequest {
   objective: string;
   agents: string[];
   policy?: {
-    sessionProtocol?: SessionProtocol;
-    sessionStartValue?: number;
+    /**
+     * Free chat is the only creatable protocol (PA14-18). `SessionProtocol`
+     * itself keeps its `"countdown"` member because stored runs still carry it
+     * and are still rendered read-only.
+     */
+    sessionProtocol?: "free_chat";
     maxTurns?: number;
     perAttemptTimeoutMs?: number;
     auctionPolicy?: {

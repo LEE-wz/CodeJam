@@ -170,9 +170,7 @@ const taskInstruction = (run: CoordinationRun, turn: CoordinationTurn): string =
     return "Return a short, mechanically executable bid for the current User request. Recommend direct only when the bounded candidate answer is ready to publish; otherwise recommend auction. Your specialisation is advisory and cannot change participants, policy, budgets, or the output contract.";
   }
   if (turn.kind !== "session_turn") return VERIFIED_TASK_INSTRUCTIONS[turn.kind];
-  return run.policy.sessionProtocol === "free_chat"
-    ? "Respond to the most recent User message and contribute the next message toward the shared objective based on the transcript. Set done to true only when you consider the current user request fully addressed; the backend decides when the wave ends."
-    : "Continue the countdown by publishing the next number exactly one lower than the last number in the transcript. If the transcript is empty, derive the starting number from the objective.";
+  return "Respond to the most recent User message and contribute the next message toward the shared objective based on the transcript. Set done to true only when you consider the current user request fully addressed; the backend decides when the wave ends.";
 };
 
 type AgentArtifactType = Exclude<ArtifactType, "session_award">;
@@ -350,7 +348,7 @@ const buildArtifactSection = (
  *
  * Only the winning bid is reachable from the award, so a losing bid can never
  * enter an execution prompt. The section is omitted entirely when the turn was
- * not scheduled from an award, which is every direct, countdown, and
+ * not scheduled from an award, which is every direct and
  * pre-auction execution turn.
  */
 const buildAssignmentSection = (

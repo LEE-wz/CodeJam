@@ -646,14 +646,6 @@ export class DurableCoordinationRepository implements CoordinationRepository {
         artifact.transcriptSequence = nextTranscriptSequence(database, run.id);
       }
 
-      // A countdown commit carries the next durable value forward in this same
-      // mutation as the artifact, attempt, turn, and event. The protocol has
-      // already checked the exact expected value; this defensive check keeps a
-      // malformed direct repository call from corrupting shared state.
-      const nextExpectedNumber = nextCountdownValue(run, artifact);
-      if (nextExpectedNumber === "invalid") {
-        return { kind: "stale" } as const;
-      }
       database.coordinationArtifacts.push(artifact);
 
       attempt.status = "succeeded";
@@ -675,9 +667,6 @@ export class DurableCoordinationRepository implements CoordinationRepository {
       }
       if (artifact.type === "review") {
         run.latestReviewArtifactId = artifact.id;
-      }
-      if (typeof nextExpectedNumber === "number" && run.sharedState) {
-        run.sharedState.nextExpectedNumber = nextExpectedNumber;
       }
       run.version += 1;
       run.updatedAt = now;
@@ -1687,27 +1676,6 @@ const EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND = {
 
 const expectedArtifactTypeForTurn = (turn: CoordinationTurn): ArtifactType =>
   EXPECTED_ARTIFACT_TYPE_BY_TURN_KIND[turn.kind];
-
-/**
- * Returns the state update that belongs in a successful countdown commit.
- * `undefined` means this is not a countdown session; `invalid` is never
- * persisted and leaves the active lease untouched for ordinary validation.
- */
-const nextCountdownValue = (
-  run: CoordinationRun,
-  artifact: CoordinationArtifact,
-): number | undefined | "invalid" => {
-  if (
-    artifact.type !== "session_message" ||
-    run.policy.workflow !== "shared_session_v1" ||
-    run.policy.sessionProtocol !== "countdown"
-  ) {
-    return undefined;
-  }
-
-  const value = Number(artifact.payload.content);
-  return Number.isInteger(value) && run.sharedState ? value - 1 : "invalid";
-};
 
 /**
  * Normalize a per-round routing request against durable policy (PA14-14).

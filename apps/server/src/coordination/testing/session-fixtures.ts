@@ -81,8 +81,6 @@ export const SESSION_PARTICIPANTS_FOUR = [
  * Create requests.
  * ------------------------------------------------------------------ */
 
-export const SESSION_START_VALUE = SESSION_LIMITS.defaultStartValue;
-
 /**
  * Turn ceiling for the free-chat fixtures. Deliberately a fixture constant
  * rather than `SESSION_LIMITS.defaultSessionTurns`: the session default is 200
@@ -92,22 +90,8 @@ export const SESSION_START_VALUE = SESSION_LIMITS.defaultStartValue;
  */
 export const FREE_CHAT_FIXTURE_TURNS = 6;
 
-export const COUNTDOWN_OBJECTIVE = "Count down from 10 to 1 together, one number per turn.";
-
 export const FREE_CHAT_OBJECTIVE =
   "Agree a three-point launch checklist for the student marketplace.";
-
-export const CREATE_COUNTDOWN_REQUEST: CreateSessionRunRequest = {
-  workflow: "shared_session_v1",
-  name: "Countdown session",
-  objective: COUNTDOWN_OBJECTIVE,
-  agents: SESSION_PARTICIPANTS.map((agent) => agent.id),
-  policy: {
-    sessionProtocol: "countdown",
-    sessionStartValue: SESSION_START_VALUE,
-    maxTurns: SESSION_START_VALUE,
-  },
-};
 
 export const CREATE_FREE_CHAT_REQUEST: CreateSessionRunRequest = {
   workflow: "shared_session_v1",
@@ -121,50 +105,15 @@ export const CREATE_FREE_CHAT_REQUEST: CreateSessionRunRequest = {
 };
 
 /* ------------------------------------------------------------------ *
- * Countdown payloads and raw outputs.
+ * Raw outputs. The countdown protocol was deleted in PA14-18; what remains
+ * here tests the parser and the bounded-message rules, neither of which was
+ * ever countdown-specific.
  * ------------------------------------------------------------------ */
 
-export const countdownPayload = (value: number): SessionMessagePayload => ({
+export const VALID_MESSAGE_OUTPUT = JSON.stringify({
   schemaVersion: 1,
   type: "session_message",
-  content: String(value),
-});
-
-/** The full 10 -> 1 transcript, in commit order. */
-export const COUNTDOWN_TRANSCRIPT: readonly SessionMessagePayload[] = Array.from(
-  { length: SESSION_START_VALUE },
-  (_unused, index) => countdownPayload(SESSION_START_VALUE - index),
-);
-
-/**
- * Which participant publishes each number, by round-robin over three
- * participants: One publishes 10, Two publishes 9, Three publishes 8, and so on.
- */
-export const countdownAuthorFor = (
-  turnIndex: number,
-  participants: readonly CoordinationAgentView[] = SESSION_PARTICIPANTS,
-): CoordinationAgentView => {
-  const participant = participants[turnIndex % participants.length];
-  if (!participant) {
-    throw new Error("countdownAuthorFor requires a non-empty participant list");
-  }
-  return participant;
-};
-
-export const VALID_COUNTDOWN_OUTPUT = JSON.stringify(countdownPayload(SESSION_START_VALUE));
-
-/** The headline failure case: 6 published when 8 was expected. */
-export const WRONG_NUMBER_OUTPUT = JSON.stringify(countdownPayload(6));
-export const WRONG_NUMBER_EXPECTED = 8;
-
-/** Skips by two -- the mischievous demo Agent's signature mistake. */
-export const SKIPPED_NUMBER_OUTPUT = JSON.stringify(countdownPayload(8));
-export const SKIPPED_NUMBER_EXPECTED = 9;
-
-export const NON_INTEGER_OUTPUT = JSON.stringify({
-  schemaVersion: 1,
-  type: "session_message",
-  content: "nine",
+  content: "Start with seller verification before any listing goes live.",
 });
 
 export const EMPTY_CONTENT_OUTPUT = JSON.stringify({
@@ -179,26 +128,19 @@ export const OVERSIZE_CONTENT_OUTPUT = JSON.stringify({
   content: "x".repeat(SESSION_LIMITS.messageMaxChars + 1),
 });
 
-export const FENCED_COUNTDOWN_OUTPUT = `\`\`\`json\n${VALID_COUNTDOWN_OUTPUT}\n\`\`\``;
+/** Fenced JSON: rejected, because the parser accepts only a bare object. */
+export const FENCED_MESSAGE_OUTPUT = `\`\`\`json\n${VALID_MESSAGE_OUTPUT}\n\`\`\``;
 
 /** Prose around the JSON: rejected, because the parser never searches prose. */
-export const PROSE_COUNTDOWN_OUTPUT = `Sure! Here you go:\n${VALID_COUNTDOWN_OUTPUT}`;
+export const PROSE_MESSAGE_OUTPUT = `Sure! Here you go:\n${VALID_MESSAGE_OUTPUT}`;
 
 /** Agent-supplied identity is ignored; the backend constructs provenance. */
 export const FORGED_PROVENANCE_OUTPUT = JSON.stringify({
   schemaVersion: 1,
   type: "session_message",
-  content: "10",
+  content: "A bounded contribution.",
   id: "artifact-forged",
   createdByAgentId: PARTICIPANT_THREE.id,
-});
-
-/** `done` is free-chat only; a countdown message carrying it is rejected. */
-export const COUNTDOWN_WITH_DONE_OUTPUT = JSON.stringify({
-  schemaVersion: 1,
-  type: "session_message",
-  content: "10",
-  done: true,
 });
 
 /* ------------------------------------------------------------------ *
@@ -273,27 +215,6 @@ const sessionArtifact = (
   createdAt: FIXED_NOW,
 });
 
-export const FIRST_COUNTDOWN_ARTIFACT = sessionArtifact(
-  "artifact-session-1",
-  "turn-session-1",
-  PARTICIPANT_ONE,
-  countdownPayload(10),
-);
-
-export const SECOND_COUNTDOWN_ARTIFACT = sessionArtifact(
-  "artifact-session-2",
-  "turn-session-2",
-  PARTICIPANT_TWO,
-  countdownPayload(9),
-);
-
-export const FINAL_COUNTDOWN_ARTIFACT = sessionArtifact(
-  "artifact-session-10",
-  "turn-session-10",
-  countdownAuthorFor(9),
-  countdownPayload(1),
-);
-
 export const FREE_CHAT_ARTIFACT = sessionArtifact(
   "artifact-free-chat-1",
   "turn-free-chat-1",
@@ -323,27 +244,10 @@ const COMMITTED_TURN_EVENTS: readonly CoordinationEventType[] = [
   "turn.committed",
 ];
 
-/** A 10 -> 1 countdown with one attempt per turn and no retries. */
-export const NORMAL_COUNTDOWN_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
-  "run.created",
-  "run.started",
-  ...Array.from({ length: SESSION_START_VALUE }, () => COMMITTED_TURN_EVENTS).flat(),
-  "run.completed",
-];
-
 /** A free-chat run that reaches `maxTurns` with no retries. */
 export const NORMAL_FREE_CHAT_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
   "run.created",
   "run.started",
   ...Array.from({ length: FREE_CHAT_FIXTURE_TURNS }, () => COMMITTED_TURN_EVENTS).flat(),
   "run.completed",
-];
-
-/** A wrong number: the first attempt is rejected, the retry commits. */
-export const WRONG_NUMBER_EVENT_SEQUENCE: readonly CoordinationEventType[] = [
-  "turn.scheduled",
-  "attempt.started",
-  "attempt.invalid_output",
-  "attempt.started",
-  "turn.committed",
 ];

@@ -19,7 +19,7 @@ import {
   DEFAULT_SESSION_AUCTION_POLICY,
 } from "./types.js";
 
-const sessionRun = (protocol: "countdown" | "free_chat", contextMaxChars = 12_000): CoordinationRun => ({
+const sessionRun = (protocol: "free_chat", contextMaxChars = 12_000): CoordinationRun => ({
   id: "run-session-context",
   name: "Session context",
   objective: "Continue the shared task from the committed transcript.",
@@ -33,16 +33,14 @@ const sessionRun = (protocol: "countdown" | "free_chat", contextMaxChars = 12_00
     ...DEFAULT_COORDINATION_POLICY,
     workflow: "shared_session_v1",
     sessionProtocol: protocol,
-    maxTurns: protocol === "countdown" ? 10 : 6,
+    maxTurns: 6,
     contextMaxChars,
-    ...(protocol === "countdown" ? { sessionStartValue: 10 } : {}),
   },
   status: "running",
   phase: "sessioning",
   revision: 0,
   nextTurnSequence: 4,
   activeTurnIds: [],
-  ...(protocol === "countdown" ? { sharedState: { nextExpectedNumber: 9 } } : {}),
   version: 1,
   createdAt: FIXED_NOW,
   updatedAt: FIXED_NOW,
@@ -94,7 +92,7 @@ const turn = (inputArtifactIds: string[]): CoordinationTurn => ({
 });
 
 const build = (
-  protocol: "countdown" | "free_chat",
+  protocol: "free_chat",
   artifacts: CoordinationArtifact[],
   inputArtifactIds = artifacts.map(({ id }) => id),
   contextMaxChars = 12_000,
@@ -138,11 +136,7 @@ describe("session context builder", () => {
     expect(userIndex).toBeLessThan(secondIndex);
   });
 
-  it("uses protocol-specific instructions and exposes done only for free chat", () => {
-    const countdown = build("countdown", [message(0, "10")]);
-    expect(countdown.prompt).toContain("exactly one lower than the last number");
-    expect(countdown.prompt).not.toContain('"done"');
-
+  it("instructs a participant to contribute and exposes the done signal", () => {
     const freeChat = build("free_chat", []);
     expect(freeChat.prompt).toContain("contribute the next message toward the shared objective");
     expect(freeChat.prompt).toContain('"done":<optional boolean>');
@@ -228,13 +222,6 @@ describe("session context builder", () => {
     expect(envelope.prompt).not.toContain("OTHER-PRIVATE-PERSPECTIVE");
     expect(envelope.prompt).not.toContain("OTHER-PRIVATE-INSTRUCTIONS");
     expect(envelope.prompt.length).toBeLessThanOrEqual(run.policy.contextMaxChars);
-  });
-
-  it("never reveals countdown shared state or states the expected number", () => {
-    const envelope = build("countdown", [message(0, "10")]);
-    expect(envelope.prompt).not.toContain("nextExpectedNumber");
-    expect(envelope.prompt).not.toContain("expected number 9");
-    expect(envelope.prompt).not.toContain("Expected the next number 9");
   });
 
   it("contains no hidden free-chat state, capabilities, events, or unrelated artifacts", () => {

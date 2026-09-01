@@ -27,18 +27,15 @@ import {
 } from "./testing/fakes.js";
 import { InMemoryCoordinationRepository } from "./testing/memory-repository.js";
 import {
-  COUNTDOWN_TRANSCRIPT,
-  CREATE_COUNTDOWN_REQUEST,
   CREATE_FREE_CHAT_REQUEST,
   PARTICIPANT_ONE,
+  EMPTY_CONTENT_OUTPUT,
+  PROSE_MESSAGE_OUTPUT,
+  VALID_MESSAGE_OUTPUT,
   PARTICIPANT_THREE,
   PARTICIPANT_TWO,
-  PROSE_COUNTDOWN_OUTPUT,
   SESSION_PARTICIPANTS,
   UNANIMOUS_DONE_ROUND,
-  VALID_COUNTDOWN_OUTPUT,
-  WRONG_NUMBER_OUTPUT,
-  countdownPayload,
   freeChatPayload,
 } from "./testing/session-fixtures.js";
 
@@ -90,71 +87,68 @@ const flush = async (ticks = 200): Promise<void> => {
 
 const startSession = async (
   steps: ScriptedRuntimeStep[],
-  request: CreateSessionRunRequest = CREATE_COUNTDOWN_REQUEST,
+  request: CreateSessionRunRequest = CREATE_FREE_CHAT_REQUEST,
 ) => {
   const context = sessionHarness(steps);
   const run = await context.service.createRun(request);
-  if (request.policy?.sessionProtocol === "free_chat") {
-    await context.service.resumeRun(run.id, { content: "Work on the shared objective" });
-  } else {
-    await context.service.startRun(run.id);
-  }
+  await context.service.resumeRun(run.id, { content: "Work on the shared objective" });
   return { ...context, runId: run.id };
 };
 
-const countdownSteps = (payloads = COUNTDOWN_TRANSCRIPT): ScriptedRuntimeStep[] =>
-  payloads.map((payload) => succeeds(JSON.stringify(payload)));
+/** One committed message per scripted turn. */
+const messageSteps = (count: number): ScriptedRuntimeStep[] =>
+  Array.from({ length: count }, (_unused, index) =>
+    succeeds(JSON.stringify(freeChatPayload(`Contribution ${index + 1}`))));
+
+/** A session whose turn ceiling is high enough for a multi-round transcript. */
+const longSessionRequest = (maxTurns: number): CreateSessionRunRequest => ({
+  ...CREATE_FREE_CHAT_REQUEST,
+  policy: { sessionProtocol: "free_chat", maxTurns },
+});
 
 describe("session create validation and context probe", () => {
-  it("validates and normalizes countdown and free-chat policy defaults", async () => {
-    const countdown = sessionHarness([]);
-    const countdownRun = await countdown.service.createRun({
-      ...CREATE_COUNTDOWN_REQUEST,
-      name: "  Countdown  ",
+  it("normalizes free-chat policy defaults", async () => {
+    const named = sessionHarness([]);
+    const namedRun = await named.service.createRun({
+      ...CREATE_FREE_CHAT_REQUEST,
+      name: "  Checklist  ",
       policy: undefined,
     });
-    expect(countdownRun).toMatchObject({
-      name: "Countdown",
+    // An unnamed protocol is free chat now that countdown is deleted (PA14-18).
+    expect(namedRun).toMatchObject({
+      name: "Checklist",
       phase: "sessioning",
       revision: 0,
-      sharedState: { nextExpectedNumber: 10 },
-      policy: { sessionProtocol: "countdown", sessionStartValue: 10, maxTurns: 10 },
+      policy: { sessionProtocol: "free_chat", maxTurns: SESSION_LIMITS.defaultSessionTurns },
     });
+    expect(namedRun).not.toHaveProperty("sharedState");
 
     const freeChat = sessionHarness([]);
     const freeChatRun = await freeChat.service.createRun({
       ...CREATE_FREE_CHAT_REQUEST,
       policy: { sessionProtocol: "free_chat" },
     });
-    expect(freeChatRun.sharedState).toBeUndefined();
+    expect(freeChatRun).not.toHaveProperty("sharedState");
     expect(freeChatRun.policy).toMatchObject({
       sessionProtocol: "free_chat",
       maxTurns: SESSION_LIMITS.defaultSessionTurns,
     });
-    expect(freeChatRun.policy.sessionStartValue).toBeUndefined();
+    expect(freeChatRun.policy).not.toHaveProperty("sessionStartValue");
   });
 
   it.each([
-    { policy: { sessionStartValue: 1 }, label: "start below range" },
-    { policy: { sessionStartValue: 13 }, label: "start above range" },
-    { policy: { sessionStartValue: 2.5 }, label: "non-integer start" },
-    { policy: { sessionStartValue: 5, maxTurns: 4 }, label: "turns below start" },
-    {
-      policy: { sessionStartValue: 10, maxTurns: SESSION_LIMITS.maxSessionTurns + 1 },
-      label: "turns above range",
-    },
+    { policy: { maxTurns: SESSION_LIMITS.maxSessionTurns + 1 }, label: "turns above range" },
     { policy: { perAttemptTimeoutMs: 9_999 }, label: "timeout below range" },
     { policy: { perAttemptTimeoutMs: 180_001 }, label: "timeout above range" },
-  ])("rejects countdown $label", async ({ policy }) => {
+  ])("rejects a session policy with $label", async ({ policy }) => {
     await expect(sessionHarness([]).service.createRun({
-      ...CREATE_COUNTDOWN_REQUEST,
+      ...CREATE_FREE_CHAT_REQUEST,
       policy,
     })).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_FAILED" });
   });
 
-  it("rejects free-chat start values and turn limits outside the session range", async () => {
+  it("rejects free-chat turn limits outside the session range", async () => {
     for (const policy of [
-      { sessionProtocol: "free_chat" as const, sessionStartValue: 3 },
       { sessionProtocol: "free_chat" as const, maxTurns: SESSION_LIMITS.minSessionTurns - 1 },
       { sessionProtocol: "free_chat" as const, maxTurns: SESSION_LIMITS.maxSessionTurns + 1 },
       { sessionProtocol: "free_chat" as const, maxTurns: 12.5 },
@@ -216,12 +210,12 @@ describe("session create validation and context probe", () => {
 
   it("enforces name/objective bounds and rejects verified-only fields", async () => {
     const invalid = [
-      { ...CREATE_COUNTDOWN_REQUEST, name: " " },
-      { ...CREATE_COUNTDOWN_REQUEST, name: "n".repeat(81) },
-      { ...CREATE_COUNTDOWN_REQUEST, objective: " " },
-      { ...CREATE_COUNTDOWN_REQUEST, objective: "o".repeat(4_001) },
-      { ...CREATE_COUNTDOWN_REQUEST, requiredSections: [] },
-      { ...CREATE_COUNTDOWN_REQUEST, policy: { maxRevisions: 1 } },
+      { ...CREATE_FREE_CHAT_REQUEST, name: " " },
+      { ...CREATE_FREE_CHAT_REQUEST, name: "n".repeat(81) },
+      { ...CREATE_FREE_CHAT_REQUEST, objective: " " },
+      { ...CREATE_FREE_CHAT_REQUEST, objective: "o".repeat(4_001) },
+      { ...CREATE_FREE_CHAT_REQUEST, requiredSections: [] },
+      { ...CREATE_FREE_CHAT_REQUEST, policy: { maxRevisions: 1 } },
     ];
     for (const request of invalid) {
       await expect(
@@ -239,7 +233,7 @@ describe("session create validation and context probe", () => {
       },
     };
     const context = sessionHarness([], contextBuilder);
-    await context.service.createRun(CREATE_COUNTDOWN_REQUEST);
+    await context.service.createRun(CREATE_FREE_CHAT_REQUEST);
     expect(probes).toHaveLength(1);
     expect(probes[0]?.turn).toMatchObject({
       role: "participant",
@@ -512,15 +506,16 @@ describe("session walking skeleton", () => {
     )).toBe(true);
   });
 
-  it("completes a real in-memory 10-to-1 countdown in round-robin order", async () => {
-    const { service, runtime, runId } = await startSession(countdownSteps());
+  it("commits a real in-memory ten-turn transcript in round-robin order", async () => {
+    const { service, runtime, runId } = await startSession(messageSteps(10), longSessionRequest(10));
     const details = await settle(service, runId);
-    expect(details.run.status).toBe("completed");
-    expect(details.run.phase).toBe("done");
-    expect(details.run.sharedState?.nextExpectedNumber).toBe(0);
+    expect(details.run.status).toBe("failed");
+    expect(details.run.errorCode).toBe("MAX_TURNS_EXCEEDED");
     expect(details.turns).toHaveLength(10);
-    expect(details.artifacts.map((artifact) => artifact.type === "session_message" && artifact.payload.content))
-      .toEqual(["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"]);
+    expect(details.artifacts
+      .filter((artifact) => artifact.type === "session_message")
+      .map((artifact) => (artifact.type === "session_message" ? artifact.payload.content : "")))
+      .toEqual(Array.from({ length: 10 }, (_unused, index) => `Contribution ${index + 1}`));
     expect(runtime.starts.map(({ agentId }) => agentId)).toEqual([
       PARTICIPANT_ONE.id,
       PARTICIPANT_TWO.id,
@@ -533,18 +528,12 @@ describe("session walking skeleton", () => {
       PARTICIPANT_THREE.id,
       PARTICIPANT_ONE.id,
     ]);
-    expect(details.run.finalArtifactId).toBe(details.artifacts.at(-1)?.id);
   });
 
-  it("retries a wrong number on the same Agent and logical turn, then succeeds", async () => {
-    const steps = [
-      succeeds(WRONG_NUMBER_OUTPUT),
-      succeeds(VALID_COUNTDOWN_OUTPUT),
-      ...countdownSteps(COUNTDOWN_TRANSCRIPT.slice(1)),
-    ];
-    const { service, runtime, runId } = await startSession(steps);
+  it("retries invalid output on the same Agent and logical turn, then succeeds", async () => {
+    const steps = [succeeds(PROSE_MESSAGE_OUTPUT), ...messageSteps(3)];
+    const { service, runtime, runId } = await startSession(steps, longSessionRequest(3));
     const details = await settle(service, runId);
-    expect(details.run.status).toBe("completed");
     expect(details.turns[0]?.attemptCount).toBe(2);
     expect(details.attempts.slice(0, 2).map(({ status }) => status)).toEqual([
       "invalid_output",
@@ -554,11 +543,13 @@ describe("session walking skeleton", () => {
       PARTICIPANT_ONE.id,
       PARTICIPANT_ONE.id,
     ]);
-    expect(runtime.starts[1]?.prompt).toContain("Expected the next number 10, received 6");
+    expect(runtime.starts[1]?.prompt).toContain(
+      "Your previous attempt did not produce a valid artifact",
+    );
   });
 
-  it("fails after two wrong or malformed outputs without committing", async () => {
-    for (const output of [WRONG_NUMBER_OUTPUT, PROSE_COUNTDOWN_OUTPUT]) {
+  it("fails after two malformed outputs without committing", async () => {
+    for (const output of [EMPTY_CONTENT_OUTPUT, PROSE_MESSAGE_OUTPUT]) {
       const { service, runId } = await startSession([succeeds(output), succeeds(output)]);
       const details = await settle(service, runId);
       expect(details.run).toMatchObject({ status: "failed", errorCode: "MAX_ATTEMPTS_EXCEEDED" });
@@ -566,18 +557,17 @@ describe("session walking skeleton", () => {
         "invalid_output",
         "invalid_output",
       ]);
-      expect(details.artifacts).toEqual([]);
+      // The user prompt is durable; nothing the Agent produced was committed.
+      expect(details.artifacts.filter(({ type }) => type === "session_message")).toEqual([]);
     }
   });
 
   it("retries a timeout on the same participant", async () => {
     const { service, runtime, runId } = await startSession([
       timesOut("Attempt exceeded its time limit"),
-      succeeds(VALID_COUNTDOWN_OUTPUT),
-      ...countdownSteps(COUNTDOWN_TRANSCRIPT.slice(1)),
-    ]);
+      ...messageSteps(3),
+    ], longSessionRequest(3));
     const details = await settle(service, runId);
-    expect(details.run.status).toBe("completed");
     expect(details.attempts[0]?.status).toBe("timed_out");
     expect(runtime.starts[0]?.agentId).toBe(runtime.starts[1]?.agentId);
   });
@@ -598,50 +588,12 @@ describe("session walking skeleton", () => {
     expect((await service.stopRun(runId)).status).toBe("awaiting_input");
     const pending = runtime.pendingAttemptIds()[0];
     expect(pending).toBeDefined();
-    runtime.resolveAttempt(pending!, { kind: "succeeded", rawOutput: VALID_COUNTDOWN_OUTPUT });
+    runtime.resolveAttempt(pending!, { kind: "succeeded", rawOutput: VALID_MESSAGE_OUTPUT });
     await flush();
     const details = await service.getRun(runId);
     expect(details?.run.status).toBe("awaiting_input");
-    expect(details?.artifacts).toEqual([]);
+    expect(details?.artifacts.filter(({ type }) => type === "session_message")).toEqual([]);
     expect(details?.attempts[0]?.status).toBe("cancelled");
-  });
-
-  it("fails a countdown that reaches its turn ceiling before one", async () => {
-    const context = sessionHarness(countdownSteps([countdownPayload(4), countdownPayload(3), countdownPayload(2)]));
-    const timestamp = context.clock.nowIso();
-    const run: CoordinationRun = {
-      id: context.ids.runId(),
-      name: "Ceiling",
-      objective: "Count down together.",
-      requiredSections: [],
-      participants: SESSION_PARTICIPANTS.map((agent) => ({
-        role: "participant",
-        agentId: agent.id,
-        agentNameSnapshot: agent.name,
-      })),
-      policy: {
-        ...DEFAULT_COORDINATION_POLICY,
-        workflow: "shared_session_v1",
-        sessionProtocol: "countdown",
-        sessionStartValue: 4,
-        maxTurns: 3,
-        maxRevisions: 0,
-      },
-      status: "created",
-      phase: "sessioning",
-      revision: 0,
-      nextTurnSequence: 1,
-      activeTurnIds: [],
-      sharedState: { nextExpectedNumber: 4 },
-      version: 1,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    await context.repository.createRun({ run });
-    await context.service.startRun(run.id);
-    const details = await settle(context.service, run.id);
-    expect(details.run).toMatchObject({ status: "failed", errorCode: "MAX_TURNS_EXCEEDED" });
-    expect(details.artifacts).toHaveLength(3);
   });
 
   it("fails free chat at maxTurns and awaits input after a unanimous done wave", async () => {
