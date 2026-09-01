@@ -53,7 +53,7 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** `P15-01`-`P15-11` are closed. The measurements found an O(n^2)
+**Resume here.** `P15-01`-`P15-11` and `P15-14` are closed. The measurements found an O(n^2)
 transcript encoding, and removing it made storage linear, shrank a 2,000-turn
 database by 92%, and moved the hard serialisation ceiling from ~4,400 to
 ~120,000 committed turns. `JsonStore` is kept by recorded decision.
@@ -66,9 +66,12 @@ because most of the doc set is model-independent — `COORDINATION_OPERATIONS.md
 and `DECISIONS.md` entirely, six of seven API routes, and the `session_message`
 and `user_message` schemas, which are identical on both tracks.
 
-**Next: `P15-12`, `P15-13`, `P15-16`.** All three need live provider capacity
-and are blocked on Ark returning sustained `429`. `P15-14`, `P15-17`, `P15-19`,
-and `P15-20` are the freeze itself and are best done last.
+**Next: `P15-12`, `P15-13`, `P15-16`, and the last check in `P15-17`.** All need
+live provider capacity and are blocked on Ark returning sustained `429`.
+`P15-14` and the static half of `P15-17` are done and recorded below; both
+should be re-run immediately before the freeze. `P15-19` (runtime-state hygiene)
+and `P15-20` (the freeze) remain, and `P15-13` additionally needs a reader who is
+not the author of the documents.
 
 One measured item is deliberately left open: an idle delta poll still costs
 355ms of server time at 2,000 turns, because the route clones the whole database
@@ -104,10 +107,10 @@ load repository-local secrets or runtime state.
 | P15-11 | `complete` (unrehearsed) | [`DEMO.md`](../DEMO.md): setup, a six-beat three-minute script with expected states, three failure demos, the latency and `round_robin` fallbacks, reset steps, and stated limitations. The timing range is estimated from component measurements and flagged as such, because `P15-13` has not run. |
 | P15-12 | `blocked` | Needs live provider capacity to record four real runs. Ark returned sustained `429` throughout the attempt. |
 | P15-13 | `blocked` | Needs `P15-12`, live capacity, and a second person to follow `README.md` and `DEMO.md` from scratch. |
-| P15-14 | `not_started` | Best done immediately before the freeze. |
+| P15-14 | `complete` (re-run at freeze) | Working tree clean. **Nothing sensitive is tracked and nothing ever was**: `git log --all` over `.env`, `data/`, `workspaces/`, and `codex-home/` returns no commits, and neither the real `ARK_API_KEY` nor `APP_AUTH_TOKEN` appears anywhere in the tree or in history. `.env.example` carries placeholders only. No `dist/`, `node_modules/`, `.tsbuildinfo`, `.DS_Store`, or scale-report JSON is tracked; all are covered by `.gitignore`. Tracked tree is 84 `apps` + 59 `docs` + 8 `scripts` + 7 `deploy` files plus root config. |
 | P15-15 | `complete` (re-run at freeze) | The disposable Docker Compose gate passed on `main`: clean `npm ci`, 30 server files / 577 tests, 3 web files / 50 tests, both typechecks, both production builds, **exit 0** (627 tests). The Phase 2 smoke also passed through Compose: durability, restart over the same database, and redaction. |
 | P15-16 | `blocked` | Browser flows need live model capacity. |
-| P15-17 | `not_started` | Partly evidenced: the Phase 2 smoke asserts events carry no lease token, public attempts carry no lease token, and events carry no prompt text. A full sweep of logs, database, and payloads remains. |
+| P15-17 | `complete` except the `user_message` positive check | Swept the durable database, an inspected 46 KB live API payload, 811 lines of server log, and the web client. **Database:** no credentials, no authorization headers, no cookies. Lease tokens persist server-side by design (12 occurrences) and are the thing the read model strips. **API payload:** zero `leaseToken`, zero credentials, no auth headers, no stack traces. **Events:** all 39 events carry only allowlisted keys (`agentId`, `promptDigest`, `outputDigest`, `sizeChars`, counts, enums); **zero events carry any content-like key**. A real 114-character transcript snippet and the run objective were both grepped against the full server log: **zero occurrences** — transcript content and objectives never reach the logs. **Web client:** no `console.*` anywhere in `apps/web/src`, and the auth token lives in a module variable only — never `localStorage`, `sessionStorage`, or a cookie. The negative half of the Session v2 clause is additionally pinned by `redaction.test.ts`, which asserts `content`, `prompt`, `objective`, `rawOutput`, `leaseToken`, `authorization`, and `cookie` are all dropped from event details, and that no spelling of a lease token is ever allowlisted. **Open:** the *positive* half — confirming stored `user_message` content appears where it is meant to — could not be checked against live data, because the only local run (`74fbd288`, the P10-10 rehearsal) predates multi-prompt sessions and holds 12 `session_message` artifacts and no `user_message`. Needs one prompted session, so it is gated on the same provider capacity as `P15-12`. |
 | P15-18 | `not_started` | Several criteria need the live flows from `P15-16`. |
 | P15-19 | `not_started` | Runtime-state hygiene, best done before judging evidence is captured. |
 | P15-20 | `not_started` | The freeze itself. |

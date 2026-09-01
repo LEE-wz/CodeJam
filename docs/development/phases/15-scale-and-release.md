@@ -50,7 +50,7 @@ If a measurement method, a documented claim, a storage trade-off, or required re
 
 ### Release verification
 
-- [ ] **P15-14** Inspect `git status` and the full diff. Preserve user work; exclude secrets, runtime data, generated clutter, and unrelated refactors.
+- [x] **P15-14** Inspect `git status` and the full diff. Preserve user work; exclude secrets, runtime data, generated clutter, and unrelated refactors.
 - [x] **P15-15** Run a clean install followed by the full typecheck, test, and build through Docker Compose.
 - [ ] **P15-16** Run the normal, stop, end, restart, and failure browser flows against the release configuration.
 - [ ] **P15-17** Inspect logs, the database, API payloads, and the UI for tokens, authorization headers, cookies, raw prompts, lease tokens, stack traces, or other sensitive data. Session v2 adds user-authored prompt content to durable storage: confirm it appears only where it is meant to, and that events still carry no content.
