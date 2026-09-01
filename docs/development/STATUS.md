@@ -1,18 +1,17 @@
 # Session Development Status
 
-**Last audit:** 2026-09-01 (`PA14-27` rerun with provider capacity restored;
-seven scenarios passed, then the exact post-bid/pre-award restart exposed a
-stranded awarded execution turn; `PA14-18` engine deletion remains sequenced
-behind a clean rehearsal)
-**Audited checkpoint:** Auction Phase 13 complete at `085e765`
-**Implementation branch:** `bidding-agent-implementation` working tree at
-`6802faa` (auction-track root `aa17407`)
+**Last audit:** 2026-09-01 (Auction Checkpoint 14 closed: the restart-
+reconciliation defect is fixed and regressed, `PA14-27` passed every round of
+run `40f52425`, and `PA14-18` deleted the countdown engine while keeping stored
+countdown history readable)
+**Audited checkpoint:** Auction Checkpoint 14 complete at `dbc359c`
+**Implementation branch:** `bidding-agent-implementation` at `dbc359c`
+(auction-track root `aa17407`)
 **Phase 7 implementation commit:** `8775c00` (`Complete durable session backend phase`)
-**Current phase:** Parallel Phase 14 - Adaptive Auction Coordination
-**Current gate:** Auction Checkpoint 14 in progress (`PA14-18` countdown-engine
-deletion and `PA14-27` live rehearsal remain)
+**Current phase:** Phase 15 - Scale, Storage, and Release (`not_started`)
+**Current gate:** Auction Checkpoint 14 **complete**; Phase 15 is the next phase
 **Overall state:** Phases 0-8 and 10 `complete`; Phase 9 `superseded` by Phase 15;
-Phases 11-12 and auction Phase 13 `complete`; auction Phase 14 `in_progress`; Phase 15 `not_started`
+Phases 11-12 and auction Phases 13-14 `complete`; Phase 15 `not_started`
 
 The product is renamed from Relay to Session (P10-08). The HTTP surface
 `/api/coordination-runs` and the server-side `coordination*` modules keep their
@@ -37,7 +36,7 @@ they name a past checkpoint.
 | 11 | Lifecycle reconciliation and Agent recovery | `complete` (sheet: [`phases/11-lifecycle-reconciliation.md`](phases/11-lifecycle-reconciliation.md)) |
 | 12 | Durable multi-prompt sessions | `complete` (Checkpoint 12 verified; sheet: [`phases/12-durable-multi-prompt-sessions.md`](phases/12-durable-multi-prompt-sessions.md)) |
 | 13 | Auction foundation and purpose-aware parallel waves | `complete` on `bidding-agent-implementation` — all of `PA13-01`-`PA13-20`; Auction Checkpoint 13 met (sheet: [`phases/parallel/13-auction-foundation.md`](phases/parallel/13-auction-foundation.md)) |
-| 14 | Adaptive auction coordination | `in_progress` on `bidding-agent-implementation` — `PA14-01`-`PA14-17` and `PA14-19`-`PA14-26` complete and corrective review verified; `PA14-18` partial and `PA14-27` now blocked on a reproduced restart-reconciliation defect rather than provider capacity (auction sheet: [`phases/parallel/14-adaptive-auction-coordination.md`](phases/parallel/14-adaptive-auction-coordination.md)); main-track sheet unchanged |
+| 14 | Adaptive auction coordination | `complete` on `bidding-agent-implementation` — `PA14-01`-`PA14-27` all complete; Auction Checkpoint 14 closed at `dbc359c` (auction sheet: [`phases/parallel/14-adaptive-auction-coordination.md`](phases/parallel/14-adaptive-auction-coordination.md)); main-track sheet unchanged |
 | 15 | Scale, storage, and release | `not_started` (sheet: [`phases/15-scale-and-release.md`](phases/15-scale-and-release.md)) |
 
 Phases 10-15 implement the Session v2 plan in
@@ -51,27 +50,34 @@ The session extension was adopted from the team's Relay Sessions plan. Its repos
 done. The stale-path classification below remains the `P11-01` deliverable and
 the contract the reconciler implements.
 
-**Resume here.** Two Auction Phase 14 tasks remain; the engine cleanup is
-sequenced behind the live acceptance evidence:
+**Resume here.** Auction Phase 14 is complete. No auction-track feature work
+remains on this branch. The next actions are:
 
-1. Fix the exact restart boundary reproduced by run
-   `1e5434a4-100d-4d97-b3ea-e187a2588ad6`. The server was paused with ten
-   settled bids and no award, then killed. After restart it correctly committed
-   one award and scheduled one execution turn, but reconciliation immediately
-   marked that zero-attempt turn `failed`, cleared `activeTurnIds`, emitted
-   `run.interrupted` and `run.awaiting_input`, and never executed the award.
-   Add a regression at this precise boundary before changing the code, then run
-   the focused restart/award suites and the standard disposable Compose gate.
-2. Rerun `node scripts/pa14-27-rehearsal.mjs run` after the fix. Only a full
-   single-Session pass closes `PA14-27`. Then complete `PA14-18` by deleting the
-   countdown engine while keeping stored countdown read/render support.
+1. Decide which implementation ships. The main track closed its own
+   Checkpoint 14 on `phase-14` (merged to `main`), so both branches now satisfy
+   their own gates. Run the common comparison suite described in
+   [`phases/parallel/README.md`](phases/parallel/README.md) against each branch
+   and record the result. The documentation deliberately encodes no automatic
+   winner.
+2. Begin Phase 15 on a task branch cut from this checkpoint, starting at
+   `P15-01` (measure `JsonStore` at 100 / 500 / 2,000 / 10,000 committed turns).
 
-The previously blocked mandatory disposable Docker Compose gate now passes on
-this corrective branch: **36 server files / 688 tests**, **5 web files / 66
-tests**, both workspace typechecks, and both production builds (**754 tests
-total**). The 55-test focused auction set also passed ten consecutive times in
-Compose with zero flakes. This closes the old environment blocker; Auction
-Checkpoint 14 remains open only for `PA14-18` and `PA14-27`.
+The restart-reconciliation defect that blocked `PA14-27` is fixed. Boot recovery
+(`interruptActiveRuns`) now keeps an auction round with pending work `running`
+with no active turn instead of parking it in `awaiting_input` where nothing
+re-derives it, and re-marks an interrupted award-execution turn `cancelled`
+rather than `failed`; the workflow discharges an assignment only on a committed
+turn. Both changes are gated on `auctionPolicy !== undefined`, so legacy
+sessions, direct rounds, and verified handoffs are unchanged. The remediation
+plan is
+[`plans/pa14-27-restart-reconciliation-fix.md`](plans/pa14-27-restart-reconciliation-fix.md);
+the regression lives in `auction-restart-recovery.test.ts`.
+
+The mandatory disposable Docker Compose gate passes on the closed checkpoint:
+**38 server files / 694 tests**, **5 web files / 66 tests**, both workspace
+typechecks, and both production builds (**760 tests total**). The focused
+restart set additionally passed ten consecutive host runs with zero flakes; the
+Compose gate above is the authoritative one.
 
 ## Auction Phase 14 task ledger
 
@@ -94,7 +100,7 @@ Checkpoint 14 remains open only for `PA14-18` and `PA14-27`.
 | PA14-15 | `complete` | Every read carries `auctionUsage` with `actualBidding`, `actualExecution`, and `projectedExecution`. The two actual totals always reconstruct `usageTotals`; the projection is summed only from committed awards. Lease, prompt, thread, and raw-output stripping is unchanged. |
 | PA14-16 | `complete` | The create form offers Auto/Direct/Auction and an optional default Agent; the composer offers a per-round override, Agent selection, and a high-risk marker; the working state names bid evaluation separately from awarded execution; an award card shows score components, projected versus actual tokens, and an expandable evidence-only bid panel. The transcript still shows only user messages and published responses. |
 | PA14-17 | `complete` | `POST /api/coordination-runs/:id/awards/:awardId/feedback` records one `accepted \| rejected` rating as an audit event containing only IDs and the enum. The award artifact and the run status are byte-identical afterwards, and the UI labels confidence as self-reported. |
-| PA14-18 | `in_progress` | Both replacement demonstrations are green in tests and were reproduced live in run `1e5434a4`: the awarded sequential round committed the ordered three-Agent execution, and the awarded parallel round committed three messages. The countdown engine has **not** been deleted; deletion remains gated on the full `PA14-27` run, whose later restart scenario failed. |
+| PA14-18 | `complete` | Both replacement demonstrations are green in tests and were reproduced live in run `40f52425`: the awarded sequential round committed an ordered three-Agent transcript (325.2 s) and the awarded parallel round committed a three-Agent fan-out (291.3 s). The countdown engine is deleted — protocol member, start value, `CoordinationSharedState`/`run.sharedState`, `SESSION_LIMITS` bounds, the workflow and artifact-protocol branches, the context-builder instruction, `nextCountdownValue` and the shared-state decrement in both repositories, and the route/service validation. Stored history is untouched: `buildRunDetails` returns a `structuredClone` of the stored document, so a pre-deletion run still reads back with `sessionProtocol: "countdown"`, `sessionStartValue` and `sharedState` (`countdown-removal.test.ts`), and the unchanged web read types still render it (`SessionWorkspace.test.tsx`). One create-surface change: an unnamed `sessionProtocol` now means free chat. |
 | PA14-19 | `complete` | A free-chat session with no `auctionPolicy` still answers with the ordinary wave and produces no bid or award — absence remains the legacy marker. Countdown and verified-handoff fixtures pass unchanged. `splitAuctionUsage` is covered for sessions with no auction evidence and for attempts with absent or null usage. |
 | PA14-20 | `complete` | Routing tests cover explicit Direct/Auction, Auto escalation, per-message/high-risk routing, selected and sticky Agents, schedule-time availability, enabled Direct-failure escalation, the disabled non-escalation control, and resolution after every bounded opportunity settles. |
 | PA14-21 | `complete` | Bid validation covers forged provenance, wrong artifact type, fenced and malformed JSON, unknown fields, foreign and duplicate assignment Agents, non-contiguous positions, single-plan ownership, missing direct candidates, and each execution budget. |
@@ -103,9 +109,9 @@ Checkpoint 14 remains open only for `PA14-18` and `PA14-27`.
 | PA14-24 | `complete` | Failure tests cover partial/all invalid bidders, schedule-time busy exclusion, unavailable assignments, the minimum boundary, all fallbacks, Direct escalation, winner retry exhaustion and timeout, with no silent runner-up promotion. |
 | PA14-25 | `complete` | Bid and awarded-execution attempts remain separate and reconcile with run totals. Auto-direct now records a real nonzero scoring projection while actual execution remains zero, and reliability calibration consumes durable provider usage across retry/failure attempts. No token count is converted into a cost claim. |
 | PA14-26 | `complete` | Web tests cover the routing policy display, award attribution, projected-versus-actual tokens, bid-evidence expansion, transcript exclusion of losing bids, the bidding-versus-executing working state, fallback honesty, per-message routing submission, the high-risk force, and feedback recording with `aria-pressed` state. |
-| PA14-27 | `in_progress` | Provider capacity was restored and run `1e5434a4-100d-4d97-b3ea-e187a2588ad6` passed Auto Direct (3.173 s), explicit Auction (56.343 s), Auto escalation (51.780 s), exact three-Agent sequential countdown (277.047 s), exact three-Agent parallel fan-out (286.287 s), partial bidder failure (33.214 s), and Stop/resume (1.007 s / 4.348 s). The final exact-boundary restart paused with 10/10 bids and no award; recovery committed exactly one award but stranded its zero-attempt execution turn as `failed` and returned the run to `awaiting_input`. The task is not complete. The evidence ledger is gapless (294 events), no attempt remains running, and aggregate usage exactly reconciles at 3,808,516 input / 3,553,024 cached input / 209,832 output tokens. |
+| PA14-27 | `complete` | Run `40f52425-ea3d-4a9c-917e-b05e08c27128` passed every round: Auto Direct (4.3 s), explicit Auction (35.3 s, 10 bids), Auto escalation (145.1 s), awarded sequential (325.2 s), awarded parallel fan-out (291.3 s), partial bidder failure (42.7 s), stop and resume (1.5 s / 3.4 s), and the exact post-bid/pre-award restart (39.6 s). The restart round preserved all ten settled bids, committed exactly one award naming a settled bid (`cd809e35`, `execute_plan`), executed it, and left no running attempt. 94 calls; 4,714,116 input / 4,449,536 cached input / 233,747 output tokens. |
 
-### PA14-27 live-attempt evidence (incomplete; not acceptance)
+### PA14-27 acceptance evidence
 
 The driver records every call id, attempt state, elapsed time, and
 provider-reported token usage without printing credentials, prompts, raw
@@ -113,18 +119,47 @@ output, provider threads, or leases. Re-reading the latest durable evidence is
 deterministic:
 
 ```sh
-node scripts/pa14-27-rehearsal.mjs report 1e5434a4-100d-4d97-b3ea-e187a2588ad6
+node scripts/pa14-27-rehearsal.mjs report 40f52425-ea3d-4a9c-917e-b05e08c27128
 ```
 
-The passing subset must not be promoted to completion because the exact-boundary
-restart did not execute its recovered award. The working-tree harness fixes
-three false blockers found while obtaining this evidence: its parallel cap is
-now three because the acceptance scenario requires three assignments; it
-restores the rehearsal-owned Agent used to induce contention; and its roster
-instructions require bounded execution output. It also asserts exactly three
-assignments for both ordered and parallel scenarios and correctly expects an
-award to be committed after restart. The 60-second inter-round cooldown remains
-to reduce provider pressure.
+All nine rounds passed and the run ended `PA14-27 PASS`. The exact-boundary
+restart round is the one that previously failed: the server was paused with ten
+settled bids and no award and then killed, and recovery now derives the award,
+executes it, publishes the response, and settles to `awaiting_input` without
+duplicating a bid, an award, or a message.
+
+Two earlier runs are retained as history rather than acceptance.
+`f09e195b-c6f5-4e29-aabd-b2271a9b9686` passed three rounds and then hit
+sustained headerless provider 429s. `1e5434a4-100d-4d97-b3ea-e187a2588ad6`
+passed seven rounds with capacity restored, then stranded its recovered award
+as a zero-attempt `failed` turn and returned the session to `awaiting_input`.
+That defect is the subject of
+[`plans/pa14-27-restart-reconciliation-fix.md`](plans/pa14-27-restart-reconciliation-fix.md)
+and is now fixed and regressed.
+
+### Auction Checkpoint 14 closing evidence
+
+- The mandatory disposable Docker Compose gate passed on the closed checkpoint:
+  **38 server files / 694 tests**, **5 web files / 66 tests**, both workspace
+  typechecks, and both production builds (**760 tests total**).
+- `auction-restart-recovery.test.ts` adds **11 tests** across both restart
+  boundaries, the derivation rule, idempotency, and the gates that must not move
+  (legacy free-chat recovery, direct-round recovery, a genuinely failed awarded
+  execution). They failed on the pre-fix code — 5 failed / 5 passed on the first
+  red run, with the mid-bid-wave case separately verified red — and pass now.
+- The focused restart set (`auction-restart-recovery`, `auction-execution`,
+  `auction-award`, `auction-routing-decisions`, `lifecycle-reconciliation`)
+  passed **77 tests for ten consecutive host runs**, zero flakes. The Compose
+  gate above remains the authoritative verification.
+- `countdown-removal.test.ts` adds **7 tests** splitting the deletion in two:
+  four assert no engine path accepts a countdown session, three assert a stored
+  countdown run still reads, renders, and lists.
+- `npm ci` continues to report the unchanged **1 moderate and 5 high
+  vulnerabilities**; no dependency changed.
+- One host-only discrepancy is recorded rather than chased: the
+  `artifact-protocol.test.ts` `__proto__` case fails on the development host and
+  passes in Compose, because the installed zod resolves to a newer patch than
+  the lockfile pins. The Compose gate is the authority and it is green.
 
 ### Phase 14 verification evidence (`PA14-09`-`PA14-26`)
 

@@ -365,13 +365,28 @@ as primarily self-reported.
 
 ### Countdown removal and compatibility
 
-- [~] **PA14-18** Demonstrate the countdown acceptance scenario through an
+- [x] **PA14-18** Demonstrate the countdown acceptance scenario through an
   awarded sequential team plan and a fan-out scenario through an awarded
   parallel plan. Only then delete the countdown engine branch on the auction
   implementation branch while retaining stored countdown read/render support.
-  *Both demonstrations exist (`auction-execution.test.ts`). The engine deletion
-  is deliberately held: the sheet gates it on the demonstrations, and the
-  `PA14-27` live rehearsal that exercises them end to end has not run.*
+
+  *Both demonstrations are green in `auction-execution.test.ts` and were
+  reproduced live in run `40f52425-ea3d-4a9c-917e-b05e08c27128`: the awarded
+  sequential round committed an ordered three-Agent transcript (325.2 s) and the
+  awarded parallel round committed a three-Agent fan-out (291.3 s). The engine
+  was then deleted: the `countdown` member of `SessionProtocol`,
+  `sessionStartValue`, `CoordinationSharedState`, `run.sharedState`, the
+  start-value bounds in `SESSION_LIMITS`, `validateCountdownState` and the
+  workflow branch, the artifact-protocol validation branch, the context-builder
+  instruction, `nextCountdownValue` and the shared-state decrement in both
+  repositories, and the route and service validation. The ledger is untouched:
+  `buildRunDetails` returns a `structuredClone` of the stored document, so a
+  pre-deletion run still reads back with `sessionProtocol: "countdown"`,
+  `sessionStartValue` and `sharedState`, proven by
+  `countdown-removal.test.ts`; the web read types and render branches are
+  unchanged and `SessionWorkspace.test.tsx` still renders a stored countdown
+  session. One create-surface change: an unnamed `sessionProtocol` used to mean
+  countdown and now means free chat.*
 - [x] **PA14-19** Keep verified-handoff behaviour and historical session data
   readable. Add fixtures for pre-auction sessions, old countdown sessions, and
   auction sessions with partial or absent optional usage.
@@ -411,18 +426,30 @@ as primarily self-reported.
   reliability history, competing direct publication, and feedback/read
   concurrency. The standard Compose gate and ten repeated focused passes are
   recorded in `STATUS.md`.*
-- [ ] **PA14-27** Run a real multi-prompt rehearsal in one ten-Agent session:
+- [x] **PA14-27** Run a real multi-prompt rehearsal in one ten-Agent session:
   one simple Auto prompt accepted in a single call; one explicit Auction with a
   single winner; one Auto escalation; one awarded sequential countdown; one
   awarded parallel fan-out; one partial bidder failure; one stop-and-resume; and
   one server restart between bid settlement and award. Record every call's
   usage and wall-clock timing.
 
-  *The autonomous driver is `scripts/pa14-27-rehearsal.mjs`. Its first live run
-  (`f09e195b-c6f5-4e29-aabd-b2271a9b9686`) passed Auto Direct, explicit Auction,
-  and Auto escalation, then the provider returned sustained headerless 429s.
-  The incomplete run and all 49 call records are documented in `STATUS.md`;
-  this checkbox deliberately remains open until one full run passes.*
+  *The autonomous driver is `scripts/pa14-27-rehearsal.mjs`. Run
+  `40f52425-ea3d-4a9c-917e-b05e08c27128` passed every round: Auto Direct
+  (4.3 s), explicit Auction (35.3 s, 10 bids), Auto escalation (145.1 s),
+  awarded sequential (325.2 s), awarded parallel fan-out (291.3 s), partial
+  bidder failure (42.7 s), stop and resume (1.5 s / 3.4 s), and the exact
+  post-bid / pre-award restart (39.6 s). The restart round preserved all ten
+  settled bids, committed exactly one award naming a settled bid
+  (`cd809e35`, `execute_plan`), executed it, and left no running attempt.
+  94 calls, 4,714,116 input / 4,449,536 cached input / 233,747 output tokens.
+  Re-read with `node scripts/pa14-27-rehearsal.mjs report
+  40f52425-ea3d-4a9c-917e-b05e08c27128`.*
+
+  *The earlier runs are retained as history: `f09e195b` stopped on sustained
+  provider 429s, and `1e5434a4` passed seven rounds before the restart round
+  stranded its recovered award. That defect is fixed by the PA14-27
+  restart-reconciliation change and regressed in
+  `auction-restart-recovery.test.ts`.*
 
 ## Requirements and invariants
 
